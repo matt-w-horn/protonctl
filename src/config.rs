@@ -21,7 +21,7 @@
 //! folder = "/Users/you/protonctl-export"
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -105,11 +105,19 @@ pub fn path() -> PathBuf {
 
 pub fn load() -> Result<Config> {
     let p = path();
-    match std::fs::read_to_string(&p) {
-        Ok(text) => {
+    match read(&p)? {
+        Some(text) => {
             toml::from_str(&text).with_context(|| format!("invalid config {}", p.display()))
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
+        None => Ok(Config::default()),
+    }
+}
+
+/// The config file's text, or `None` when there is none yet.
+fn read(p: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(p) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e).with_context(|| format!("cannot read {}", p.display())),
     }
 }
@@ -140,34 +148,38 @@ pub fn check_address(address: &str) -> Result<()> {
     Ok(())
 }
 
-/// Append a `[[calendar]]` entry unless one with this id exists.
-pub fn add_calendar(id: &str, name: &str) -> Result<()> {
-    if load()?.calendar.iter().any(|c| c.id == id) {
-        return Ok(());
+/// Append a `[[calendar]]` entry unless one with this id exists, and return
+/// the name the config holds for it.
+pub fn add_calendar(id: &str, name: &str) -> Result<String> {
+    if let Some(c) = load()?.calendar.into_iter().find(|c| c.id == id) {
+        return Ok(c.name);
     }
-    append(&calendar_entry(id, name))
+    append(&path(), &calendar_entry(id, name))?;
+    Ok(name.to_string())
 }
 
 /// Append the `[mail]` table that `protonctl setup mail` writes.
 pub fn add_mail(address: &str, port: u16, cert_sha256: &str) -> Result<()> {
-    append(&format!(
-        "\n[mail]\naddress = {}\nport = {port}\ncert_sha256 = {}\n",
-        toml::Value::from(address),
-        toml::Value::from(cert_sha256)
-    ))
+    append(
+        &path(),
+        &format!(
+            "\n[mail]\naddress = {}\nport = {port}\ncert_sha256 = {}\n",
+            toml::Value::from(address),
+            toml::Value::from(cert_sha256)
+        ),
+    )
 }
 
-fn append(entry: &str) -> Result<()> {
-    let p = path();
+fn append(p: &Path, entry: &str) -> Result<()> {
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let mut text = std::fs::read_to_string(&p).unwrap_or_default();
+    let mut text = read(p)?.unwrap_or_default();
     if !text.is_empty() && !text.ends_with('\n') {
         text.push('\n');
     }
     text.push_str(entry);
-    std::fs::write(&p, text).with_context(|| format!("cannot write {}", p.display()))
+    std::fs::write(p, text).with_context(|| format!("cannot write {}", p.display()))
 }
 
 /// The `[[calendar]]` table `add_calendar` appends, with both values TOML-escaped.
@@ -198,6 +210,23 @@ mod tests {
             assert_eq!(back.calendar.len(), 1, "{text}");
             assert_eq!(back.calendar[0].name, name, "{text}");
         }
+    }
+
+    #[test]
+    fn a_config_that_cannot_be_read_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.toml");
+        std::fs::write(&p, b"time_zone = \"UTC\"\n\xff\n").unwrap();
+        assert!(append(&p, &calendar_entry("personal", "Personal")).is_err());
+        assert_eq!(std::fs::read(&p).unwrap(), b"time_zone = \"UTC\"\n\xff\n");
+        // A missing file is a new one.
+        let new = dir.path().join("new/config.toml");
+        append(&new, &calendar_entry("personal", "Personal")).unwrap();
+        assert!(
+            std::fs::read_to_string(&new)
+                .unwrap()
+                .contains("[[calendar]]")
+        );
     }
 
     #[test]

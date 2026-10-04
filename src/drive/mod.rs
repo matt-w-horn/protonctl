@@ -454,7 +454,6 @@ impl Drive {
             Some(root) => self.list_local(root, asked).await?,
             None => self.list_remote(cli, asked).await?,
         };
-        entries.retain(|e| !self.excluded(&e.path));
         entries.sort_by(|a, b| b.folder.cmp(&a.folder).then_with(|| a.key.cmp(&b.key)));
         let size = req.page_size.unwrap_or(100).clamp(1, 200);
         let (offset, next) = page(req.page_token.as_deref(), size, entries.len())?;
@@ -537,12 +536,12 @@ impl Drive {
         // for by path, so it is named by its node rather than shown.
         for n in &nodes {
             match node_name(n) {
+                // Joined, a name holding a '/' reads as a deeper path; an
+                // exclusion matching it that way hides it too.
+                Some(name) if self.excluded(&join(&path, name)) => {}
                 Some(name) if !name.contains('/') => {
                     shown.push(node_entry(join(&path, name), n));
                 }
-                // Joined, such a name reads as a deeper path; an exclusion
-                // matching it that way hides it too.
-                Some(name) if self.excluded(&join(&path, name)) => {}
                 Some(name) => unlisted.push(json!({
                     "nodeId": n["uid"],
                     "name": escape_hidden(name),
@@ -694,15 +693,23 @@ impl Drive {
 const MANIFEST_BUDGET: Duration = Duration::from_secs(120);
 
 /// A manifest page token: the manifest's file name, the index of the next
-/// folder to list, and how many folders the walk found.
-fn manifest_token(name: &str, next: usize, folders: usize) -> String {
-    format!("{name}:{next}:{folders}")
+/// folder to list, and `tree_print` of the folders the walk found.
+fn manifest_token(name: &str, next: usize, folders: &[&str]) -> String {
+    format!("{name}:{next}:{}", tree_print(folders))
 }
 
-fn read_manifest_token(token: &str) -> Result<(String, usize, usize)> {
+/// 16 hex digits naming a list of folders, so a page token goes on only
+/// with the folder it began in, and only while the tree under it is unchanged.
+fn tree_print(folders: &[&str]) -> String {
+    let mut sums = digest::bytes(folders.join("\0").as_bytes()).sha256;
+    sums.truncate(16);
+    sums
+}
+
+fn read_manifest_token(token: &str) -> Result<(String, usize, String)> {
     let invalid = || anyhow!("invalid pageToken; pass the nextPageToken exactly as returned");
     let mut parts = token.split(':');
-    let (Some(name), Some(next), Some(folders), None) =
+    let (Some(name), Some(next), Some(print), None) =
         (parts.next(), parts.next(), parts.next(), parts.next())
     else {
         return Err(invalid());
@@ -714,8 +721,9 @@ fn read_manifest_token(token: &str) -> Result<(String, usize, usize)> {
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.');
-    match (named, next.parse(), folders.parse()) {
-        (true, Ok(next), Ok(folders)) => Ok((name.to_string(), next, folders)),
+    let printed = print.len() == 16 && print.bytes().all(|b| b.is_ascii_hexdigit());
+    match (named && printed, next.parse()) {
+        (true, Ok(next)) => Ok((name.to_string(), next, print.to_string())),
         _ => Err(invalid()),
     }
 }
@@ -761,12 +769,18 @@ impl Drive {
                 (format!("drive-{at}.jsonl"), 0)
             }
             Some(token) => {
-                let (name, next, count) = read_manifest_token(token)?;
-                if count != folders.len() || next > count {
+                // Only withSha1 manifests take more than one call.
+                if !req.with_sha1 {
                     bail!(
-                        "the Drive changed since this manifest began ({count} folders then, {} now); \
-                         start a new one without pageToken",
-                        folders.len()
+                        "a pageToken continues a withSha1 manifest; pass withSha1: true, or start \
+                         a new manifest without pageToken"
+                    );
+                }
+                let (name, next, print) = read_manifest_token(token)?;
+                if print != tree_print(&folders) || next > folders.len() {
+                    bail!(
+                        "this pageToken is for another folder, or the Drive changed since the \
+                         manifest began; start a new one without pageToken"
                     );
                 }
                 (name, next)
@@ -791,6 +805,9 @@ impl Drive {
             for e in &entries {
                 children.entry(parent(&e.path)).or_default().push(e);
             }
+            // Written once this call's folders are all listed, so a call that
+            // fails or is cut off adds no row its retry would repeat.
+            let mut listed = Vec::new();
             next = start;
             while next < folders.len() {
                 if next > start && Instant::now() >= deadline {
@@ -798,12 +815,13 @@ impl Drive {
                 }
                 let folder = folders[next];
                 let mine = children.get(folder).map(Vec::as_slice).unwrap_or_default();
-                for row in self.listed_rows(folder, mine, cli, root).await? {
-                    write(&row)?;
-                    rows += 1;
-                }
+                listed.extend(self.listed_rows(folder, mine, cli, root).await?);
                 next += 1;
             }
+            for row in &listed {
+                write(row)?;
+            }
+            rows = listed.len();
         } else {
             for e in &entries {
                 write(&e.json())?;
@@ -819,7 +837,7 @@ impl Drive {
             "foldersLeft": folders.len() - next,
             "complete": complete,
             "walkComplete": walked,
-            "nextPageToken": (!complete).then(|| manifest_token(&name, next, folders.len())),
+            "nextPageToken": (!complete).then(|| manifest_token(&name, next, &folders)),
             "provenance": PROVENANCE,
         });
         if complete {
@@ -830,8 +848,10 @@ impl Drive {
         Ok(result)
     }
 
-    /// The folder `asked` names under `root`, and everything under it from
-    /// the app's folder, with whether the walk finished within its limits.
+    /// The real Drive path of the folder `asked` names under `root`, and
+    /// everything under it from the app's folder, with whether the walk
+    /// finished within its limits. The walk names entries by the real path,
+    /// so exclusions hold through a symlink to the folder (R7).
     async fn walk_asked(
         &self,
         root: &Path,
@@ -840,20 +860,20 @@ impl Drive {
         let (root, exclude) = (root.to_path_buf(), self.exclude.clone());
         let asked = asked.unwrap_or("/").to_string();
         tokio::task::spawn_blocking(move || -> Result<_> {
-            let (disk, path, _) = resolve(&root, &exclude, &asked)?;
+            let (disk, path, real) = resolve(&root, &exclude, &asked)?;
             if !std::fs::metadata(&disk)?.is_dir() {
                 bail!(
                     "{} is a file; export_drive_manifest takes a folder",
                     escape_hidden(&path)
                 );
             }
-            let base = if path == "/" {
+            let base = if real == "/" {
                 String::new()
             } else {
-                path.clone()
+                real.clone()
             };
             let (entries, complete) = walk_from(&disk, &base, &exclude);
-            Ok((path, entries, complete))
+            Ok((real, entries, complete))
         })
         .await?
     }
@@ -876,7 +896,7 @@ impl Drive {
         for n in &nodes {
             match node_name(n) {
                 Some(name) => {
-                    theirs.insert(fold(&name.nfc().collect::<String>()), n);
+                    theirs.insert(fold(name), n);
                 }
                 None => unnamed.push(n),
             }
@@ -2131,6 +2151,119 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         ] {
             assert!(read_manifest_token(bad).is_err(), "{bad}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_manifest_token_continues_only_its_own_manifest() {
+        let (t, out, bin) = (
+            tree(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        std::fs::create_dir_all(t.path().join("Other/Sub")).unwrap();
+        let cli = fake_cli(bin.path());
+        answer(
+            bin.path(),
+            "list",
+            "/Projects",
+            &json!([node("Notes", None)]),
+        );
+        answer(bin.path(), "list", "/Other/Sub", &json!([]));
+        let d = drive(t.path(), &[]);
+        let export = export_into(out.path(), &d);
+        let req = |path: &str, with_sha1, page_token| ManifestReq {
+            path: Some(path.into()),
+            with_sha1,
+            page_token,
+        };
+        let first = d
+            .manifest_until(&req("/Projects", true, None), &cli, &export, Instant::now())
+            .await
+            .unwrap();
+        let token = first["nextPageToken"].as_str().map(String::from);
+        assert!(token.is_some(), "{first}");
+        // "/Other" has as many folders as "/Projects"; and the same folder
+        // without withSha1 would append the plain inventory.
+        let far = Instant::now() + Duration::from_secs(600);
+        for wrong in [
+            req("/Other", true, token.clone()),
+            req("/Projects", false, token),
+        ] {
+            let r = d.manifest_until(&wrong, &cli, &export, far).await;
+            assert!(r.is_err(), "{wrong:?}: {r:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_manifest_call_adds_no_rows_for_its_retry_to_repeat() {
+        let (t, out, bin) = (
+            tree(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        let cli = fake_cli(bin.path());
+        answer(bin.path(), "list", "/", &json!([node("Projects", None)]));
+        answer(
+            bin.path(),
+            "list",
+            "/Projects",
+            &json!([node("Notes", None), node("plan.md", Some(6))]),
+        );
+        let d = drive(t.path(), &["/Private"]);
+        let export = export_into(out.path(), &d);
+        let mut req = ManifestReq {
+            with_sha1: true,
+            ..Default::default()
+        };
+        let first = d
+            .manifest_until(&req, &cli, &export, Instant::now())
+            .await
+            .unwrap();
+        req.page_token = first["nextPageToken"].as_str().map(String::from);
+        // This call lists "/Projects", then fails on "/Projects/Notes",
+        // which the CLI cannot find yet.
+        let far = Instant::now() + Duration::from_secs(600);
+        assert!(d.manifest_until(&req, &cli, &export, far).await.is_err());
+        answer(
+            bin.path(),
+            "list",
+            "/Projects/Notes",
+            &json!([node("Café.txt", Some(5))]),
+        );
+        let last = d.manifest_until(&req, &cli, &export, far).await.unwrap();
+        assert_eq!(last["complete"], true, "{last}");
+        let rows = manifest(Path::new(last["manifest"].as_str().unwrap()));
+        let plans = rows
+            .iter()
+            .filter(|r| r["path"] == "/Projects/plan.md")
+            .count();
+        assert_eq!(plans, 1, "{rows:?}");
+    }
+
+    #[tokio::test]
+    async fn a_manifest_through_a_symlinked_folder_leaves_out_an_excluded_child() {
+        let (t, out) = (tree(), tempfile::tempdir().unwrap());
+        std::fs::create_dir_all(t.path().join("Projects/Notes/Secret")).unwrap();
+        std::fs::write(t.path().join("Projects/Notes/Secret/s.txt"), "s").unwrap();
+        std::os::unix::fs::symlink(t.path().join("Projects/Notes"), t.path().join("alias"))
+            .unwrap();
+        let d = drive(t.path(), &["/Projects/Notes/Secret"]);
+        let export = export_into(out.path(), &d);
+        let req = ManifestReq {
+            path: Some("/alias".into()),
+            ..Default::default()
+        };
+        let far = Instant::now() + Duration::from_secs(600);
+        let r = d
+            .manifest_until(&req, &no_cli(), &export, far)
+            .await
+            .unwrap();
+        let rows = manifest(Path::new(r["manifest"].as_str().unwrap()));
+        assert!(!rows.is_empty(), "{r}");
+        assert!(
+            rows.iter().all(|row| !row.to_string().contains("Secret")),
+            "{rows:?}"
+        );
     }
 
     #[tokio::test]

@@ -279,7 +279,8 @@ async fn setup_calendar(id: &str, name: Option<String>) -> Result<Value> {
         .context("the link did not return a calendar")?;
     let name = name.or(feed.name.clone()).unwrap_or_else(|| id.to_string());
     secret::set(&secret::calendar_account(id), &link)?;
-    config::add_calendar(id, &name)?;
+    // An id already set up keeps its name; the link is replaced.
+    let name = config::add_calendar(id, &name)?;
     Ok(
         json!({ "calendarId": id, "name": name, "events": feed.events.len(), "skipped": feed.skipped, "linkStored": true }),
     )

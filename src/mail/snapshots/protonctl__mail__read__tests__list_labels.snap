@@ -63,6 +63,12 @@ expression: mail.list_labels().await.unwrap()
       "messages": 1,
       "name": "Work",
       "unread": 0
+    },
+    {
+      "kind": "label",
+      "messages": 1,
+      "name": "Old",
+      "unread": 0
     }
   ],
   "use": "label:NAME for a label or folder (a nested folder as shown, Parent/Child); in:NAME for a system mailbox; in search_threads"
