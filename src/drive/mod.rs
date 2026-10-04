@@ -9,7 +9,7 @@
 
 pub mod cli;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
 use std::io::{Read, Write as _};
 use std::os::macos::fs::MetadataExt;
@@ -341,6 +341,12 @@ impl Drive {
         is_excluded(&self.exclude, &fold(path))
     }
 
+    /// Whether an exclusion names a child of `folder`, which an entry whose
+    /// name does not decrypt could be (R7).
+    fn excludes_child_of(&self, folder: &str) -> bool {
+        self.exclude.iter().any(|x| parent(x) == fold(folder))
+    }
+
     /// A Drive path for the CLI, with the same exclusions (RFC R7). Names keep
     /// the normalization they arrive in, since the CLI matches them exactly.
     fn remote(&self, path: &str) -> Result<String> {
@@ -444,82 +450,9 @@ impl Drive {
 
     pub async fn list_folder(&self, req: &ListFolderReq, cli: &Cli) -> Result<Value> {
         let asked = req.path.as_deref().unwrap_or("/");
-        // What the listing leaves out beside excluded entries, so no hole is silent.
-        let mut left_out = serde_json::Map::new();
-        let (path, mut entries) = if let Some(root) = &self.root {
-            let (root, exclude, asked) = (root.clone(), self.exclude.clone(), asked.to_string());
-            let (path, real, mut entries, hidden) = tokio::task::spawn_blocking(
-                move || -> Result<(String, String, Vec<Entry>, Vec<String>)> {
-                    let (disk, path, real) = resolve(&root, &exclude, &asked)?;
-                    let (mut out, mut hidden) = (Vec::new(), Vec::new());
-                    for item in
-                        std::fs::read_dir(&disk).with_context(|| format!("not a folder: {path}"))?
-                    {
-                        let item = item?;
-                        let name = item.file_name().to_string_lossy().nfc().collect::<String>();
-                        if name.starts_with('.') {
-                            hidden.push(name);
-                            continue;
-                        }
-                        // Gone or unreadable since the listing started: skip it, as the index does.
-                        let Ok(meta) = item.metadata() else { continue };
-                        out.push(entry(join(&path, &name), &meta));
-                    }
-                    Ok((path, real, out, hidden))
-                },
-            )
-            .await??;
-            // Checked under the folder's real location too, so a symlinked folder
-            // cannot show an excluded child (RFC R7).
-            let excluded =
-                |name: &str| self.excluded(&join(&real, name)) || self.excluded(&join(&path, name));
-            entries.retain(|e| !excluded(e.name()));
-            // An excluded dot-name is not counted either: it never shows (R7).
-            let hidden = hidden.iter().filter(|n| !excluded(n)).count();
-            left_out.insert("hiddenNames".into(), hidden.into());
-            (path, entries)
-        } else {
-            let path = self.remote(asked)?;
-            let nodes = query(cli, "list", &path).await?;
-            let nodes = nodes
-                .as_array()
-                .context("the Proton Drive CLI's listing was not a list")?;
-            // An entry whose name does not decrypt could be an excluded child
-            // of this folder, so when an exclusion names one, such entries are
-            // only counted (R7).
-            let child_excluded = self.exclude.iter().any(|x| parent(x) == fold(&path));
-            let (mut shown, mut unlisted, mut unlisted_hidden) = (Vec::new(), Vec::new(), 0);
-            // A name that does not decrypt, or holds a '/', cannot be asked
-            // for by path, so it is named by its node rather than shown.
-            for n in nodes {
-                match n["name"]["value"]
-                    .as_str()
-                    .filter(|_| n["name"]["ok"] == true)
-                {
-                    Some(name) if !name.contains('/') => {
-                        shown.push(node_entry(join(&path, name), n));
-                    }
-                    // Joined, such a name reads as a deeper path; an exclusion
-                    // matching it that way hides it too.
-                    Some(name) if self.excluded(&join(&path, name)) => {}
-                    Some(name) => unlisted.push(json!({
-                        "nodeId": n["uid"],
-                        "name": escape_hidden(name),
-                        "reason": "the name holds a '/', so no path reaches it",
-                    })),
-                    None if child_excluded => unlisted_hidden += 1,
-                    None => unlisted.push(json!({
-                        "nodeId": n["uid"],
-                        "name": null,
-                        "reason": "the name does not decrypt or verify",
-                    })),
-                }
-            }
-            left_out.insert("unlisted".into(), unlisted.into());
-            if unlisted_hidden > 0 {
-                left_out.insert("unlistedHidden".into(), unlisted_hidden.into());
-            }
-            (path, shown)
+        let (path, mut entries, left_out) = match &self.root {
+            Some(root) => self.list_local(root, asked).await?,
+            None => self.list_remote(cli, asked).await?,
         };
         entries.retain(|e| !self.excluded(&e.path));
         entries.sort_by(|a, b| b.folder.cmp(&a.folder).then_with(|| a.key.cmp(&b.key)));
@@ -541,6 +474,94 @@ impl Drive {
             o.extend(left_out);
         }
         Ok(out)
+    }
+
+    /// The folder `asked` names in the app's folder: its path, its entries,
+    /// and what the listing leaves out beside excluded entries (`hiddenNames`),
+    /// so no hole is silent.
+    async fn list_local(
+        &self,
+        root: &Path,
+        asked: &str,
+    ) -> Result<(String, Vec<Entry>, serde_json::Map<String, Value>)> {
+        let (root, exclude, asked) = (root.to_path_buf(), self.exclude.clone(), asked.to_string());
+        let (path, real, mut entries, hidden) = tokio::task::spawn_blocking(
+            move || -> Result<(String, String, Vec<Entry>, Vec<String>)> {
+                let (disk, path, real) = resolve(&root, &exclude, &asked)?;
+                let (mut out, mut hidden) = (Vec::new(), Vec::new());
+                for item in
+                    std::fs::read_dir(&disk).with_context(|| format!("not a folder: {path}"))?
+                {
+                    let item = item?;
+                    let name = item.file_name().to_string_lossy().nfc().collect::<String>();
+                    if name.starts_with('.') {
+                        hidden.push(name);
+                        continue;
+                    }
+                    // Gone or unreadable since the listing started: skip it, as the index does.
+                    let Ok(meta) = item.metadata() else { continue };
+                    out.push(entry(join(&path, &name), &meta));
+                }
+                Ok((path, real, out, hidden))
+            },
+        )
+        .await??;
+        // Checked under the folder's real location too, so a symlinked folder
+        // cannot show an excluded child (RFC R7).
+        let excluded =
+            |name: &str| self.excluded(&join(&real, name)) || self.excluded(&join(&path, name));
+        entries.retain(|e| !excluded(e.name()));
+        // An excluded dot-name is not counted either: it never shows (R7).
+        let hidden = hidden.iter().filter(|n| !excluded(n)).count();
+        let mut left_out = serde_json::Map::new();
+        left_out.insert("hiddenNames".into(), hidden.into());
+        Ok((path, entries, left_out))
+    }
+
+    /// The folder `asked` names, listed through the CLI: its path, its
+    /// entries, and what the listing leaves out beside excluded entries
+    /// (`unlisted`, `unlistedHidden`), so no hole is silent.
+    async fn list_remote(
+        &self,
+        cli: &Cli,
+        asked: &str,
+    ) -> Result<(String, Vec<Entry>, serde_json::Map<String, Value>)> {
+        let path = self.remote(asked)?;
+        let nodes = list_nodes(cli, &path).await?;
+        // An entry whose name does not decrypt could be an excluded child
+        // of this folder, so when an exclusion names one, such entries are
+        // only counted (R7).
+        let child_excluded = self.excludes_child_of(&path);
+        let (mut shown, mut unlisted, mut unlisted_hidden) = (Vec::new(), Vec::new(), 0);
+        // A name that does not decrypt, or holds a '/', cannot be asked
+        // for by path, so it is named by its node rather than shown.
+        for n in &nodes {
+            match node_name(n) {
+                Some(name) if !name.contains('/') => {
+                    shown.push(node_entry(join(&path, name), n));
+                }
+                // Joined, such a name reads as a deeper path; an exclusion
+                // matching it that way hides it too.
+                Some(name) if self.excluded(&join(&path, name)) => {}
+                Some(name) => unlisted.push(json!({
+                    "nodeId": n["uid"],
+                    "name": escape_hidden(name),
+                    "reason": "the name holds a '/', so no path reaches it",
+                })),
+                None if child_excluded => unlisted_hidden += 1,
+                None => unlisted.push(json!({
+                    "nodeId": n["uid"],
+                    "name": null,
+                    "reason": "the name does not decrypt or verify",
+                })),
+            }
+        }
+        let mut left_out = serde_json::Map::new();
+        left_out.insert("unlisted".into(), unlisted.into());
+        if unlisted_hidden > 0 {
+            left_out.insert("unlistedHidden".into(), unlisted_hidden.into());
+        }
+        Ok((path, shown, left_out))
     }
 
     pub async fn get_file_metadata(&self, req: &FileMetadataReq, cli: &Cli) -> Result<Value> {
@@ -849,17 +870,11 @@ impl Drive {
     ) -> Result<Vec<Value>> {
         let (r, x, f) = (root.to_path_buf(), self.exclude.clone(), folder.to_string());
         let (_, _, real) = tokio::task::spawn_blocking(move || resolve(&r, &x, &f)).await??;
-        let nodes = query(cli, "list", &real).await?;
-        let nodes = nodes
-            .as_array()
-            .context("the Proton Drive CLI's listing was not a list")?;
-        let mut theirs: HashMap<String, &Value> = HashMap::new();
+        let nodes = list_nodes(cli, &real).await?;
+        let mut theirs: BTreeMap<String, &Value> = BTreeMap::new();
         let mut unnamed = Vec::new();
-        for n in nodes {
-            match n["name"]["value"]
-                .as_str()
-                .filter(|_| n["name"]["ok"] == true)
-            {
+        for n in &nodes {
+            match node_name(n) {
                 Some(name) => {
                     theirs.insert(fold(&name.nfc().collect::<String>()), n);
                 }
@@ -878,11 +893,9 @@ impl Drive {
             }
             rows.push(row);
         }
-        let child_excluded = self.exclude.iter().any(|x| parent(x) == fold(folder));
-        let mut extra: Vec<(&String, &&Value)> = theirs.iter().collect();
-        extra.sort_by(|a, b| a.0.cmp(b.0));
-        for (_, n) in extra {
-            let name = n["name"]["value"].as_str().unwrap_or_default();
+        let child_excluded = self.excludes_child_of(folder);
+        for n in theirs.values() {
+            let name = node_name(n).unwrap_or_default();
             if self.excluded(&join(folder, name)) {
                 continue;
             }
@@ -1059,6 +1072,21 @@ async fn query(cli: &Cli, sub: &str, path: &str) -> Result<Value> {
         }
         r => r,
     }
+}
+
+/// The nodes the CLI lists in the folder at the Drive path `path`.
+async fn list_nodes(cli: &Cli, path: &str) -> Result<Vec<Value>> {
+    match query(cli, "list", path).await? {
+        Value::Array(nodes) => Ok(nodes),
+        _ => bail!("the Proton Drive CLI's listing was not a list"),
+    }
+}
+
+/// A CLI node's name, if it decrypted and verified.
+fn node_name(n: &Value) -> Option<&str> {
+    n["name"]["value"]
+        .as_str()
+        .filter(|_| n["name"]["ok"] == true)
 }
 
 /// An entry from one of the CLI's JSON nodes (RFC Appendix A). Nothing it
