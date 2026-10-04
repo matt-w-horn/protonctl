@@ -731,8 +731,8 @@ impl Drive {
         let (path, mut entries, walked) = self.walk_asked(root, req.path.as_deref()).await?;
         entries.sort_by(|a, b| a.path.cmp(&b.path));
         // The folders to list, in a fixed order: the one asked for, then every one under it.
-        let folders: Vec<String> = std::iter::once(path.clone())
-            .chain(entries.iter().filter(|e| e.folder).map(|e| e.path.clone()))
+        let folders: Vec<&str> = std::iter::once(path.as_str())
+            .chain(entries.iter().filter(|e| e.folder).map(|e| e.path.as_str()))
             .collect();
         let (name, start) = match req.page_token.as_deref() {
             None => {
@@ -775,11 +775,8 @@ impl Drive {
                 if next > start && Instant::now() >= deadline {
                     break;
                 }
-                let folder = &folders[next];
-                let mine = children
-                    .get(folder.as_str())
-                    .map(Vec::as_slice)
-                    .unwrap_or_default();
+                let folder = folders[next];
+                let mine = children.get(folder).map(Vec::as_slice).unwrap_or_default();
                 for row in self.listed_rows(folder, mine, cli, root).await? {
                     write(&row)?;
                     rows += 1;

@@ -48,10 +48,10 @@ impl App {
             .as_ref()
             .map(|e| export::Export::new(e, root).map_err(|e| format!("{e:#}")));
         Ok(Self {
-            calendars: Calendars::new(cfg.calendar.clone(), zone),
+            calendars: Calendars::new(cfg.calendar, zone),
             drive,
             drive_cli: drive::cli::Cli::new(drive::cli::path(cfg.drive.as_ref())),
-            mail: cfg.mail.clone().map(mail::Mail::new),
+            mail: cfg.mail.map(mail::Mail::new),
             export,
         })
     }

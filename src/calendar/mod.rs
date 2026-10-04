@@ -614,7 +614,7 @@ fn event_json(
         "end": end,
         "allDay": e.start.is_date(),
         "recurring": o.recurring,
-        "status": e.status.clone().unwrap_or_else(|| "confirmed".into()),
+        "status": e.status.as_deref().unwrap_or("confirmed"),
         "showsAs": if e.transparent { "free" } else { "busy" },
     });
     let obj = v.as_object_mut().expect("json object");

@@ -736,9 +736,7 @@ fn mime(p: &mail_parser::MessagePart) -> Option<String> {
 
 fn addresses(a: Option<&Address>, removed: &mut usize) -> Vec<String> {
     let Some(a) = a else { return Vec::new() };
-    a.clone()
-        .into_list()
-        .iter()
+    a.iter()
         .map(|addr| {
             let email = addr.address().unwrap_or_default();
             match addr.name() {
@@ -1092,13 +1090,13 @@ impl Mail {
     pub async fn list_labels(&self) -> Result<Value> {
         self.with_conn(async |conn| {
             let mut out = Vec::new();
-            for (name, attrs) in conn.boxes.clone() {
+            for (name, attrs) in &conn.boxes {
                 if attrs.iter().any(|a| a == "\\noselect") {
                     continue;
                 }
                 // Bridge lists the Labels parent without \\NoSelect but answers
                 // "no such mailbox" for it: skip what cannot report counts.
-                let Ok(status) = conn.session.status(&name, "(MESSAGES UNSEEN)").await else {
+                let Ok(status) = conn.session.status(name, "(MESSAGES UNSEEN)").await else {
                     continue;
                 };
                 let (kind, shown) = match (name.strip_prefix("Labels/"), name.strip_prefix("Folders/")) {
@@ -1209,7 +1207,7 @@ fn common(
         unread,
         starred,
     } = meta;
-    let row = json!({
+    let Value::Object(row) = json!({
         "messageId": short_id(&id),
         "threadId": thread_key(m),
         "date": date,
@@ -1221,8 +1219,10 @@ fn common(
         "starred": starred,
         "origin": m.header_raw("X-Pm-Origin").map(str::trim),
         "encryption": m.header_raw("X-Pm-Content-Encryption").map(str::trim),
-    });
-    Some((id, row.as_object().cloned()?))
+    }) else {
+        return None;
+    };
+    Some((id, row))
 }
 
 /// Addresses a search row lists before it only counts the rest.
@@ -1468,9 +1468,7 @@ fn tally(rows: &[Counted], by: Option<GroupBy>, order: GroupOrder) -> (usize, Ve
 /// characters.
 fn bare_addresses(a: Option<&Address>, removed: &mut usize) -> Vec<String> {
     let Some(a) = a else { return Vec::new() };
-    a.clone()
-        .into_list()
-        .iter()
+    a.iter()
         .filter_map(|addr| addr.address())
         .map(|email| clean(email, removed))
         .collect()
