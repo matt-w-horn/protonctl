@@ -16,7 +16,31 @@ pub struct Export {
     folder: PathBuf,
 }
 
-/// `p` with `.` and `..` resolved by text, for a folder that may not exist yet.
+/// Where `p` leads, for a folder that may not exist yet: the deepest part of
+/// it that exists, resolved through symlinks and spelled as on disk, then the
+/// parts still to be made. A missing part followed by `..` falls back to
+/// resolving `p` by text.
+fn resolved(p: &Path) -> PathBuf {
+    let mut missing = Vec::new();
+    let mut at = p;
+    loop {
+        if let Ok(real) = at.canonicalize() {
+            return missing
+                .iter()
+                .rev()
+                .fold(real, |path, name| path.join(name));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name);
+                at = parent;
+            }
+            _ => return lexical(p),
+        }
+    }
+}
+
+/// `p` with `.` and `..` resolved by text.
 fn lexical(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
@@ -40,9 +64,10 @@ impl Export {
         if !folder.is_absolute() {
             bail!("[export] folder must be an absolute path");
         }
-        let folder = folder.canonicalize().unwrap_or_else(|_| lexical(folder));
-        let cache = cache_dir();
-        let cache = cache.canonicalize().unwrap_or(cache);
+        // Resolved as far as they exist, so a symlink or another spelling of a
+        // folder not made yet cannot lead inside either one unseen.
+        let folder = resolved(folder);
+        let cache = resolved(&cache_dir());
         if drive_root.is_some_and(|root| folder.starts_with(root)) {
             bail!(
                 "[export] folder must be outside the Proton Drive app's folder, where writing uploads to Proton"
@@ -135,5 +160,23 @@ mod tests {
             err.to_string().contains("outside the export folder"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn a_folder_not_made_yet_is_checked_where_it_will_be() {
+        let drive = tempfile::tempdir().unwrap();
+        let root = drive.path().canonicalize().unwrap();
+        let cfg = |p: PathBuf| ExportConfig { folder: p };
+        // Reached through a symlink to the Drive folder.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let link = elsewhere.path().join("Drive");
+        std::os::unix::fs::symlink(&root, &link).unwrap();
+        let err = Export::new(&cfg(link.join("exports/new")), Some(&root)).unwrap_err();
+        assert!(err.to_string().contains("uploads to Proton"), "{err}");
+        // Spelled in another case, which a case-insensitive disk ignores.
+        let shouted = PathBuf::from(root.to_string_lossy().to_uppercase());
+        if shouted.exists() {
+            assert!(Export::new(&cfg(shouted.join("exports")), Some(&root)).is_err());
+        }
     }
 }

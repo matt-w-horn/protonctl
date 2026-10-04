@@ -353,8 +353,10 @@ fn save(dest: Option<&Path>, file: &str, contents: &[u8]) -> Result<PathBuf> {
 }
 
 /// Save an attachment as `file` in the export folder `dir`, unless a file
-/// by that name is there already: a message never changes, so that file is
-/// this attachment, and its path is returned as it is.
+/// by that name is there already: a message never changes, so a plain file
+/// there holding the same bytes is this attachment, and its path is returned
+/// as it is. Anything else there (a write cut short, a symlink, a file that
+/// someone else who can write the folder put there) is refused.
 fn save_once(dir: &Path, file: &str, contents: &[u8]) -> Result<PathBuf> {
     let path = dir.join(file);
     match std::fs::OpenOptions::new()
@@ -363,7 +365,16 @@ fn save_once(dir: &Path, file: &str, contents: &[u8]) -> Result<PathBuf> {
         .open(&path)
     {
         Ok(mut f) => f.write_all(contents)?,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let same = std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file())
+                && std::fs::read(&path).is_ok_and(|held| held == contents);
+            if !same {
+                bail!(
+                    "{} already exists and is not this attachment; move it away to save it",
+                    path.display()
+                );
+            }
+        }
         Err(e) => return Err(e).with_context(|| format!("cannot create {}", path.display())),
     }
     Ok(path)
@@ -374,11 +385,11 @@ fn save_once(dir: &Path, file: &str, contents: &[u8]) -> Result<PathBuf> {
 /// the first other ID in References, else In-Reply-To, else the message's own
 /// Message-Id. `get_thread` finds the root and every message referring to it.
 fn thread_key(m: &Message) -> Option<String> {
+    // IDs split at their brackets too: RFC 5322 needs no space between them.
     let root = ROOT_HEADERS
         .iter()
         .filter_map(|h| m.header_raw(*h))
-        .flat_map(str::split_whitespace)
-        .map(|id| id.trim_matches(['<', '>']))
+        .flat_map(|ids| ids.split(|c: char| c.is_whitespace() || c == '<' || c == '>'))
         .find(|id| !id.is_empty() && !id.ends_with("@protonmail.internalid"));
     root.or_else(|| {
         m.header_raw("Message-Id")
@@ -506,8 +517,37 @@ impl Conn {
         Ok(dated)
     }
 
-    /// Internal IDs of the messages in Trash and Spam that match
-    /// `criteria`: All Mail holds them too, so a search of it leaves these out.
+    /// Examine the mailbox `query` names, first gathering, unless
+    /// `include_trash`, the IDs of matching Trash and Spam messages its
+    /// results leave out: All Mail holds copies of them, and a label or
+    /// Starred may, while a message in a folder is in no other folder.
+    async fn scope(
+        &mut self,
+        query: &Query,
+        include_trash: bool,
+        deadline: Instant,
+    ) -> Result<Scope> {
+        let mailbox = self.name(&query.mailbox)?;
+        let trash_left_out = !include_trash
+            && matches!(
+                query.mailbox,
+                Mailbox::All | Mailbox::Label(_) | Mailbox::Role(NameAttribute::Flagged)
+            );
+        let excluded = if trash_left_out {
+            self.trash_and_spam_ids(&query.criteria, deadline).await?
+        } else {
+            HashSet::new()
+        };
+        let examined = self.session.examine(&mailbox).await?;
+        Ok(Scope {
+            mailbox,
+            uidvalidity: examined.uid_validity.unwrap_or(0),
+            excluded,
+            trash_left_out,
+        })
+    }
+
+    /// Internal IDs of the messages in Trash and Spam that match `criteria`.
     async fn trash_and_spam_ids(
         &mut self,
         criteria: &str,
@@ -534,6 +574,26 @@ impl Conn {
             .await?
             .try_collect()
             .await?)
+    }
+}
+
+/// The mailbox a search or count reads, examined, and what it leaves out.
+struct Scope {
+    mailbox: String,
+    uidvalidity: u32,
+    /// Full IDs of the matching Trash and Spam messages, left out of results.
+    excluded: HashSet<String>,
+    /// Whether Trash and Spam copies are left out (`trashAndSpam`).
+    trash_left_out: bool,
+}
+
+impl Scope {
+    fn trash_and_spam(&self) -> &'static str {
+        if self.trash_left_out {
+            "excluded"
+        } else {
+            "included"
+        }
     }
 }
 
@@ -663,22 +723,10 @@ impl Mail {
         deadline: Instant,
     ) -> Result<Value> {
         let order = req.order.unwrap_or_default();
-        let skip_trash = query.mailbox == Mailbox::All && !req.include_trash;
-        let excluded = if skip_trash {
-            conn.trash_and_spam_ids(&query.criteria, deadline).await?
-        } else {
-            HashSet::new()
-        };
-        let mailbox = conn.name(&query.mailbox)?;
-        let uidvalidity = conn
-            .session
-            .examine(&mailbox)
-            .await?
-            .uid_validity
-            .unwrap_or(0);
+        let scope = conn.scope(query, req.include_trash, deadline).await?;
         let dated = conn.dated(&query.criteria, order, deadline).await?;
         let page_size = req.page_size.unwrap_or(20).clamp(1, 50);
-        let start = resume_at(&dated, order, uidvalidity, cursor)?;
+        let start = resume_at(&dated, order, scope.uidvalidity, cursor)?;
         let mut offset = start;
         let (mut page, mut removed) = (Page::default(), 0);
         'scan: while offset < dated.len() {
@@ -715,7 +763,7 @@ impl Mail {
                         }
                         Some(hit)
                     })
-                    .filter(|hit| wanted(hit, &excluded, query.attachment));
+                    .filter(|hit| wanted(hit, &scope.excluded, query.attachment));
                 if let Some(hit) = hit {
                     let (key, rows) = (short_id(&hit.id).to_string(), page.rows.len());
                     // A hit that needs a new row on a full page starts the next one.
@@ -737,7 +785,7 @@ impl Mail {
             let at = dated[offset - 1];
             Cursor {
                 order,
-                uidvalidity,
+                uidvalidity: scope.uidvalidity,
                 at,
             }
             .token()
@@ -745,11 +793,12 @@ impl Mail {
         Ok(json!({
             "messages": page.rows(),
             "nextPageToken": next,
-            // Trash and Spam copies are matched by ID, and All Mail holds
-            // them too; has:attachment is tested later, row by row.
-            "estimatedTotal": dated.len().saturating_sub(excluded.len()),
-            "searched": mailbox,
-            "trashAndSpam": if skip_trash { "excluded" } else { "included" },
+            // Trash and Spam copies are matched by ID, and the searched
+            // mailbox can hold them too; has:attachment is tested later, row
+            // by row.
+            "estimatedTotal": dated.len().saturating_sub(scope.excluded.len()),
+            "searched": scope.mailbox,
+            "trashAndSpam": scope.trash_and_spam(),
             "provenance": PROVENANCE,
             "hiddenCharactersRemoved": removed,
         }))
@@ -763,14 +812,7 @@ impl Mail {
         let query = compile(&req.query, Local::now().date_naive())?;
         let limit = req.limit.unwrap_or(100).clamp(1, 1000);
         self.with_conn(async |conn| {
-            let skip_trash = query.mailbox == Mailbox::All && !req.include_trash;
-            let excluded = if skip_trash {
-                conn.trash_and_spam_ids(&query.criteria, deadline).await?
-            } else {
-                HashSet::new()
-            };
-            let mailbox = conn.name(&query.mailbox)?;
-            conn.session.examine(&mailbox).await?;
+            let scope = conn.scope(&query, req.include_trash, deadline).await?;
             let dated = conn.dated(&query.criteria, Order::Newest, deadline).await?;
             let (mut rows, mut removed) = (Vec::with_capacity(dated.len()), 0);
             for chunk in dated.chunks(CHUNK) {
@@ -787,7 +829,7 @@ impl Mail {
                         continue;
                     };
                     let attachments = attachment_count(&m);
-                    if excluded.contains(&id)
+                    if scope.excluded.contains(&id)
                         || query.attachment.is_some_and(|want| want != (attachments > 0))
                     {
                         continue;
@@ -809,9 +851,9 @@ impl Mail {
             };
             let mut out = json!({
                 "messages": messages,
-                "estimatedTotal": dated.len().saturating_sub(excluded.len()),
-                "searched": mailbox,
-                "trashAndSpam": if skip_trash { "excluded" } else { "included" },
+                "estimatedTotal": dated.len().saturating_sub(scope.excluded.len()),
+                "searched": scope.mailbox,
+                "trashAndSpam": scope.trash_and_spam(),
                 "provenance": COUNT_PROVENANCE,
                 "hiddenCharactersRemoved": removed,
             });
@@ -1775,9 +1817,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let first = save_once(dir.path(), "0-a.pdf", b"first").unwrap();
         // The same message's attachment again: the file there is it.
-        let again = save_once(dir.path(), "0-a.pdf", b"second").unwrap();
+        let again = save_once(dir.path(), "0-a.pdf", b"first").unwrap();
         assert_eq!(first, again);
+        // Other bytes at that name (a write cut short, or a file someone
+        // else put there) are not passed off as the attachment, nor replaced.
+        assert!(save_once(dir.path(), "0-a.pdf", b"second").is_err());
         assert_eq!(std::fs::read(&first).unwrap(), b"first");
+        // Nor is a symlink, even to the right bytes.
+        std::os::unix::fs::symlink(&first, dir.path().join("1-b.pdf")).unwrap();
+        assert!(save_once(dir.path(), "1-b.pdf", b"first").is_err());
     }
 
     #[test]
@@ -1828,6 +1876,9 @@ mod tests {
         // In-Reply-To alone also finds the parent.
         let bare = "Message-Id: <b@x.test>\r\nIn-Reply-To: <a@x.test>\r\n\r\n";
         assert_eq!(thread_key(&headers(bare)).as_deref(), Some("a@x.test"));
+        // RFC 5322 needs no space between IDs.
+        let packed = "Message-Id: <c@x.test>\r\nReferences: <root@x.test><b@x.test>\r\n\r\n";
+        assert_eq!(thread_key(&headers(packed)).as_deref(), Some("root@x.test"));
         assert!(check_thread_id("x\" OR ALL").is_err());
     }
 
@@ -1959,6 +2010,8 @@ mod tests {
             b("Folders/Receipts", "\\HasNoChildren", 10, &[]),
             b("Labels", "\\HasChildren \\Noselect", 11, &[]),
             b("Labels/Work", "\\HasNoChildren", 12, &[(1, 1)]),
+            // A labelled message that is also in Trash.
+            b("Labels/Old", "\\HasNoChildren", 13, &[(1, 4)]),
         ]
     }
 
@@ -2259,6 +2312,13 @@ mod tests {
         };
         insta::assert_json_snapshot!("get_thread", mail.get_thread(&thread).await.unwrap());
         insta::assert_json_snapshot!("list_labels", mail.list_labels().await.unwrap());
+        // A label's Trash copies stay out too, as the description says.
+        let old = mail.search_threads(&search("label:Old")).await.unwrap();
+        assert_eq!(
+            (old["messages"].clone(), old["trashAndSpam"].clone()),
+            (json!([]), json!("excluded")),
+            "{old}"
+        );
         insta::assert_json_snapshot!("imap_commands", sent.lock().unwrap().clone());
     }
 }
