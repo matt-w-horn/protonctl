@@ -9,7 +9,6 @@ mod digest;
 mod drive;
 mod export;
 mod mail;
-mod policy;
 mod secret;
 mod serve;
 
