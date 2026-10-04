@@ -2020,6 +2020,62 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
     }
 
     #[tokio::test]
+    async fn a_sha1_manifest_names_undecryptable_nodes_an_exclusion_cannot_hide() {
+        let (t, out, bin) = (
+            tree(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        let cli = fake_cli(bin.path());
+        let undecryptable = |uid: &str| json!({ "uid": uid, "name": { "ok": false, "error": "x" }, "type": "file" });
+        answer(
+            bin.path(),
+            "list",
+            "/",
+            &json!([node("Projects", None), undecryptable("vol~in-root")]),
+        );
+        answer(
+            bin.path(),
+            "list",
+            "/Projects",
+            &json!([
+                node("Notes", None),
+                node("plan.md", Some(6)),
+                undecryptable("vol~in-projects")
+            ]),
+        );
+        answer(
+            bin.path(),
+            "list",
+            "/Projects/Notes",
+            &json!([node("Café.txt", Some(5))]),
+        );
+        // "/Private" names a child of "/", which the node there could be, so
+        // only the node in "/Projects" is named (R7).
+        let d = drive(t.path(), &["/Private"]);
+        let export = export_into(out.path(), &d);
+        let req = ManifestReq {
+            with_sha1: true,
+            ..Default::default()
+        };
+        let far = Instant::now() + Duration::from_secs(600);
+        let r = d.manifest_until(&req, &cli, &export, far).await.unwrap();
+        let unnamed: Vec<Value> = manifest(Path::new(r["manifest"].as_str().unwrap()))
+            .into_iter()
+            .filter(|row| row["reason"] == "the name does not decrypt or verify")
+            .collect();
+        assert_eq!(
+            unnamed,
+            [json!({
+                "parent": "/Projects",
+                "name": null,
+                "nodeId": "vol~in-projects",
+                "reason": "the name does not decrypt or verify",
+            })]
+        );
+    }
+
+    #[tokio::test]
     async fn a_manifest_token_from_a_changed_tree_is_refused() {
         let (t, out, bin) = (
             tree(),
