@@ -13,6 +13,7 @@ A new build's first calendar read and mail login each ask for Keychain access,
 and protonctl waits up to 150 s for the answer (R8).
 """
 
+import base64
 import json
 import os
 import queue
@@ -26,7 +27,7 @@ WAIT = 200  # seconds per call: past protonctl's own 150 s limit
 # Results that carry third-party text must say so in `provenance` (R6).
 CONTENT_TOOLS = {
     "list_events", "search_events", "get_event", "search_files", "list_folder",
-    "get_file_metadata", "read_file_content", "download_file", "search_threads",
+    "get_file_metadata", "read_file_content", "download_file", "list_drive_tree", "search_threads",
     "count_messages", "get_message", "get_thread", "get_attachment",
 }
 
@@ -38,6 +39,7 @@ threading.Thread(target=lambda: [lines.put(line) for line in server.stdout], dae
 last_id = 0
 failures: list[str] = []
 called: set[str] = set()
+blocks: list[dict] = []  # the content blocks of the last call, after its JSON
 
 
 def send(message: dict) -> None:
@@ -87,6 +89,7 @@ def call(name: str, args: dict, describe=counts, label: str = "") -> dict | None
         print(f"FAIL  {shown:<34} {took:5.1f}s  {(reply.get('error', {}).get('message') or text)[:160]}")
         return None
     data = json.loads(text)
+    blocks[:] = (result.get("content") or [])[1:]
     note = describe(data)
     if name in CONTENT_TOOLS and "provenance" not in data:
         failures.append(f"{shown}: no provenance")
@@ -102,6 +105,27 @@ init = rpc("initialize", {
 send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 tools = {t["name"] for t in rpc("tools/list")["result"]["tools"]}
 print(f"{init['serverInfo']['name']} {init['serverInfo']['version']}: {len(tools)} tools\n")
+
+def page(d: dict) -> str:
+    """A page of text: its length, the whole length, and where the next one starts."""
+    if d.get("content") is None:
+        return f"no content: {d.get('reason')}"
+    return (f"chars {len(d['content'])}, totalChars {d.get('totalChars')}, nextOffset {d.get('nextOffset')}, "
+            f"from {d.get('textFrom')}")
+
+
+def attached(kind: str, size: int | None = None) -> str:
+    """The block after the JSON: an image, or a base64 blob of `size` bytes."""
+    block = blocks[0] if blocks else {}
+    if kind == "image":
+        ok = block.get("type") == "image" and bool(block.get("data"))
+    else:
+        blob = (block.get("resource") or {}).get("blob") or ""
+        ok = block.get("type") == "resource" and len(base64.b64decode(blob)) == size
+    if not ok:
+        failures.append(f"no {kind} block after the JSON")
+    return f"{kind} block {'yes' if ok else 'NO'}"
+
 
 def digested(d: dict) -> bool:
     """Downloads and attachments carry their digests."""
@@ -136,10 +160,9 @@ files += [f for f in (top or {}).get("items", []) if f.get("kind") == "file"]
 if files:
     path = files[0]["path"]
     call("get_file_metadata", {"path": path}, lambda d: f"kind {d['file']['kind']}, size given {d['file']['size'] is not None}")
-    call("read_file_content", {"path": path}, lambda d: (
-        f"chars {len(d['content'])}, truncated {d['truncated']}" if d.get("content") is not None
-        else f"no content: {d.get('reason')}"
-    ))
+    first = call("read_file_content", {"path": path}, page)
+    if first and first.get("nextOffset"):
+        call("read_file_content", {"path": path, "offset": first["nextOffset"]}, page, label="next page")
     call("download_file", {"path": path}, lambda d: (
         f"saved {'yes' if os.path.isfile(d['savedTo']) else 'NO'}, "
         f"size matches {os.path.getsize(d['savedTo']) == d['file']['size'] if os.path.isfile(d['savedTo']) else 'n/a'}, "
@@ -151,16 +174,32 @@ if files:
         ), label="export")
         if exported and exported["savedTo"].startswith(export_folder):
             os.remove(exported["savedTo"])  # the check removes what it wrote
+    small = [f for f in files if (f.get("size") or 0) <= 5 * 1024 * 1024]
+    if small:
+        call("download_file", {"path": small[0]["path"], "inline": True}, lambda d: (
+            f"{attached('blob', d['inline']['bytes'])}, {'SAVED (unexpected)' if d.get('savedTo') else 'nothing saved'}, "
+            f"sha256 {'yes' if digested(d) else 'NO'}"
+        ), label="inline")
 else:
     print("skip  get_file_metadata, read, download    no file found")
-# A file that cannot come back as text: over 1 MiB, else a PDF.
-large = [f for f in (top or {}).get("items", []) if f.get("kind") == "file" and (f.get("size") or 0) > 1024 * 1024]
-if not large:
-    large = (call("search_files", {"query": "*.pdf", "kind": "file", "pageSize": 1}, label="*.pdf") or {}).get("files") or []
-if large:
-    call("read_file_content", {"path": large[0]["path"]}, lambda d: (
-        f"no content: {d.get('reason')}" if d.get("content") is None else f"chars {len(d['content'])}"
-    ), label="not text")
+# A PDF's text, and an image as image content.
+# Over 1 KB: a real PDF is larger than its own trailer.
+pdfs = (call("search_files", {"query": "*.pdf", "kind": "file", "pageSize": 25}, label="*.pdf") or {}).get("files") or []
+pdfs = [f for f in pdfs if (f.get("size") or 0) > 1024]
+if pdfs:
+    call("read_file_content", {"path": pdfs[0]["path"]}, lambda d: page(d) + f", pdfPages {d.get('pdfPages')}", label="pdf")
+else:
+    print("skip  read_file_content (pdf)            no PDF over 1 KB found")
+images = (call("search_files", {"query": "*.png", "kind": "file", "pageSize": 25}, label="*.png") or {}).get("files") or []
+images = [f for f in images if 0 < (f.get("size") or 0) <= 5 * 1024 * 1024]
+if images:
+    call("read_file_content", {"path": images[0]["path"]}, lambda d: attached("image"), label="image")
+else:
+    print("skip  read_file_content (image)          no PNG of 5 MiB or less found")
+tree = call("list_drive_tree", {"pageSize": 50}, lambda d: f"rows {len(d['rows'])}, more {'yes' if d.get('nextPageToken') else 'no'}")
+if tree and tree.get("nextPageToken"):
+    call("list_drive_tree", {"pageSize": 50, "pageToken": tree["nextPageToken"]},
+         lambda d: f"rows {len(d['rows'])}", label="next page")
 
 # Mail: a recent search, one message and its thread, labels, then one attachment.
 def row_shape(d: dict) -> str:
@@ -195,8 +234,9 @@ for row in (with_files or {}).get("messages") or []:
     if attachments:
         call("get_attachment", {"messageId": row["messageId"], "index": attachments[0]["index"]}, lambda d: (
             f"size {d['size']}, type {(d.get('mimeType') or '?').split('/')[0]}, "
-            f"saved {'yes' if os.path.isfile(d['path']) else 'NO'}, inline text {'yes' if d.get('text') else 'no'}, "
-            f"sha256 {'yes' if digested(d) else 'NO'}"
+            + (page(d) if "content" in d else attached("image") if "image" in d
+               else f"saved {'yes' if os.path.isfile(d.get('path') or '') else 'NO'}")
+            + f", sha256 {'yes' if digested(d) else 'NO'}"
         ))
         break
 

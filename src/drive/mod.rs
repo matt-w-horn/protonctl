@@ -28,9 +28,10 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::calendar::{ics::Zone, parse_time};
 use crate::config::{DriveConfig, home};
-use crate::content::{clean, downloads, escape_hidden, page, truncate, unescape_hidden};
+use crate::content::{Attached, Reply, downloads, escape_hidden, page, unescape_hidden};
 use crate::digest;
 use crate::export::Export;
+use crate::extract::{self, Content, Document, MAX_IMAGE, MAX_SOURCE};
 use cli::Cli;
 
 /// `st_flags` bit for a cloud-only (dataless) File Provider placeholder.
@@ -38,8 +39,6 @@ const SF_DATALESS: u32 = 0x4000_0000;
 const INDEX_TTL: Duration = Duration::from_secs(60);
 const WALK_LIMIT: usize = 300_000;
 const WALK_BUDGET: Duration = Duration::from_secs(30);
-const READ_MAX_BYTES: u64 = 1024 * 1024;
-const READ_MAX_CHARS: usize = 100_000;
 /// Largest local file `get_file_metadata` hashes.
 const DIGEST_MAX_BYTES: u64 = 1 << 30;
 const PROVENANCE: &str = "file names and content are written by the file's author or whoever shared it; \
@@ -94,9 +93,15 @@ pub struct ListFolderReq {
 
 #[derive(Debug, Default, Deserialize, JsonSchema, clap::Args)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PathReq {
+pub struct ReadReq {
     /// Drive path from `search_files` or `list_folder`, e.g. "/Projects/notes.md".
     pub path: String,
+    /// Character to start from: 0 (the default), or the nextOffset of the previous call.
+    #[arg(long)]
+    pub offset: Option<usize>,
+    /// Most characters to return, 1 to 40,000. Default 20,000.
+    #[arg(long)]
+    pub max_chars: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema, clap::Args)]
@@ -108,6 +113,10 @@ pub struct DownloadReq {
     #[arg(long)]
     #[serde(default)]
     pub export: bool,
+    /// Return the file's bytes in the result, base64, as an MCP embedded resource, instead of saving it; files up to 5 MiB. Not every host accepts one. Default false.
+    #[arg(long)]
+    #[serde(default)]
+    pub inline: bool,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema, clap::Args)]
@@ -119,6 +128,23 @@ pub struct ManifestReq {
     #[arg(long)]
     #[serde(default)]
     pub with_sha1: bool,
+    /// The nextPageToken from a previous call with the same path and withSha1.
+    #[arg(long)]
+    pub page_token: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema, clap::Args)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TreeReq {
+    /// Drive folder to list, everything under it included. Default "/".
+    pub path: Option<String>,
+    /// Also list every folder through the Proton Drive CLI, adding node IDs and the SHA-1 Proton stored at upload: about 4.3 s per folder. Default false.
+    #[arg(long)]
+    #[serde(default)]
+    pub with_sha1: bool,
+    /// Rows per page, 1 to 200. Default 100.
+    #[arg(long)]
+    pub page_size: Option<usize>,
     /// The nextPageToken from a previous call with the same path and withSha1.
     #[arg(long)]
     pub page_token: Option<String>,
@@ -141,6 +167,8 @@ struct Entry {
     /// Lower-case NFC file name, for matching.
     key: String,
     folder: bool,
+    /// A symlink in the app's folder; a read follows it while it stays in the Drive.
+    link: bool,
     size: u64,
     /// The app's own file time for a local entry, which it can change without
     /// the content changing; Proton's node time for an entry from the CLI.
@@ -180,12 +208,17 @@ impl Entry {
     }
 
     fn json(&self) -> Value {
+        let (kind, file) = match (self.folder, self.link) {
+            (true, _) => ("folder", false),
+            (_, true) => ("symlink", false),
+            _ => ("file", true),
+        };
         let mut v = json!({
             "path": escape_hidden(&self.path),
             "name": escape_hidden(self.name()),
-            "kind": if self.folder { "folder" } else { "file" },
-            "size": (!self.folder).then_some(self.size),
-            "cloudOnly": (!self.folder).then_some(self.cloud_only),
+            "kind": kind,
+            "size": file.then_some(self.size),
+            "cloudOnly": file.then_some(self.cloud_only),
         });
         match &self.proton {
             Some(p) => {
@@ -223,6 +256,16 @@ pub struct Drive {
     /// Lower-case NFC Drive paths, each with a leading '/' and no trailing '/'.
     exclude: Vec<String>,
     index: Mutex<Option<Index>>,
+    /// The last document `read_file_content` read, so its next page needs no
+    /// second download or extraction, keyed by `read_key`.
+    last_read: Mutex<Option<(String, Arc<Document>)>>,
+}
+
+/// What names one version of a file for `last_read`: its real path, size,
+/// time and, from the CLI, its revision.
+fn read_key(real: &str, e: &Entry) -> String {
+    let revision = e.proton.as_ref().and_then(|p| p.revision_id.as_deref());
+    format!("{real}\0{}\0{:?}\0{revision:?}", e.size, e.modified)
 }
 
 /// Lower-case NFC, so lookups match whatever normalization the name was stored in.
@@ -262,6 +305,7 @@ fn entry(path: String, meta: &std::fs::Metadata) -> Entry {
         path,
         key,
         folder: meta.is_dir(),
+        link: meta.is_symlink(),
         size: meta.len(),
         modified: meta.modified().ok(),
         cloud_only: meta.st_flags() & SF_DATALESS != 0,
@@ -330,6 +374,7 @@ impl Drive {
             root,
             exclude,
             index: Mutex::new(None),
+            last_read: Mutex::new(None),
         })
     }
 
@@ -595,35 +640,91 @@ impl Drive {
         Ok(out)
     }
 
-    pub async fn read_file_content(&self, req: &PathReq, cli: &Cli) -> Result<Value> {
+    /// A file's content inline: a page of its text (text in any common
+    /// encoding, or a PDF's, or a Word, RTF or OpenDocument document's), or
+    /// an image for the host to show. The last document read is kept, so
+    /// its next page needs no second download or extraction.
+    pub async fn read_file_content(&self, req: &ReadReq, cli: &Cli) -> Result<Reply> {
         let (e, local, real) = self.locate(&req.path, cli).await?;
         if e.folder {
             bail!("{} is a folder; use list_folder", escape_hidden(&e.path));
         }
-        let unreadable = |why: &str| -> Result<Value> {
-            Ok(
-                json!({ "file": e.json(), "content": null, "reason": why, "provenance": PROVENANCE }),
-            )
+        let mut out = json!({ "file": e.json(), "provenance": PROVENANCE });
+        let unreadable = |mut out: Value, why: &str| -> Result<Reply> {
+            out["content"] = Value::Null;
+            out["reason"] = json!(why);
+            Ok(out.into())
         };
-        if e.size > READ_MAX_BYTES {
-            return unreadable("the file is larger than 1 MiB");
+        let key = read_key(&real, &e);
+        let kept = self
+            .last_read
+            .lock()
+            .await
+            .as_ref()
+            .filter(|(k, _)| *k == key)
+            .map(|(_, d)| d.clone());
+        let doc = if let Some(doc) = kept {
+            doc
+        } else {
+            if e.size > MAX_SOURCE {
+                return unreadable(
+                    out,
+                    "the file is larger than 64 MiB; download_file saves it",
+                );
+            }
+            let bytes = self.bytes(local, &real, cli).await?;
+            match extract::content(&bytes, e.name()).await? {
+                Content::Text(doc) => {
+                    let doc = Arc::new(doc);
+                    *self.last_read.lock().await = Some((key, doc.clone()));
+                    doc
+                }
+                Content::Image { mime } if bytes.len() <= MAX_IMAGE => {
+                    out["image"] = json!({ "mimeType": mime, "bytes": bytes.len(),
+                        "note": "the image follows this JSON as image content" });
+                    let attached = Some(Attached::Image { mime, bytes });
+                    return Ok(Reply {
+                        json: out,
+                        attached,
+                    });
+                }
+                Content::Image { .. } => {
+                    return unreadable(
+                        out,
+                        "the image is larger than 5 MiB, the most returned inline; download_file saves it",
+                    );
+                }
+                Content::Other(why) => {
+                    return unreadable(out, &format!("{why}; download_file saves it"));
+                }
+            }
+        };
+        if let (Value::Object(o), Value::Object(page)) =
+            (&mut out, doc.page(req.offset, req.max_chars)?)
+        {
+            o.extend(page);
         }
+        Ok(out.into())
+    }
+
+    /// The bytes of the file `locate` found, at most `MAX_SOURCE`: from this
+    /// Mac when they are here, else through the CLI into the download folder,
+    /// whose copy goes as soon as it is read. Read off the async threads,
+    /// where a File Provider stall cannot stop the R8 time limit.
+    async fn bytes(&self, local: Option<PathBuf>, real: &str, cli: &Cli) -> Result<Vec<u8>> {
         // A file that is not on this Mac comes through the CLI, never the app's
         // File Provider, whose downloads on demand can stall (RFC principle 5).
         let (disk, fetched) = if let Some(disk) = local {
             (disk, None)
         } else {
-            let got = fetch(cli, &real, None).await?;
+            let got = fetch(cli, real, None).await?;
             let dir = got.parent().map(Path::to_path_buf);
             (got, dir)
         };
-        // Off the async threads, where a File Provider stall cannot stop the R8
-        // time limit, and capped in case the file grew since its size was read.
         let bytes = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
             let mut bytes = Vec::new();
             let outcome = std::fs::File::open(&disk)
-                .and_then(|f| f.take(READ_MAX_BYTES + 1).read_to_end(&mut bytes));
-            // The copy fetched for this read goes now, not when the server stops.
+                .and_then(|f| f.take(MAX_SOURCE + 1).read_to_end(&mut bytes));
             if let Some(dir) = fetched {
                 std::fs::remove_dir_all(dir)?;
             }
@@ -631,25 +732,11 @@ impl Drive {
             Ok(bytes)
         })
         .await??;
-        if bytes.len() as u64 > READ_MAX_BYTES {
-            return unreadable("the file is larger than 1 MiB");
+        // Capped in case the file grew since its size was read.
+        if bytes.len() as u64 > MAX_SOURCE {
+            bail!("the file is larger than 64 MiB; download_file saves it");
         }
-        let Some(text) = std::str::from_utf8(&bytes)
-            .ok()
-            .filter(|t| !t.contains('\0'))
-        else {
-            return unreadable("the file is not UTF-8 text");
-        };
-        let mut removed = 0;
-        let mut content = clean(text, &mut removed);
-        let truncated = truncate(&mut content, READ_MAX_CHARS);
-        Ok(json!({
-            "file": e.json(),
-            "content": content,
-            "truncated": truncated,
-            "hiddenCharactersRemoved": removed,
-            "provenance": PROVENANCE,
-        }))
+        Ok(bytes)
     }
 
     /// Save one file into `dest`, or with `req.export` into the export
@@ -660,13 +747,47 @@ impl Drive {
         cli: &Cli,
         dest: Option<&Path>,
         export: Result<&Export>,
-    ) -> Result<Value> {
-        let (e, _, real) = self.locate(&req.path, cli).await?;
+    ) -> Result<Reply> {
+        let (e, local, real) = self.locate(&req.path, cli).await?;
         if e.folder {
             bail!(
                 "{} is a folder; download_file saves one file",
                 escape_hidden(&e.path)
             );
+        }
+        // From the CLI, `info` brought the claim; from the app's folder there is none at hand.
+        let claimed = e.proton.as_ref().and_then(|p| p.claimed_sha1.clone());
+        if req.inline {
+            if req.export || dest.is_some() {
+                bail!(
+                    "inline returns the file's bytes rather than saving it; ask for one or the other"
+                );
+            }
+            if e.size > MAX_IMAGE as u64 {
+                bail!(
+                    "{} is larger than 5 MiB, the most returned inline; call again without inline to save it",
+                    escape_hidden(&e.path)
+                );
+            }
+            let bytes = self.bytes(local, &real, cli).await?;
+            // The size listed can be the uploader's claim, or older than the file.
+            if bytes.len() > MAX_IMAGE {
+                bail!(
+                    "{} is larger than 5 MiB, the most returned inline; call again without inline to save it",
+                    escape_hidden(&e.path)
+                );
+            }
+            let mime = extract::mime_type(e.name());
+            let mut out = json!({ "file": e.json(), "provenance": PROVENANCE,
+                "inline": { "mimeType": mime, "bytes": bytes.len(),
+                    "note": "the file follows this JSON as an embedded resource, base64" } });
+            digest::bytes(&bytes).add(&mut out, claimed.as_deref());
+            let uri = format!("protonctl:drive{}", extract::uri_path(&e.path));
+            let attached = Some(Attached::Blob { uri, mime, bytes });
+            return Ok(Reply {
+                json: out,
+                attached,
+            });
         }
         let mirrored = if req.export {
             let shown = escape_hidden(parent(&e.path));
@@ -681,10 +802,8 @@ impl Drive {
         let disk = saved.clone();
         let sums = tokio::task::spawn_blocking(move || digest::file(&disk)).await??;
         let mut out = json!({ "file": e.json(), "savedTo": saved, "provenance": PROVENANCE });
-        // From the CLI, `info` brought the claim; from the app's folder there is none at hand.
-        let claimed = e.proton.and_then(|p| p.claimed_sha1);
         sums.add(&mut out, claimed.as_deref());
-        Ok(out)
+        Ok(out.into())
     }
 }
 
@@ -692,32 +811,76 @@ impl Drive {
 /// back a page token, inside the 150 s limit `reply()` enforces (R8).
 const MANIFEST_BUDGET: Duration = Duration::from_secs(120);
 
-/// A manifest page token: the manifest's file name, `folder_print` of the
-/// folder it inventories, and the last folder listed, in hex so that no
-/// character of a name reaches the token. The next call goes on from the
-/// disk around that folder (`next_folder`), so the token holds across
-/// processes and while the tree changes, as mail's search cursor does.
-fn manifest_token(name: &str, top: &str, done: &str) -> String {
-    format!("{name}:{}:{}", folder_print(top), hex::encode(done))
+/// Where a tree listing goes on: the folder being listed, and how many of
+/// its rows earlier pages returned.
+#[derive(Debug, PartialEq)]
+struct At {
+    folder: String,
+    skip: usize,
 }
 
-/// 16 hex digits naming the folder a manifest inventories, so a page token
-/// goes on only with the folder it began in.
+/// A tree page token: `s` when rows carry the CLI's view (`withSha1`) or `p`
+/// when not, `folder_print` of the folder listed, then `At`, its folder in
+/// hex so that no character of a name reaches the token. The next call goes
+/// on from the disk around that folder (`next_folder`), so the token holds
+/// across processes and while the tree changes, as mail's search cursor does.
+fn tree_token(with_sha1: bool, top: &str, at: &At) -> String {
+    let mode = if with_sha1 { "s" } else { "p" };
+    let print = folder_print(top);
+    format!("{mode}:{print}:{}:{}", hex::encode(&at.folder), at.skip)
+}
+
+/// 16 hex digits naming the folder a listing covers, so a page token goes on
+/// only with the folder it began in.
 fn folder_print(top: &str) -> String {
     let mut sums = digest::bytes(top.as_bytes()).sha256;
     sums.truncate(16);
     sums
 }
 
-/// A manifest page token's file name, folder print and last folder listed.
-fn read_manifest_token(token: &str) -> Result<(String, String, String)> {
+/// The `At` a tree page token names, for a listing of `top` with
+/// `with_sha1`. Its folder is checked before anything is read.
+fn read_tree_token(token: &str, with_sha1: bool, top: &str) -> Result<At> {
     let invalid = || anyhow!("invalid pageToken; pass the nextPageToken exactly as returned");
     let mut parts = token.split(':');
-    let (Some(name), Some(print), Some(done), None) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
-    else {
+    let (Some(mode), Some(print), Some(folder), Some(skip), None) = (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) else {
         return Err(invalid());
     };
+    let folder = hex::decode(folder)
+        .ok()
+        .and_then(|d| String::from_utf8(d).ok());
+    let (Some(folder), Ok(skip)) = (folder, skip.parse()) else {
+        return Err(invalid());
+    };
+    if mode != if with_sha1 { "s" } else { "p" } {
+        bail!(
+            "this pageToken is from a listing with withSha1 {}; pass the same withSha1",
+            !with_sha1
+        );
+    }
+    if print != folder_print(top) || !within(top, &folder) {
+        bail!(
+            "this pageToken is for another folder; pass the path the listing began with, or start again without pageToken"
+        );
+    }
+    Ok(At { folder, skip })
+}
+
+/// A manifest page token: the manifest's file name, then its tree token.
+fn manifest_token(name: &str, tree: &str) -> String {
+    format!("{name}:{tree}")
+}
+
+/// A manifest page token's file name and tree token.
+fn read_manifest_token(token: &str) -> Result<(&str, &str)> {
+    let invalid = || anyhow!("invalid pageToken; pass the nextPageToken exactly as returned");
+    let (name, tree) = token.split_once(':').ok_or_else(invalid)?;
     let named = name.starts_with("drive-")
         && Path::new(name)
             .extension()
@@ -725,14 +888,10 @@ fn read_manifest_token(token: &str) -> Result<(String, String, String)> {
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.');
-    let printed = print.len() == 16 && print.bytes().all(|b| b.is_ascii_hexdigit());
-    let done = hex::decode(done)
-        .ok()
-        .and_then(|d| String::from_utf8(d).ok());
-    match (named && printed, done) {
-        (true, Some(done)) => Ok((name.to_string(), print.to_string(), done)),
-        _ => Err(invalid()),
+    if !named {
+        return Err(invalid());
     }
+    Ok((name, tree))
 }
 
 /// Whether the Drive path `p` is `top` or lies under it, with no empty,
@@ -754,14 +913,12 @@ fn order(e: &Entry) -> (&str, &str) {
 
 /// The entries directly in the folder at the Drive path `folder`, in
 /// `order`, from the app's folder, left out as `walk_from` leaves them out.
-/// Empty when the folder is gone, excluded, or reached through a symlink,
-/// which a forged page token could name but no listing would.
-fn folder_entries(root: &Path, exclude: &[String], folder: &str) -> Vec<Entry> {
-    let Ok((disk, _, real)) = resolve(root, exclude, folder) else {
-        return Vec::new();
-    };
+/// `None` when the folder is gone, excluded, or reached through a symlink,
+/// which a page token can name, and a listing then passes it by.
+fn folder_entries(root: &Path, exclude: &[String], folder: &str) -> Option<Vec<Entry>> {
+    let (disk, _, real) = resolve(root, exclude, folder).ok()?;
     if fold(&real) != fold(folder) {
-        return Vec::new();
+        return None;
     }
     let base = if folder == "/" { "" } else { folder };
     let mut entries: Vec<Entry> = entries_in(&disk, base, exclude)
@@ -769,7 +926,7 @@ fn folder_entries(root: &Path, exclude: &[String], folder: &str) -> Vec<Entry> {
         .map(|(_, e)| e)
         .collect();
     entries.sort_by(|a, b| order(a).cmp(&order(b)));
-    entries
+    Some(entries)
 }
 
 /// The folder listed after `done` in a manifest of `top`: depth first, each
@@ -793,6 +950,7 @@ fn next_folder(
         let name = at.rsplit('/').next().unwrap_or_default();
         let key = fold(name);
         let after = folder_entries(root, exclude, up)
+            .unwrap_or_default()
             .into_iter()
             .find(|e| e.folder && order(e) > (key.as_str(), name));
         if let Some(e) = after {
@@ -832,28 +990,18 @@ impl Drive {
                  does: protonctl does not walk the remote tree (Proton's SDK rules)"
             );
         };
-        let (disk, top) = self.manifest_folder(root, req.path.as_deref()).await?;
-        let (name, done) = match req.page_token.as_deref() {
+        let top = self.listed_folder(root, req.path.as_deref()).await?;
+        let (name, at) = match req.page_token.as_deref() {
             None => {
                 let at = Utc::now().format("%Y%m%dT%H%M%S%.6fZ");
                 (format!("drive-{at}.jsonl"), None)
             }
             Some(token) => {
-                // Only withSha1 manifests take more than one call.
-                if !req.with_sha1 {
-                    bail!(
-                        "a pageToken continues a withSha1 manifest; pass withSha1: true, or start \
-                         a new manifest without pageToken"
-                    );
-                }
-                let (name, print, done) = read_manifest_token(token)?;
-                if print != folder_print(&top) || !within(&top, &done) {
-                    bail!(
-                        "this pageToken is for another folder; pass the path the manifest began \
-                         with, or start a new one without pageToken"
-                    );
-                }
-                (name, Some(done))
+                let (name, tree) = read_manifest_token(token)?;
+                (
+                    name.to_string(),
+                    Some(read_tree_token(tree, req.with_sha1, &top)?),
+                )
             }
         };
         let file = export.dir(&["manifests"])?.join(&name);
@@ -866,40 +1014,23 @@ impl Drive {
             .create_new(req.page_token.is_none())
             .open(&file)
             .with_context(|| format!("cannot open {}", file.display()))?;
-        let mut write = |row: &Value| -> Result<()> {
-            writeln!(out, "{row}").with_context(|| format!("cannot write {}", file.display()))
-        };
-        let mut result = json!({ "manifest": file, "provenance": PROVENANCE });
-        let resume = if req.with_sha1 {
-            let (rows, listed, resume) = self.list_folders(root, &top, done, cli, deadline).await?;
-            // Written once this call's folders are all listed, so a call that
-            // fails or is cut off adds no row its retry would repeat.
-            for row in &rows {
-                write(row)?;
-            }
-            result["rows"] = json!(rows.len());
-            result["foldersListed"] = json!(listed);
-            resume
-        } else {
-            let (base, exclude) = (
-                if top == "/" { "" } else { &top }.to_string(),
-                self.exclude.clone(),
-            );
-            let (mut entries, walked) =
-                tokio::task::spawn_blocking(move || walk_from(&disk, &base, &exclude)).await?;
-            entries.sort_by(|a, b| a.path.cmp(&b.path));
-            for e in &entries {
-                write(&e.json())?;
-            }
-            result["rows"] = json!(entries.len());
-            result["walkComplete"] = json!(walked);
-            None
-        };
-        drop(write);
-        let complete = resume.is_none();
-        result["complete"] = json!(complete);
-        result["nextPageToken"] = json!(resume.map(|done| manifest_token(&name, &top, &done)));
-        if complete {
+        let (rows, listed, next) = self
+            .tree_rows(root, &top, at, req.with_sha1, cli, usize::MAX, deadline)
+            .await?;
+        // Written once this call's folders are all listed, so a call that
+        // fails or is cut off adds no row its retry would repeat.
+        for row in &rows {
+            writeln!(out, "{row}").with_context(|| format!("cannot write {}", file.display()))?;
+        }
+        let mut result = json!({
+            "manifest": file,
+            "rows": rows.len(),
+            "foldersListed": listed,
+            "complete": next.is_none(),
+            "nextPageToken": next.as_ref().map(|at| manifest_token(&name, &tree_token(req.with_sha1, &top, at))),
+            "provenance": PROVENANCE,
+        });
+        if next.is_none() {
             let at = file.clone();
             let sums = tokio::task::spawn_blocking(move || digest::file(&at)).await??;
             sums.add(&mut result, None);
@@ -907,62 +1038,117 @@ impl Drive {
         Ok(result)
     }
 
-    /// Where on disk the folder `asked` names under `root` is, and its real
-    /// Drive path. A manifest names entries by the real path, so exclusions
-    /// hold through a symlink to the folder (R7).
-    async fn manifest_folder(&self, root: &Path, asked: Option<&str>) -> Result<(PathBuf, String)> {
+    /// Everything under one folder, a page of rows at a time, in the same
+    /// rows and order as a manifest, returned rather than written.
+    pub async fn list_tree(&self, req: &TreeReq, cli: &Cli) -> Result<Value> {
+        let Some(root) = &self.root else {
+            bail!(
+                "list_drive_tree needs the Proton Drive app's folder on this Mac, as search_files \
+                 does: protonctl does not walk the remote tree (Proton's SDK rules); browse with \
+                 list_folder instead"
+            );
+        };
+        let top = self.listed_folder(root, req.path.as_deref()).await?;
+        let at = req
+            .page_token
+            .as_deref()
+            .map(|t| read_tree_token(t, req.with_sha1, &top))
+            .transpose()?;
+        let size = req.page_size.unwrap_or(100).clamp(1, 200);
+        let deadline = Instant::now() + MANIFEST_BUDGET;
+        let (rows, _, next) = self
+            .tree_rows(root, &top, at, req.with_sha1, cli, size, deadline)
+            .await?;
+        let mut out = json!({
+            "path": escape_hidden(&top),
+            "rows": rows,
+            "nextPageToken": next.as_ref().map(|at| tree_token(req.with_sha1, &top, at)),
+            "provenance": PROVENANCE,
+        });
+        if next.is_some() {
+            out["note"] = json!(
+                "more rows follow: call again with this nextPageToken and the same path and withSha1"
+            );
+        }
+        Ok(out)
+    }
+
+    /// The real Drive path of the folder `asked` names under `root`. A tree
+    /// listing names entries by the real path, so exclusions hold through a
+    /// symlink to the folder (R7).
+    async fn listed_folder(&self, root: &Path, asked: Option<&str>) -> Result<String> {
         let (root, exclude) = (root.to_path_buf(), self.exclude.clone());
         let asked = asked.unwrap_or("/").to_string();
         tokio::task::spawn_blocking(move || -> Result<_> {
             let (disk, path, real) = resolve(&root, &exclude, &asked)?;
             if !std::fs::metadata(&disk)?.is_dir() {
-                bail!(
-                    "{} is a file; export_drive_manifest takes a folder",
-                    escape_hidden(&path)
-                );
+                bail!("{} is a file, not a folder", escape_hidden(&path));
             }
-            Ok((disk, real))
+            Ok(real)
         })
         .await?
     }
 
-    /// Manifest rows for the folders after `done` in a manifest of `top`, or
-    /// from `top` itself when `done` is `None`, one folder at a time until
-    /// the deadline; how many folders were listed; and the last one listed
-    /// when more remain, for the page token. No call walks the whole tree,
-    /// so a tree too large to walk within one call still completes.
-    async fn list_folders(
+    /// Rows of a tree listing of `top` from `at`, or from `top` itself when
+    /// `at` is `None`: each folder's entries, then its subfolders' in turn,
+    /// with the CLI's view of each folder when `with_sha1`. At most `max`
+    /// rows, and none after the deadline once one folder is listed. Returns
+    /// the rows, the folders listed, and where the next page starts, or
+    /// `None` at the end. No call walks the whole tree, so a tree of any size
+    /// is listed in the end.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the listing's whole state; a struct would only rename it"
+    )]
+    async fn tree_rows(
         &self,
         root: &Path,
         top: &str,
-        done: Option<String>,
+        at: Option<At>,
+        with_sha1: bool,
         cli: &Cli,
+        max: usize,
         deadline: Instant,
-    ) -> Result<(Vec<Value>, usize, Option<String>)> {
+    ) -> Result<(Vec<Value>, usize, Option<At>)> {
         // The entries of `folder` and the folder after it, read off the async threads.
         let step = |folder: String| {
             let (r, x, t) = (root.to_path_buf(), self.exclude.clone(), top.to_string());
             tokio::task::spawn_blocking(move || {
                 let entries = folder_entries(&r, &x, &folder);
-                let next = next_folder(&r, &x, &t, &folder, &entries);
+                let next = next_folder(&r, &x, &t, &folder, entries.as_deref().unwrap_or_default());
                 (entries, next)
             })
         };
-        let mut todo = match done {
-            None => Some(top.to_string()),
-            Some(done) => step(done).await?.1,
-        };
-        let (mut rows, mut listed, mut last) = (Vec::new(), 0, None);
-        while let Some(folder) = todo {
-            if listed > 0 && Instant::now() >= deadline {
-                return Ok((rows, listed, last));
+        let mut at = at.unwrap_or_else(|| At {
+            folder: top.to_string(),
+            skip: 0,
+        });
+        let (mut rows, mut listed) = (Vec::new(), 0);
+        loop {
+            if rows.len() >= max || (listed > 0 && Instant::now() >= deadline) {
+                return Ok((rows, listed, Some(at)));
             }
-            let (mine, next) = step(folder.clone()).await?;
-            rows.extend(self.listed_rows(&folder, &mine, cli, root).await?);
-            listed += 1;
-            (todo, last) = (next, Some(folder));
+            let (mine, next) = step(at.folder.clone()).await?;
+            // A folder gone since the token was made is passed by, unlisted.
+            listed += usize::from(mine.is_some());
+            let all = match mine {
+                Some(mine) if with_sha1 => self.listed_rows(&at.folder, &mine, cli, root).await?,
+                Some(mine) => mine.iter().map(Entry::json).collect(),
+                None => Vec::new(),
+            };
+            let space = max - rows.len();
+            let left: Vec<Value> = all.into_iter().skip(at.skip).collect();
+            if left.len() > space {
+                rows.extend(left.into_iter().take(space));
+                at.skip += space;
+                return Ok((rows, listed, Some(at)));
+            }
+            rows.extend(left);
+            match next {
+                Some(folder) => at = At { folder, skip: 0 },
+                None => return Ok((rows, listed, None)),
+            }
         }
-        Ok((rows, listed, None))
     }
 
     /// The manifest rows for the entries directly in `folder`, each with what
@@ -1213,6 +1399,7 @@ fn node_entry(path: String, node: &Value) -> Entry {
         path,
         key,
         folder,
+        link: false,
         size: revision["claimedSize"].as_u64().unwrap_or(0),
         modified: time(&node["modificationTime"]),
         cloud_only: !folder,
@@ -1311,6 +1498,7 @@ mod tests {
     use super::*;
     use crate::digest::tests::{HELLO_SHA1, HELLO_SHA256};
     use proptest::prelude::*;
+    use std::fmt::Write as _;
 
     /// Path-like text: separators, dot segments, escapes, decomposed accents,
     /// spaces and anything else.
@@ -1459,6 +1647,7 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
                 .map(|p| fold(&normalize(p).unwrap()))
                 .collect(),
             index: Mutex::new(None),
+            last_read: Mutex::new(None),
         }
     }
 
@@ -1539,12 +1728,19 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         let bin = tempfile::tempdir().unwrap();
         let cli = fake_cli(bin.path());
         let decomposed = "/Cafe\u{301}.txt";
-        for (path, size) in [("/notes.txt", 5), ("/big.bin", 2 << 20), (decomposed, 5)] {
+        for (path, size) in [
+            ("/notes.txt", 5),
+            ("/big.bin", MAX_SOURCE + 1),
+            (decomposed, 5),
+        ] {
             let name = &path[1..];
             answer(bin.path(), "info", path, &node(name, Some(size)));
         }
         let d = cli_drive(&[]);
-        let get = |path: &str| PathReq { path: path.into() };
+        let get = |path: &str| ReadReq {
+            path: path.into(),
+            ..Default::default()
+        };
         let stat = FileMetadataReq {
             path: "/notes.txt".into(),
             digests: false,
@@ -1556,7 +1752,11 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
             ["filesystem info -j /my-files/notes.txt"]
         );
 
-        let read = d.read_file_content(&get("/notes.txt"), &cli).await.unwrap();
+        let read = d
+            .read_file_content(&get("/notes.txt"), &cli)
+            .await
+            .unwrap()
+            .json;
         assert_eq!(read["content"], "hello");
         let all = calls(bin.path());
         assert_eq!(all[1], "filesystem info -j /my-files/notes.txt");
@@ -1566,12 +1766,20 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         );
 
         // Too big to read: refused from the listed size, with no download.
-        let big = d.read_file_content(&get("/big.bin"), &cli).await.unwrap();
+        let big = d
+            .read_file_content(&get("/big.bin"), &cli)
+            .await
+            .unwrap()
+            .json;
         assert_eq!(big["content"], Value::Null);
         assert_eq!(calls(bin.path()).len(), 4);
 
         // A name stored decomposed goes back to the CLI as stored, not in NFC.
-        let read = d.read_file_content(&get(decomposed), &cli).await.unwrap();
+        let read = d
+            .read_file_content(&get(decomposed), &cli)
+            .await
+            .unwrap()
+            .json;
         assert_eq!(read["content"], "hello");
         assert!(
             calls(bin.path())
@@ -1622,13 +1830,15 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         let (bin, out) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let cli = fake_cli(bin.path());
         let d = drive(t.path(), &[]);
-        let get = PathReq {
+        let get = ReadReq {
             path: "/Projects/Notes: Q3.txt".into(),
+            ..Default::default()
         };
         let got = d
             .download_file(&saving(&get), &cli, Some(out.path()), no_export())
             .await
-            .unwrap();
+            .unwrap()
+            .json;
         let saved = got["savedTo"].as_str().unwrap();
         assert!(saved.ends_with("/Notes_ Q3.txt"), "{saved}");
         assert_eq!(std::fs::read_to_string(saved).unwrap(), "hello");
@@ -1698,7 +1908,10 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         let (bin, out) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let cli = fake_cli(bin.path());
         let d = drive(t.path(), &["/Private"]);
-        let get = |path: &str| PathReq { path: path.into() };
+        let get = |path: &str| ReadReq {
+            path: path.into(),
+            ..Default::default()
+        };
         // A folder, and an excluded file, are refused before the CLI runs.
         assert!(
             d.download_file(
@@ -1730,7 +1943,8 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
                 no_export(),
             )
             .await
-            .unwrap();
+            .unwrap()
+            .json;
         // Saved under the escaped name, so the returned path works as shown.
         let saved = got["savedTo"].as_str().unwrap();
         assert!(saved.ends_with("odd\\u{202E}name.txt"), "{saved}");
@@ -1773,18 +1987,23 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
     #[tokio::test]
     async fn files_that_are_not_returned_as_text_still_name_their_provenance() {
         let t = tree();
-        std::fs::write(
-            t.path().join("Projects/big.txt"),
-            "x".repeat(1024 * 1024 + 1),
-        )
-        .unwrap();
+        // Over the 64 MiB a read takes; sparse, so the test writes little.
+        let big = std::fs::File::create(t.path().join("Projects/big.txt")).unwrap();
+        big.set_len(MAX_SOURCE + 1).unwrap();
         std::fs::write(t.path().join("Projects/blob.bin"), [0xff, 0xfe, 0x00]).unwrap();
         let d = drive(t.path(), &[]);
         for path in ["/Projects/big.txt", "/Projects/blob.bin"] {
             let r = d
-                .read_file_content(&PathReq { path: path.into() }, &no_cli())
+                .read_file_content(
+                    &ReadReq {
+                        path: path.into(),
+                        ..Default::default()
+                    },
+                    &no_cli(),
+                )
                 .await
-                .unwrap();
+                .unwrap()
+                .json;
             assert_eq!(r["content"], Value::Null, "{path}");
             assert!(
                 r["reason"].is_string() && r["provenance"].is_string(),
@@ -1825,8 +2044,9 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         let d = drive(t.path(), &["/Private"]);
         let err = d
             .read_file_content(
-                &PathReq {
+                &ReadReq {
                     path: "/private/secret.txt".into(),
+                    ..Default::default()
                 },
                 &no_cli(),
             )
@@ -1837,8 +2057,9 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         let open = drive(t.path(), &[]);
         assert!(
             open.read_file_content(
-                &PathReq {
-                    path: "/Private/secret.txt".into()
+                &ReadReq {
+                    path: "/Private/secret.txt".into(),
+                    ..Default::default()
                 },
                 &no_cli()
             )
@@ -1872,8 +2093,9 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         let d = drive(t.path(), &["/Private"]);
         let err = d
             .read_file_content(
-                &PathReq {
+                &ReadReq {
                     path: "/Projects/alias/secret.txt".into(),
+                    ..Default::default()
                 },
                 &no_cli(),
             )
@@ -1920,6 +2142,21 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
             .map(|i| i["name"].as_str().unwrap())
             .collect();
         assert_eq!(names, ["Café.txt"]);
+        // The link itself lists as a symlink, not a file the size of its target's path.
+        let top = d
+            .list_folder(&ListFolderReq::default(), &no_cli())
+            .await
+            .unwrap();
+        let alias = top["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["name"] == "alias")
+            .unwrap();
+        assert_eq!(
+            (alias["kind"].clone(), alias["size"].clone()),
+            (json!("symlink"), Value::Null)
+        );
     }
 
     #[tokio::test]
@@ -1937,9 +2174,16 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         let path = r["files"][0]["path"].as_str().unwrap().to_string();
         assert_eq!(path, "/Projects/a\\u{E0041}b.txt");
         let read = d
-            .read_file_content(&PathReq { path }, &no_cli())
+            .read_file_content(
+                &ReadReq {
+                    path,
+                    ..Default::default()
+                },
+                &no_cli(),
+            )
             .await
-            .unwrap();
+            .unwrap()
+            .json;
         assert_eq!(read["content"], "tagged");
     }
 
@@ -1950,13 +2194,15 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         let d = drive(t.path(), &[]);
         let r = d
             .read_file_content(
-                &PathReq {
+                &ReadReq {
                     path: "/Projects/ spaced ".into(),
+                    ..Default::default()
                 },
                 &no_cli(),
             )
             .await
-            .unwrap();
+            .unwrap()
+            .json;
         assert_eq!(r["content"], "x");
     }
 
@@ -1966,8 +2212,9 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         let d = drive(t.path(), &[]);
         assert!(
             d.read_file_content(
-                &PathReq {
-                    path: "/../etc/passwd".into()
+                &ReadReq {
+                    path: "/../etc/passwd".into(),
+                    ..Default::default()
                 },
                 &no_cli()
             )
@@ -1977,8 +2224,9 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         std::os::unix::fs::symlink("/etc", t.path().join("Projects/link")).unwrap();
         assert!(
             d.read_file_content(
-                &PathReq {
-                    path: "/Projects/link/hosts".into()
+                &ReadReq {
+                    path: "/Projects/link/hosts".into(),
+                    ..Default::default()
                 },
                 &no_cli()
             )
@@ -1988,10 +2236,10 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
     }
 
     /// A download into a given folder, as `drive get --out` asks for one.
-    fn saving(req: &PathReq) -> DownloadReq {
+    fn saving(req: &ReadReq) -> DownloadReq {
         DownloadReq {
             path: req.path.clone(),
-            export: false,
+            ..Default::default()
         }
     }
 
@@ -2016,11 +2264,13 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         let req = DownloadReq {
             path: "/Projects/Notes/Café.txt".into(),
             export: true,
+            ..Default::default()
         };
         let got = d
             .download_file(&req, &cli, None, Ok(&export))
             .await
-            .unwrap();
+            .unwrap()
+            .json;
         let saved = PathBuf::from(got["savedTo"].as_str().unwrap());
         assert_eq!(saved, export.folder().join("drive/Projects/Notes/Café.txt"));
         assert_eq!(std::fs::read_to_string(&saved).unwrap(), "hello");
@@ -2065,13 +2315,14 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
             .iter()
             .map(|row| row["path"].as_str().unwrap().into())
             .collect();
+        // Each folder's entries, then its subfolders' in turn.
         assert_eq!(
             paths,
             [
                 "/Projects",
                 "/Projects/Notes",
-                "/Projects/Notes/Café.txt",
-                "/Projects/plan.md"
+                "/Projects/plan.md",
+                "/Projects/Notes/Café.txt"
             ]
         );
         assert_eq!(r["sha256"], digest::file(&file).unwrap().sha256);
@@ -2235,7 +2486,7 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
             with_sha1: true,
             ..Default::default()
         };
-        // Two calls list "/" and then "/A".
+        // Two calls list "/" and then "/A", and the token names "/B", next.
         for _ in 0..2 {
             let step = drive(t.path(), &[])
                 .manifest_until(&req, &cli, &export, Instant::now())
@@ -2243,8 +2494,8 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
                 .unwrap();
             req.page_token = step["nextPageToken"].as_str().map(String::from);
         }
-        // "/A", the folder the token names, goes, and "/B2" arrives after it.
-        std::fs::remove_dir_all(t.path().join("A")).unwrap();
+        // "/B", the folder the token names, goes, and "/B2" arrives after it.
+        std::fs::remove_dir_all(t.path().join("B")).unwrap();
         std::fs::create_dir(t.path().join("B2")).unwrap();
         std::fs::write(t.path().join("B2/b2.txt"), "x").unwrap();
         // A new Drive, as in another process: nothing is carried but the
@@ -2257,7 +2508,7 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
             .unwrap();
         assert_eq!(
             (last["complete"].clone(), last["foldersListed"].clone()),
-            (json!(true), json!(3)),
+            (json!(true), json!(2)),
             "{last}"
         );
         let paths: Vec<String> = manifest(Path::new(last["manifest"].as_str().unwrap()))
@@ -2266,16 +2517,51 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
             .collect();
         assert_eq!(
             paths,
-            [
-                "/A",
-                "/B",
-                "/C",
-                "/A/a.txt",
-                "/B/b.txt",
-                "/B2/b2.txt",
-                "/C/c.txt"
-            ]
+            ["/A", "/B", "/C", "/A/a.txt", "/B2/b2.txt", "/C/c.txt"]
         );
+    }
+
+    #[tokio::test]
+    async fn the_tree_comes_in_pages_that_join_into_the_manifest() {
+        let (t, out) = (tree(), tempfile::tempdir().unwrap());
+        for i in 0..5 {
+            std::fs::write(t.path().join(format!("Projects/f{i}.txt")), "x").unwrap();
+        }
+        let d = drive(t.path(), &["/Private"]);
+        let export = export_into(out.path(), &d);
+        let far = Instant::now() + Duration::from_secs(600);
+        let made = d
+            .manifest_until(&ManifestReq::default(), &no_cli(), &export, far)
+            .await
+            .unwrap();
+        let whole = manifest(Path::new(made["manifest"].as_str().unwrap()));
+        // Three rows a page, so "/Projects" and its seven entries span pages.
+        let mut req = TreeReq {
+            page_size: Some(3),
+            ..Default::default()
+        };
+        let (mut rows, mut pages) = (Vec::new(), 0);
+        loop {
+            pages += 1;
+            assert!(pages <= 10, "the listing never ended: {rows:?}");
+            let page = d.list_tree(&req, &no_cli()).await.unwrap();
+            rows.extend(page["rows"].as_array().unwrap().iter().cloned());
+            match page["nextPageToken"].as_str() {
+                Some(token) => req.page_token = Some(token.into()),
+                None => break,
+            }
+        }
+        assert_eq!(rows, whole);
+        assert_eq!((rows.len(), pages), (9, 3));
+    }
+
+    /// A manifest token for `name` that goes on in `folder`, of a listing of `top`.
+    fn forge(name: &str, top: &str, folder: &str) -> String {
+        let at = At {
+            folder: folder.into(),
+            skip: 0,
+        };
+        manifest_token(name, &tree_token(true, top, &at))
     }
 
     #[tokio::test]
@@ -2310,7 +2596,7 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         // Tokens naming the excluded folder, or a symlink into it: what
         // follows is found from the folders around them, never their insides.
         for done in ["/Private", "/Projects/link"] {
-            let token = Some(manifest_token(&name, "/", done));
+            let token = Some(forge(&name, "/", done));
             let r = d
                 .manifest_until(&req("/", token), &cli, &export, far)
                 .await
@@ -2326,19 +2612,26 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
             ("/", "/", "/Projects/../Private"),
             ("/", "/Projects", "/Projects"),
         ] {
-            let forged = req(path, Some(manifest_token(&name, top, done)));
+            let forged = req(path, Some(forge(&name, top, done)));
             let r = d.manifest_until(&forged, &cli, &export, far).await;
             assert!(r.is_err(), "{path} {top} {done}");
         }
-        let hex16 = "0123456789abcdef";
+        // Malformed tokens, each read as a call reads it.
+        let good = forge(&name, "/", "/Projects");
+        let read =
+            |t: &str| read_manifest_token(t).and_then(|(_, tree)| read_tree_token(tree, true, "/"));
+        assert!(read(&good).is_ok());
+        let tree = good.split_once(':').unwrap().1;
         for bad in [
-            format!("x:{hex16}:2f"),
-            format!("drive-a.jsonl:{hex16}"),
-            format!("drive-a/b.jsonl:{hex16}:2f"),
-            "drive-a.jsonl:xyz:2f".to_string(),
-            format!("drive-a.jsonl:{hex16}:zz"),
+            format!("x:{tree}"),
+            format!("drive-a/b.jsonl:{tree}"),
+            "drive-a.jsonl:s:0123456789abcdef:2f".to_string(),
+            format!("{good}:0"),
+            good.replace(":s:", ":p:"),
+            good.replace("2f50726f6a65637473", "zz"),
+            good.trim_end_matches(":0").to_string() + ":x",
         ] {
-            assert!(read_manifest_token(&bad).is_err(), "{bad}");
+            assert!(read(&bad).is_err(), "{bad}");
         }
     }
 
@@ -2637,7 +2930,10 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         answer(bin.path(), "info", "/other.txt", &other);
         let d = cli_drive(&[]);
         let out = tempfile::tempdir().unwrap();
-        let get = |path: &str| PathReq { path: path.into() };
+        let get = |path: &str| ReadReq {
+            path: path.into(),
+            ..Default::default()
+        };
         let r = d
             .download_file(
                 &saving(&get("/notes.txt")),
@@ -2646,7 +2942,8 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
                 no_export(),
             )
             .await
-            .unwrap();
+            .unwrap()
+            .json;
         assert_eq!(
             (&r["sha256"], &r["sha1"], &r["matchesClaimedSha1"]),
             (&json!(HELLO_SHA256), &json!(HELLO_SHA1), &json!(true))
@@ -2659,7 +2956,8 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
                 no_export(),
             )
             .await
-            .unwrap();
+            .unwrap()
+            .json;
         assert_eq!(r["matchesClaimedSha1"], false);
 
         // From the app's folder no claim is at hand, so there is no match flag.
@@ -2673,9 +2971,114 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
                 no_export(),
             )
             .await
-            .unwrap();
+            .unwrap()
+            .json;
         assert_eq!(r["sha1"], HELLO_SHA1);
         assert!(r.get("matchesClaimedSha1").is_none(), "{r}");
+    }
+
+    #[tokio::test]
+    async fn reads_come_in_pages_and_pdfs_and_images_come_inline() {
+        let t = tree();
+        let long = (0..5000).fold(String::new(), |mut s, i| {
+            writeln!(s, "line {i:05}").unwrap();
+            s
+        });
+        std::fs::write(t.path().join("Projects/long.txt"), &long).unwrap();
+        std::fs::write(t.path().join("Projects/old.txt"), b"Caf\xE9").unwrap();
+        let pdf = crate::extract::tests::sample_pdf();
+        std::fs::write(t.path().join("Projects/doc.pdf"), pdf).unwrap();
+        let png = b"\x89PNG\r\n\x1a\nnot a real image".to_vec();
+        std::fs::write(t.path().join("Projects/pic.png"), &png).unwrap();
+        let d = drive(t.path(), &[]);
+        let read = async |path: &str, offset| {
+            let req = ReadReq {
+                path: path.into(),
+                offset,
+                ..Default::default()
+            };
+            d.read_file_content(&req, &no_cli()).await.unwrap()
+        };
+        let first = read("/Projects/long.txt", None).await.json;
+        assert_eq!(
+            (first["totalChars"].clone(), first["nextOffset"].clone()),
+            (json!(55_000), json!(20_000))
+        );
+        assert_eq!(first["content"].as_str().unwrap().len(), 20_000);
+        let last = read("/Projects/long.txt", Some(40_000)).await.json;
+        assert_eq!(last["nextOffset"], Value::Null);
+        assert!(last["content"].as_str().unwrap().ends_with("line 04999\n"));
+        // Not UTF-8: read as Windows-1252, and said so.
+        let old = read("/Projects/old.txt", None).await.json;
+        assert_eq!(old["content"], "Café");
+        assert!(
+            old["textFrom"].as_str().unwrap().contains("guessed"),
+            "{old}"
+        );
+        let doc = read("/Projects/doc.pdf", None).await.json;
+        assert!(
+            doc["content"].as_str().unwrap().contains("Café — accents."),
+            "{doc}"
+        );
+        assert_eq!(doc["textFrom"], "pdf");
+        let pic = read("/Projects/pic.png", None).await;
+        assert!(matches!(
+            pic.attached,
+            Some(Attached::Image {
+                mime: "image/png",
+                ..
+            })
+        ));
+        // Inline, the bytes follow the JSON and nothing is saved.
+        let req = DownloadReq {
+            path: "/Projects/pic.png".into(),
+            inline: true,
+            ..Default::default()
+        };
+        let got = d
+            .download_file(&req, &no_cli(), None, no_export())
+            .await
+            .unwrap();
+        let Some(Attached::Blob { uri, mime, bytes }) = got.attached else {
+            panic!("no blob: {}", got.json);
+        };
+        assert_eq!(
+            (uri.as_str(), mime, bytes),
+            ("protonctl:drive/Projects/pic.png", "image/png", png.clone())
+        );
+        assert_eq!(got.json["sha256"], digest::bytes(&png).sha256);
+        assert!(got.json.get("savedTo").is_none(), "{}", got.json);
+    }
+
+    #[tokio::test]
+    async fn a_second_page_of_a_cloud_only_file_needs_no_second_download() {
+        let bin = tempfile::tempdir().unwrap();
+        let cli = fake_cli(bin.path());
+        answer(
+            bin.path(),
+            "info",
+            "/notes.txt",
+            &node("notes.txt", Some(5)),
+        );
+        let d = cli_drive(&[]);
+        let read = async |offset| {
+            let req = ReadReq {
+                path: "/notes.txt".into(),
+                offset,
+                max_chars: Some(2),
+            };
+            d.read_file_content(&req, &cli).await.unwrap().json
+        };
+        let (first, second) = (read(None).await, read(Some(2)).await);
+        assert_eq!(
+            (first["content"].clone(), second["content"].clone()),
+            (json!("he"), json!("ll"))
+        );
+        let downloads = calls(bin.path())
+            .iter()
+            .filter(|c| c.contains(" download "))
+            .count();
+        assert_eq!(downloads, 1, "{:?}", calls(bin.path()));
     }
 
     #[tokio::test]
@@ -2690,13 +3093,15 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         );
         let read = cli_drive(&[])
             .read_file_content(
-                &PathReq {
+                &ReadReq {
                     path: "/notes.txt".into(),
+                    ..Default::default()
                 },
                 &cli,
             )
             .await
-            .unwrap();
+            .unwrap()
+            .json;
         assert_eq!(read["content"], "hello");
         // The download's last argument is the new folder it saved into.
         let argv = std::fs::read_to_string(bin.path().join("argv.txt")).unwrap();

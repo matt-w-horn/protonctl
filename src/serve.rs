@@ -6,14 +6,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
+use base64::Engine as _;
 use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
-use rmcp::model::{CallToolResult, ContentBlock};
+use rmcp::model::{CallToolResult, ContentBlock, ResourceContents};
 use rmcp::{ErrorData, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
-use serde_json::Value;
 
 use crate::calendar::{GetEventReq, ListEventsReq, SearchEventsReq};
+use crate::content::{Attached, Reply};
 use crate::drive::{
-    DownloadReq, FileMetadataReq, ListFolderReq, ManifestReq, PathReq, SearchFilesReq,
+    DownloadReq, FileMetadataReq, ListFolderReq, ManifestReq, ReadReq, SearchFilesReq, TreeReq,
 };
 use crate::mail::read::{AttachmentReq, CountMessagesReq, MessageReq, SearchThreadsReq, ThreadReq};
 use crate::{App, content};
@@ -27,16 +28,36 @@ pub struct Server {
 /// RFC R8: every tool call finishes within this, inside Claude Desktop's 180 s.
 const CALL_LIMIT: Duration = Duration::from_secs(150);
 
-async fn reply(call: impl Future<Output = Result<Value>>) -> Result<CallToolResult, ErrorData> {
+/// A call's result as MCP content: its JSON as text, then the file it
+/// carries, base64, as image content or an embedded resource.
+async fn reply<R: Into<Reply>>(
+    call: impl Future<Output = Result<R>>,
+) -> Result<CallToolResult, ErrorData> {
     // Before the call runs, so `get_status` counts what is left (RFC R10).
     content::sweep_downloads();
     let result = tokio::time::timeout(CALL_LIMIT, call)
         .await
         .unwrap_or_else(|_| Err(anyhow!("timed out after 150 s (RFC R8)")));
-    Ok(match result {
-        Ok(v) => CallToolResult::success(vec![ContentBlock::text(v.to_string())]),
-        Err(e) => CallToolResult::error(vec![ContentBlock::text(format!("{e:#}"))]),
-    })
+    let reply = match result {
+        Ok(r) => r.into(),
+        Err(e) => {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "{e:#}"
+            ))]));
+        }
+    };
+    let base64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let mut blocks = vec![ContentBlock::text(reply.json.to_string())];
+    match reply.attached {
+        Some(Attached::Image { mime, bytes }) => {
+            blocks.push(ContentBlock::image(base64(&bytes), mime));
+        }
+        Some(Attached::Blob { uri, mime, bytes }) => blocks.push(ContentBlock::resource(
+            ResourceContents::blob(base64(&bytes), uri).with_mime_type(mime),
+        )),
+        None => {}
+    }
+    Ok(CallToolResult::success(blocks))
 }
 
 #[tool_router]
@@ -132,7 +153,7 @@ impl Server {
         reply(async { self.app.drive()?.search_files(&req).await }).await
     }
 
-    /// List the files and folders directly inside one Proton Drive folder, folders first. With the Proton Drive app, entries come from its local folder: `localModified` is the app's own file time, and `hiddenNames` counts names starting with '.' that are left out. Without the app, the listing comes through the official Proton Drive CLI and entries carry Proton's `nodeId`, `revisionId` and `modified`, plus `claimedSha1` and `claimedModified`, the uploader's claims, which Proton does not verify; `unlisted` names by nodeId the entries no path can reach (a name that does not decrypt, or holds '/'), and `unlistedHidden` counts undecryptable ones when an exclusion could be among them.
+    /// List the files and folders directly inside one Proton Drive folder, folders first; `kind` is file, folder or symlink (a read follows a symlink that stays inside the Drive). With the Proton Drive app, entries come from its local folder: `localModified` is the app's own file time, and `hiddenNames` counts names starting with '.' that are left out. Without the app, the listing comes through the official Proton Drive CLI and entries carry Proton's `nodeId`, `revisionId` and `modified`, plus `claimedSha1` and `claimedModified`, the uploader's claims, which Proton does not verify; `unlisted` names by nodeId the entries no path can reach (a name that does not decrypt, or holds '/'), and `unlistedHidden` counts undecryptable ones when an exclusion could be among them.
     #[tool(annotations(
         title = "List Drive folder",
         read_only_hint = true,
@@ -174,7 +195,7 @@ impl Server {
         .await
     }
 
-    /// Read a UTF-8 text file from Proton Drive (up to 1 MiB, returned up to 100,000 characters). A cloud-only file is fetched through the official Proton Drive CLI first. Binary files return metadata and a reason instead of content; `download_file` saves any file.
+    /// Read a Proton Drive file's content into the conversation, a page at a time: the text of a text file (UTF-8, UTF-16, or older encodings, flagged as a guess), a PDF, or a Word, RTF or OpenDocument document, or an image (PNG, JPEG, GIF or WebP up to 5 MiB) returned as image content. Files up to 64 MiB. Each call returns up to maxChars characters (default 20,000) from offset (default 0), with `totalChars` and `nextOffset`; while `nextOffset` is not null, call again with offset set to it to read on. A PDF's pages are separated by a form feed (\f), and `pageStarts` gives the offset where each page begins. A cloud-only file is fetched through the official Proton Drive CLI. Other files return metadata and a `reason` instead; `download_file` saves any file.
     #[tool(annotations(
         title = "Read Drive file",
         read_only_hint = true,
@@ -184,7 +205,7 @@ impl Server {
     ))]
     async fn read_file_content(
         &self,
-        Parameters(req): Parameters<PathReq>,
+        Parameters(req): Parameters<ReadReq>,
     ) -> Result<CallToolResult, ErrorData> {
         reply(async {
             self.app
@@ -195,7 +216,7 @@ impl Server {
         .await
     }
 
-    /// Save one Proton Drive file to protonctl's private temporary folder on this Mac (removed after an hour, or when the server stops) and return its path, downloading it through the official Proton Drive CLI even when it is only in the cloud. For a text file, `read_file_content` returns the text directly. The result carries the saved file's `sha256` and `sha1`, and `matchesClaimedSha1` when Proton's claimed SHA-1 is at hand (without the Proton Drive app). With `export: true` it saves into the export folder set in protonctl's config instead, at drive/<Drive path>, where the file stays until someone deletes it; an agent whose shell cannot reach this Mac's private folder can read it there.
+    /// Save one Proton Drive file and return where it is, or with `inline: true` return its bytes. To read a text file, PDF, document or image, use `read_file_content` instead, which returns its content directly. By default the file goes to protonctl's private temporary folder on this Mac (removed after an hour, or when the server stops), downloaded through the official Proton Drive CLI even when it is only in the cloud. With `export: true` it goes into the export folder set in protonctl's config, at drive/<Drive path>, where it stays until someone deletes it and an agent that cannot reach this Mac's private folder can read it. With `inline: true` (files up to 5 MiB) nothing is saved: the bytes follow the JSON as an MCP embedded resource, base64, which not every host accepts. The result carries the file's `sha256` and `sha1`, and `matchesClaimedSha1` when Proton's claimed SHA-1 is at hand (without the Proton Drive app).
     #[tool(annotations(
         title = "Download Drive file",
         read_only_hint = true,
@@ -216,7 +237,22 @@ impl Server {
         .await
     }
 
-    /// Write an inventory of one Proton Drive folder and everything under it, as JSON lines, into manifests/ in the export folder set in protonctl's config, and return the file's path, its row count and, once complete, its `sha256`. Each row has a path, kind, size, the Proton Drive app's local file time and whether the file is only in the cloud. With `withSha1: true` each folder is also listed through the official Proton Drive CLI, adding node IDs and the SHA-1 Proton stored at upload (the uploader's claim, which Proton does not verify); that costs about 4.3 s per folder, so a large tree returns a nextPageToken to continue with, and it is for occasional inventories, since Proton asks clients not to walk the tree often. Needs the Proton Drive app's folder on this Mac.
+    /// List everything under one Proton Drive folder, a page of rows at a time: each folder's entries (path, name, kind, size, the Proton Drive app's local file time, whether a file is only in the cloud), then each of its subfolders' in turn. While `nextPageToken` is not null, call again with it and the same path and withSha1 to read on. With `withSha1: true` each folder is also listed through the official Proton Drive CLI, adding node IDs and the SHA-1 Proton stored at upload (the uploader's claim, which Proton does not verify) and naming what Proton lists but this Mac does not show, at about 4.3 s per folder; Proton asks clients not to walk the tree often, so keep it for occasional inventories. Needs the Proton Drive app's folder on this Mac; `export_drive_manifest` writes the same rows to a file.
+    #[tool(annotations(
+        title = "List Drive tree",
+        read_only_hint = true,
+        destructive_hint = false,
+        idempotent_hint = true,
+        open_world_hint = false
+    ))]
+    async fn list_drive_tree(
+        &self,
+        Parameters(req): Parameters<TreeReq>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reply(async { self.app.drive()?.list_tree(&req, &self.app.drive_cli).await }).await
+    }
+
+    /// Write an inventory of one Proton Drive folder and everything under it, the rows `list_drive_tree` returns, as JSON lines into manifests/ in the export folder set in protonctl's config, and return the file's path, its row count and, once complete, its `sha256`. With `withSha1: true` each folder is also listed through the official Proton Drive CLI, at about 4.3 s per folder, for occasional inventories, since Proton asks clients not to walk the tree often. A tree too large for one call returns a nextPageToken; call again with it and the same path and withSha1 to continue the same file. Needs the Proton Drive app's folder on this Mac.
     #[tool(annotations(
         title = "Export Drive manifest",
         read_only_hint = false,
@@ -268,7 +304,7 @@ impl Server {
         reply(async { self.app.mail()?.count_messages(&req).await }).await
     }
 
-    /// Read one email: headers, body as text (HTML converted, up to 60,000 characters), Proton's origin and encryption markers, the attachment list, and `authentication`, a summary of the receiving server's SPF, DKIM and DMARC verdicts (`raw: true` gives the header itself). Takes a messageId from `search_threads` or `get_thread`.
+    /// Read one email: headers, body as text (HTML converted), Proton's origin and encryption markers, the attachment list, and `authentication`, a summary of the receiving server's SPF, DKIM and DMARC verdicts (`raw: true` gives the header itself). The body comes a page at a time: up to maxChars characters (default 20,000) from offset (default 0), with `bodyTotalChars` and `bodyNextOffset`; while `bodyNextOffset` is not null, call again with offset set to it to read on. Takes a messageId from `search_threads` or `get_thread`.
     #[tool(annotations(
         title = "Read email",
         read_only_hint = true,
@@ -283,7 +319,7 @@ impl Server {
         reply(async { self.app.mail()?.get_message(&req).await }).await
     }
 
-    /// Read a whole email conversation, oldest first. Copies of one message merge (`copies`), quoted replies are removed from each body (`quotedLinesRemoved` counts the lines; `raw: true` keeps them), and each body is then cut at 8,000 characters. Takes a threadId from `search_threads` or `get_message`.
+    /// Read a whole email conversation, oldest first, about 30,000 characters of message text per page; while `nextPageToken` is not null, call again with it for later messages. Copies of one message merge (`copies`), quoted replies are removed from each body (`quotedLinesRemoved` counts the lines; `raw: true` keeps them), and each body is then cut at 8,000 characters. Takes a threadId from `search_threads` or `get_message`.
     #[tool(annotations(
         title = "Read email thread",
         read_only_hint = true,
@@ -310,7 +346,7 @@ impl Server {
         reply(async { self.app.mail()?.list_labels().await }).await
     }
 
-    /// Save one email attachment to protonctl's private temporary folder on this Mac (removed after an hour, or when the server stops) and return its path; text attachments up to 64 KB also come back inline. Takes a messageId and an attachment index from `get_message`. The result carries the attachment's `sha256` and `sha1`. With `export: true` it saves into the export folder set in protonctl's config instead, at mail/<messageId>/<index>-<name>, where the file stays until someone deletes it.
+    /// Read one email attachment into the conversation. Takes a messageId and an attachment index from `get_message`. Text, PDF, Word, RTF and OpenDocument attachments return their text a page at a time: up to maxChars characters (default 20,000) from offset (default 0), with `totalChars` and `nextOffset`; while `nextOffset` is not null, call again with offset set to it to read on. Images (PNG, JPEG, GIF or WebP up to 5 MiB) come back as image content. Anything else is saved to protonctl's private temporary folder on this Mac (removed after an hour) and its `path` returned. With `export: true` the attachment is saved instead into the export folder set in protonctl's config, at mail/<messageId>/<index>-<name>, where it stays until someone deletes it; with `inline: true` (up to 5 MiB) its bytes follow the JSON as an MCP embedded resource, base64, which not every host accepts. The result carries the attachment's `sha256` and `sha1`.
     #[tool(annotations(
         title = "Get email attachment",
         read_only_hint = true,
@@ -371,6 +407,7 @@ pub async fn run(app: Arc<App>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     /// Names that would mean a capability RFC R1 forbids.
     const FORBIDDEN: [&str; 9] = [
@@ -410,7 +447,7 @@ mod tests {
             "{err}"
         );
         assert!(from_value::<SearchThreadsReq>(json!({"query": "x", "page_size": 5})).is_err());
-        assert!(from_value::<PathReq>(json!({"path": "/", "extra": 1})).is_err());
+        assert!(from_value::<ReadReq>(json!({"path": "/", "extra": 1})).is_err());
         // search_events flattens the window, which serde cannot combine with
         // the check, so it stays lenient; its own fields still work.
         let search = json!({"query": "x", "startTime": "2026-10-01", "extra": 1});

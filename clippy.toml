@@ -1,3 +1,6 @@
 # Lint levels live in Cargo.toml's [lints]; this file only configures lints.
 # Tests unwrap freely: a panic there is a failed test, not a crash.
 allow-unwrap-in-tests = true
+# Product names in prose and in tool descriptions, which reach the model as
+# written; ".." keeps clippy's own list.
+doc-valid-idents = ["..", "OpenDocument", "PDFKit"]

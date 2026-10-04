@@ -8,6 +8,7 @@ mod content;
 mod digest;
 mod drive;
 mod export;
+mod extract;
 mod mail;
 mod secret;
 mod serve;
@@ -24,7 +25,7 @@ use serde_json::{Value, json};
 use tokio::signal::unix::{SignalKind, signal};
 
 use calendar::{Calendars, GetEventReq, ListEventsReq, SearchEventsReq, ics::Zone};
-use drive::{Drive, FileMetadataReq, ListFolderReq, PathReq, SearchFilesReq};
+use drive::{Drive, FileMetadataReq, ListFolderReq, ReadReq, SearchFilesReq};
 
 /// Operations shared by the CLI and the MCP server.
 pub(crate) struct App {
@@ -233,8 +234,8 @@ enum DriveCmd {
     Ls(ListFolderReq),
     /// Show one path's details.
     Stat(FileMetadataReq),
-    /// Print a text file's content.
-    Cat(PathReq),
+    /// Print a page of a file's text.
+    Cat(ReadReq),
     /// Save one file through the Proton Drive CLI, even if it is only in the cloud.
     Get {
         #[command(flatten)]
@@ -243,6 +244,8 @@ enum DriveCmd {
         #[arg(long, default_value = ".")]
         out: PathBuf,
     },
+    /// List everything under a folder, a page at a time.
+    Tree(drive::TreeReq),
     /// Write an inventory of a folder into the export folder.
     Manifest(drive::ManifestReq),
 }
@@ -462,7 +465,7 @@ fn main() -> Result<()> {
                     MailCmd::Thread(r) => m.get_thread(&r).await?,
                     MailCmd::Labels => m.list_labels().await?,
                     MailCmd::Attachment { req, out } => {
-                        m.get_attachment(&req, Some(&out), app.export()).await?
+                        m.get_attachment(&req, Some(&out), app.export()).await?.json
                     }
                 }
             }
@@ -472,11 +475,13 @@ fn main() -> Result<()> {
                     DriveCmd::Search(r) => d.search_files(&r).await?,
                     DriveCmd::Ls(r) => d.list_folder(&r, &app.drive_cli).await?,
                     DriveCmd::Stat(r) => d.get_file_metadata(&r, &app.drive_cli).await?,
-                    DriveCmd::Cat(r) => d.read_file_content(&r, &app.drive_cli).await?,
+                    DriveCmd::Cat(r) => d.read_file_content(&r, &app.drive_cli).await?.json,
                     DriveCmd::Get { req, out } => {
                         d.download_file(&req, &app.drive_cli, Some(&out), app.export())
                             .await?
+                            .json
                     }
+                    DriveCmd::Tree(r) => d.list_tree(&r, &app.drive_cli).await?,
                     DriveCmd::Manifest(r) => {
                         d.export_manifest(&r, &app.drive_cli, app.export()?).await?
                     }

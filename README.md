@@ -11,13 +11,21 @@ requirements: [docs/rfc-0001.md](docs/rfc-0001.md).
 | Service | Through | Tools |
 |---|---|---|
 | Calendar (read-only) | a Full-view share link, fetched by `/usr/bin/curl` | `list_calendars`, `list_events`, `search_events`, `get_event` |
-| Drive (read-only) | the Proton Drive app's local folder, and the official Proton Drive CLI for content; without the app, listing goes through the CLI and search is off | `search_files`, `list_folder`, `get_file_metadata` (with `digests: true`, Proton's node IDs, the SHA-1 Proton stored at upload, and local digests), `read_file_content` (text files), `download_file` (any file, with its SHA-256 and SHA-1), `export_drive_manifest` (an inventory written to the export folder) |
-| Mail (read-only) | Proton Mail Bridge, over local IMAP with its certificate pinned | `search_threads` (Gmail-style queries, one row per thread, optional snippets), `count_messages` (totals, or groups by sender, domain or recipient, in one call), `get_thread` (quoted replies removed), `get_message`, `list_labels`, `get_attachment` (with its SHA-256 and SHA-1) |
+| Drive (read-only) | the Proton Drive app's local folder, and the official Proton Drive CLI for content; without the app, listing goes through the CLI and search is off | `search_files`, `list_folder`, `get_file_metadata` (with `digests: true`, Proton's node IDs, the SHA-1 Proton stored at upload, and local digests), `read_file_content` (the text of text files, PDFs and Word, RTF and OpenDocument documents, a page at a time, and images), `download_file` (any file, with its SHA-256 and SHA-1, saved or returned inline), `list_drive_tree` (everything under a folder, a page at a time), `export_drive_manifest` (the same inventory written to the export folder) |
+| Mail (read-only) | Proton Mail Bridge, over local IMAP with its certificate pinned | `search_threads` (Gmail-style queries, one row per thread, optional snippets), `count_messages` (totals, or groups by sender, domain or recipient, in one call), `get_thread` (quoted replies removed), `get_message`, `list_labels`, `get_attachment` (text, PDF and document text, or images, with its SHA-256 and SHA-1) |
 
 `get_status` lists what protonctl can reach and every secret it holds.
-Downloads and attachments go to a private folder and are removed after an
-hour, or when the server stops; with `export: true` they go to the export
-folder instead (see Configuration).
+
+Content comes back in the tool result wherever it can, so no folder is
+needed to read it. Text pages by `offset` and `maxChars` (20,000 characters
+unless asked otherwise), and each result says where the next page starts.
+PDF text comes from macOS's PDFKit and Word, RTF and OpenDocument text from
+`textutil`, both part of macOS, so there is nothing more to install. Images
+come back as image content. A file saved by `download_file`, or an
+attachment that is neither text nor an image, goes to a private folder and
+is removed after an hour, or when the server stops. With `export: true` it
+goes to the export folder instead (see Configuration). With `inline: true`
+its bytes come back in the result, base64, which not every host accepts yet.
 
 ## Install
 
@@ -113,7 +121,8 @@ hides a folder from every result.
 ### Export folder
 
 An agent whose shell runs elsewhere (Cowork's VM) cannot read protonctl's
-private download folder. Name an export folder, and `download_file` and
+private download folder. Text, documents and images reach it in the tool
+result; for whole files, name an export folder, and `download_file` and
 `get_attachment` with `export: true`, and `export_drive_manifest`, write
 there instead:
 

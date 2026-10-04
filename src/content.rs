@@ -15,11 +15,35 @@ use serde_json::{Value, json};
 
 use crate::config::cache_dir;
 
-/// Unicode tag characters, which can hide text from a human reader, and bidi
-/// override/isolate controls, which can make text display differently than it
-/// reads. Everything else passes through untouched.
+/// Unicode's `Default_Ignorable_Code_Point` (`DerivedCoreProperties` 18.0.0):
+/// characters a renderer shows as nothing, tag characters and bidi
+/// overrides and isolates among them.
+fn ignorable(c: char) -> bool {
+    matches!(c as u32,
+        0x00AD | 0x034F | 0x061C | 0x115F..=0x1160 | 0x17B4..=0x17B5 | 0x180B..=0x180F
+        | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x206F | 0x3164 | 0xFE00..=0xFE0F
+        | 0xFEFF | 0xFFA0 | 0xFFF0..=0xFFF8 | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A
+        | 0xE0000..=0xE0FFF)
+}
+
+/// Characters removed from text other people wrote (R6): the ignorable ones,
+/// which can hide text, make it display differently than it reads, or split
+/// a word a reader or a filter looks for; and control characters other than
+/// tab and line breaks, since ESC drives a terminal that prints the result.
+/// Kept: the joiners, variation selectors, grapheme joiner and Hangul jamo
+/// fillers that emoji and some scripts are written with.
 fn is_hidden(c: char) -> bool {
-    matches!(c as u32, 0xE0000..=0xE007F | 0x202A..=0x202E | 0x2066..=0x2069)
+    let shaping = matches!(c as u32,
+        0x200C | 0x200D | 0xFE00..=0xFE0F | 0xE0100..=0xE01EF | 0x034F | 0x115F | 0x1160);
+    (ignorable(c) && !shaping) || (c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+}
+
+/// Characters in an identifier (a Drive path) that a reader cannot see or
+/// type, so they are shown as escapes: every ignorable one, controls, and
+/// whitespace other than the plain space, and the braille blank, which
+/// shows as nothing.
+fn invisible(c: char) -> bool {
+    ignorable(c) || c.is_control() || (c.is_whitespace() && c != ' ') || c == '\u{2800}'
 }
 
 /// `s` without hidden characters; `removed` counts what was dropped.
@@ -34,14 +58,15 @@ pub fn clean(s: &str, removed: &mut usize) -> String {
 }
 
 /// Identifiers such as Drive paths cannot lose characters without breaking the
-/// round trip, so hidden characters in them are shown as visible `\u{E0041}`
-/// escapes, which `unescape_hidden` turns back into the real name. A backslash
-/// that would begin such an escape is itself shown as `\u{5C}`, so a name that
-/// really contains the text `\u{202E}` comes back as that text.
+/// round trip, so characters a reader cannot see or type are shown in them as
+/// visible `\u{200B}` escapes, which `unescape_hidden` turns back into the
+/// real name. A backslash that would begin such an escape is itself shown as
+/// `\u{5C}`, so a name that really contains the text `\u{202E}` comes back as
+/// that text.
 pub fn escape_hidden(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for (i, c) in s.char_indices() {
-        if is_hidden(c) || (c == '\\' && s[i + 1..].starts_with("u{")) {
+        if invisible(c) || (c == '\\' && s[i + 1..].starts_with("u{")) {
             write!(out, "\\u{{{:X}}}", c as u32).expect("writing to a String cannot fail");
         } else {
             out.push(c);
@@ -50,8 +75,10 @@ pub fn escape_hidden(s: &str) -> String {
     out
 }
 
-/// Undo `escape_hidden`. Only escapes of hidden characters and of a backslash
-/// are decoded, so a name that really contains `\u{41}` keeps it.
+/// Undo `escape_hidden`, and read any `\u{...}` of 1 to 6 hex digits as its
+/// character, so a caller can type a name holding one. A name that really
+/// holds the text `\u{41}` is shown with its backslash escaped, and so comes
+/// back as that text.
 pub fn unescape_hidden(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -59,8 +86,10 @@ pub fn unescape_hidden(s: &str) -> String {
         out.push_str(&rest[..i]);
         let after = &rest[i + 3..];
         let hidden = after.find('}').and_then(|j| {
-            let c = char::from_u32(u32::from_str_radix(&after[..j], 16).ok()?)?;
-            (is_hidden(c) || c == '\\').then_some((c, j))
+            let hex = &after[..j];
+            let digits = (1..=6).contains(&hex.len()) && hex.bytes().all(|b| b.is_ascii_hexdigit());
+            let c = char::from_u32(u32::from_str_radix(hex, 16).ok().filter(|_| digits)?)?;
+            Some((c, j))
         });
         if let Some((c, j)) = hidden {
             out.push(c);
@@ -72,6 +101,35 @@ pub fn unescape_hidden(s: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// A tool's result: its JSON, and a file the host is to give the model as
+/// it is, which the JSON describes.
+#[derive(Debug)]
+pub struct Reply {
+    pub json: Value,
+    pub attached: Option<Attached>,
+}
+
+#[derive(Debug)]
+pub enum Attached {
+    /// PNG, JPEG, GIF or WebP, which hosts show the model.
+    Image { mime: &'static str, bytes: Vec<u8> },
+    /// Any other file, as an embedded resource, which not every host takes.
+    Blob {
+        uri: String,
+        mime: &'static str,
+        bytes: Vec<u8>,
+    },
+}
+
+impl From<Value> for Reply {
+    fn from(json: Value) -> Self {
+        Self {
+            json,
+            attached: None,
+        }
+    }
 }
 
 /// Cut `s` to at most `max` characters. Returns true if anything was cut.
@@ -244,6 +302,10 @@ mod tests {
             Just("\\u{E0041}".to_string()),
             Just("\\u{41}".to_string()),
             Just("\\u{".to_string()),
+            Just("\u{200B}".to_string()),
+            Just("\u{A0}".to_string()),
+            Just("\u{1B}".to_string()),
+            Just("\u{200D}".to_string()),
             Just("\\".to_string()),
         ];
         prop::collection::vec(token, 0..12).prop_map(|t| t.concat())
@@ -253,7 +315,7 @@ mod tests {
         #[test]
         fn escaping_hidden_characters_round_trips(s in tricky_text()) {
             let shown = escape_hidden(&s);
-            prop_assert!(!shown.chars().any(is_hidden), "{:?}", shown);
+            prop_assert!(!shown.chars().any(invisible), "{:?}", shown);
             prop_assert_eq!(unescape_hidden(&shown), s);
         }
 
@@ -267,12 +329,21 @@ mod tests {
     }
 
     #[test]
-    fn removes_tag_and_bidi_characters_only() {
+    fn removes_hidden_characters_and_keeps_what_text_is_written_with() {
         let mut n = 0;
         // "hi" + tag-encoded "x" + RLO + "ok" + PDI; the ZWJ emoji must survive.
         let s = "hi\u{E0078}\u{202E}ok\u{2069} 👨\u{200D}👩";
         assert_eq!(clean(s, &mut n), "hiok 👨\u{200D}👩");
         assert_eq!(n, 3);
+        // Zero-width space, word joiner, BOM, soft hyphen, LRM, ESC and BEL
+        // go; tab, line breaks, a no-break space, ZWNJ and an emoji's
+        // variation selector stay.
+        let mut n = 0;
+        let s = "pa\u{200B}ss\u{2060}wo\u{FEFF}rd\u{AD}\u{200E} \u{1B}[31mred\u{7}";
+        assert_eq!(clean(s, &mut n), "password [31mred");
+        assert_eq!(n, 7);
+        let kept = "a\tb\r\nc\u{A0}d\u{200C}e ❤\u{FE0F}";
+        assert_eq!(clean(kept, &mut 0), kept);
     }
 
     #[test]
@@ -290,8 +361,20 @@ mod tests {
         let shown = escape_hidden(name);
         assert_eq!(shown, "a\\u{E0041}b\\u{202E}c");
         assert_eq!(unescape_hidden(&shown), name);
-        // Only hidden characters are decoded; a literal escape of anything else stays.
-        assert_eq!(unescape_hidden("x\\u{41}y\\u{zz"), "x\\u{41}y\\u{zz");
+        // Any code point can be typed as an escape; a malformed one stays text.
+        assert_eq!(unescape_hidden("x\\u{41}y\\u{zz"), "xAy\\u{zz");
+        assert_eq!(
+            unescape_hidden("\\u{+41}\\u{1234567}"),
+            "\\u{+41}\\u{1234567}"
+        );
+        // Every character a reader cannot see or type is escaped, and comes back.
+        let unseen = "\u{200B}\u{200C}\u{200D}\u{2060}\u{FEFF}\u{200E}\u{61C}\u{AD}\u{A0}\u{202F}\u{2028}\u{180E}\u{3164}\u{FE0F}\u{8F}";
+        for c in unseen.chars() {
+            let name = format!("a{c}b");
+            let shown = escape_hidden(&name);
+            assert_eq!(shown, format!("a\\u{{{:X}}}b", c as u32));
+            assert_eq!(unescape_hidden(&shown), name);
+        }
         // A name that contains an escape as text keeps it through the round trip.
         assert_eq!(escape_hidden("\\u{202E}"), "\\u{5C}u{202E}");
         assert_eq!(unescape_hidden("\\u{5C}u{202E}"), "\\u{202E}");
