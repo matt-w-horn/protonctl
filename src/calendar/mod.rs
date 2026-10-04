@@ -548,12 +548,12 @@ fn read_page_token(token: &str) -> Result<(usize, DateTime<Utc>, DateTime<Utc>)>
     Ok((offset, from, to))
 }
 
-/// RFC 3339, a local date-time in `zone`, or a date (midnight in `zone`).
 /// The years a time from the caller may name. Nothing on a personal calendar
 /// lies outside them, and inside them every window, step and look-back stays
 /// within chrono's range, where arithmetic past the end panics.
 const YEARS: std::ops::RangeInclusive<i32> = 1900..=2200;
 
+/// RFC 3339, a local date-time in `zone`, or a date (midnight in `zone`).
 pub fn parse_time(s: &str, zone: Zone) -> Result<DateTime<Utc>> {
     let s = s.trim();
     // Checked before any conversion, since a zone's offset can carry a time
