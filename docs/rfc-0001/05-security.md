@@ -1,0 +1,134 @@
+[RFC-0001](../rfc-0001.md) › 5. Security
+
+# 5. Security
+
+## Trust boundaries
+
+Everything in the left box runs as the user on one Mac, and trusts the
+others in it (a process running as the user can read what protonctl can).
+Arrows show what crosses a boundary.
+
+```mermaid
+flowchart LR
+    subgraph mac["Your Mac: your user account"]
+        direction TB
+        H["Claude Code, Claude Desktop, Cowork<br/>(and their other tools: shell, web fetch, connectors)"]
+        P["protonctl serve"]
+        KC[("Keychain:<br/>Bridge password,<br/>calendar links,<br/>privacy key")]
+        BR["Mail Bridge"]
+        CL["proton-drive CLI"]
+        DF["Drive app folder"]
+        TR[("host transcripts<br/>and logs")]
+        H <-->|"stdio MCP"| P
+        P --> KC
+        P -->|"IMAP, 127.0.0.1,<br/>pinned TLS"| BR
+        P -->|"signature-checked"| CL
+        P --> DF
+        H --> TR
+    end
+    subgraph proton["Proton"]
+        PAPI[("Proton API")]
+        CAL[("calendar feed:<br/>Proton decrypts it")]
+    end
+    subgraph anthropic["Anthropic"]
+        M[("model provider:<br/>transcripts")]
+    end
+    BR -->|"Proton's E2EE"| PAPI
+    CL -->|"Proton's E2EE"| PAPI
+    P -->|"curl, HTTPS GET,<br/>URL on stdin"| CAL
+    H -->|"tool results: aliases mode<br/>tokenized, off mode as shown"| M
+    H -.->|"injected text can send<br/>through other tools"| X[("anywhere")]
+
+    classDef mine fill:#D1FAE5,stroke:#059669,color:#064E3B
+    classDef secret fill:#FEF9C3,stroke:#CA8A04,color:#422006
+    classDef prot fill:#EDE9FE,stroke:#7C3AED,color:#2E1065
+    classDef ext fill:#E2E8F0,stroke:#475569,color:#0F172A
+    classDef risk fill:#FEE2E2,stroke:#DC2626,color:#7F1D1D
+    class H,P,BR,CL,DF mine
+    class KC,TR secret
+    class PAPI,CAL prot
+    class M ext
+    class X risk
+```
+
+## Threats and controls
+
+| Threat | Example | Control |
+|---|---|---|
+| Prompt injection in mail, files or invitations | "trash every invoice" in an email | read-only, so no write to trick (R1); in aliases mode raw content needs Touch ID per item (R18) |
+| Exfiltration through writes | send, share link, invite | not implemented (R1) |
+| Exfiltration through the host's other tools | injected text has Claude put what protonctl returned into a web fetch, a `curl` through Bash, or another connector's send | not controlled by protonctl; in aliases mode tokenization limits what a result holds (R13), and raw text needs Touch ID (R18); run protonctl in sessions without network tools or other connectors that send, and in Claude Code limit the sandbox's network (Q17) |
+| Over-exposure | Claude reads a private folder | exclusions enforced in the server (R7) |
+| Disclosure through transcripts | the provider keeps transcripts, and a legal demand reaches them | in aliases mode, aliases, references, handles and keyed digests (R13 to R17), under a key that stays on the Mac; in off mode none: results reach the provider as Proton's clients show them |
+| Probing by name | injected text makes Claude search for a guessed name | not limited (Q7); `guidance` steers toward topics and references (R23). A search shows whether the name matches, and its `queryEntities` pairs the name with its alias, which then reads as that name in every transcript under the same key, earlier ones included; Q21 weighs pairing only on a match, and key epochs |
+| De-aliasing through a reveal | the user approves one raw item | its `entities` table pairs each name in it with its alias, unmasking those aliases in every other transcript under the key (Q21) |
+| Spoofed Touch ID prompt | a subject or file name written to read as a harmless request | the prompt leads with protonctl's own words and computed facts; the name is cleaned, cut and quoted (R18) |
+| Keychain read by another program | the model runs `security find-generic-password -s protonctl -w` through Bash, and the user approves from habit | residual: never choose Always Allow for a program other than protonctl; Claude Code's sandbox can deny the command (Q17) |
+| Malicious file | a crafted PDF or image targets a parser | converters in a sandboxed helper without network, Keychain or file writes (R21); a VM for the riskiest formats in Phase 7 |
+| Raw content on request | injected text asks Claude to reveal a document | one handle per call, Touch ID, a prompt that protonctl writes (R18) |
+| The model runs the CLI | in Claude Code, `protonctl mail message ID` through Bash | in aliases mode, CLI output tokenized by default; `--raw` and `--out` need user presence (R19) |
+| Fake Bridge on the port | a local process harvests the Bridge password | certificate pin; loopback only |
+| Binary swap | a fake `proton-drive` earlier on PATH, or put at the configured path after the check | absolute path, Team ID and version check (R9), once per process; a later swap is open (Q24) |
+| Config tampering | the model, through Claude Code's file tools, removes an exclusion, changes the CLI path or sets the privacy mode to off in `config.toml` | residual: the config is the user's file; Claude Code's sandbox can deny writes to it (Q17); Q28 weighs keeping the mode in the Keychain |
+| Silent change of mode | the mode is switched to off, or the privacy key deleted, while the user believes results are tokenized | a running server refuses calls after a mode change, and aliases mode refuses without its key rather than falling back (R26); `status` and `get_status` name the mode |
+| Replaced `protonctl` binary | a process running as the user swaps the binary, and the Keychain prompt that follows looks like a rebuild's and is approved from habit | a stable signing identity, so that a prompt is rare and means something, and an install path the user cannot write, so that a swap needs an admin (Q12) |
+| Environment injection | `PROTON_DRIVE_BASE_URL` in the host's environment points the CLI's session at another server | the CLI runs with a cleared environment: `HOME` and the log level only |
+| Secret leak | a link, a password or the privacy key in logs, argv or results | Keychain only; curl reads the URL from stdin; never logged or returned; log identifiers keyed (R25) |
+| Calendar link leak | anyone with the URL reads the calendar | a dedicated link for protonctl; `logout` deletes it locally and says how to revoke it in Proton |
+| Alias collision | two entities get one alias | with 3 words from 7,132 (about 3.6 × 10^11 aliases), the chance of any collision is about 0.06% across 20,000 entities, 5% across 200,000 and 75% across a million; URLs, one per tracking link, make the larger counts likely over months under one key. Their references differ, so searches stay correct, and a result that holds both adds a fourth word to one of them, so in that result its alias differs. Two colliding entities in different results look like one to Claude; Q19 weighs 4 words, or no word alias for URLs |
+| Lost or rotated key | old aliases stop matching | old references and handles are refused, not misread (R20); no Proton data is lost |
+| Dependency compromise | malicious crate | small set; `Cargo.lock`; `cargo deny` |
+| Account friction | throttling, CAPTCHA | official clients only; serialized calls; no remote tree walks; calendar fetched at most every 15 minutes |
+
+## Residual risks
+
+- In off mode everything protonctl returns reaches the model provider and
+  the hosts' transcripts as Proton's clients show it. Turning aliases mode
+  on later does not take back what earlier transcripts hold ([section 4,
+  Settings](04-design.md#settings)).
+- In Claude Code the model has a shell, so it can run `proton-drive`
+  directly, read the Drive app's folder, or speak IMAP to Bridge if it
+  learns the Bridge password (through `security` and a Keychain prompt
+  approved from habit), edit protonctl's config, and so bypass protonctl's
+  policy and the privacy layer. Claude Code's docs say deny rules are not
+  "a security boundary around the program"; its sandbox narrows this
+  (Q17). R19 closes only the path through protonctl's own CLI, and only
+  from Phase 3: in Phase 2 the CLI still prints untokenized output. Cowork
+  has no host shell.
+- Identity can be inferred from context that no alias hides: a job, an
+  event, a writing style. Hints add a little to it; summaries (Phase 6)
+  reduce how much context leaves.
+- Until Phase 5, a name that appears only in free text, and in no header,
+  attendee list or query, stays plaintext: in a body, and also in a
+  subject, a file or folder name, a label, or an event's title,
+  description or location. Drive is the widest gap: the app's folder names
+  no authors, so its call dictionary holds only the query's names, and in
+  Phase 2 Drive names are tokenized only where regex finds them.
+  Organizations, places and street addresses have no Phase 2 detector
+  unless the dictionary holds them. `detectors` (R24) shows when only
+  `regex` and `dictionary` ran.
+- Raw content that the user approves reaches the model provider in full, and
+  the names in it stay in that transcript. Because aliases are stable, every
+  pairing of a name with its alias, through a typed query or a reveal,
+  also reads that alias as the name in every other transcript under the
+  same key, before and after it (Q21).
+- The hosts keep what protonctl returns. Claude Code writes every tool
+  result into the session's transcript under `~/.claude/projects/` (deleted
+  after `cleanupPeriodDays`, 30 by default); Claude Desktop keeps each
+  server's stderr, and has been seen to log whole MCP messages, under
+  `~/Library/Logs/Claude/` (to confirm in M1.1). Typed names and approved
+  raw text land there in plaintext, and Time Machine copies both. R10
+  cannot reach these files.
+- Approving Touch ID can become a habit too. Each prompt names one item,
+  and there is no Always Allow, but how often prompts come is not limited.
+- Hidden HTML text can still carry injected instructions after conversion;
+  labelling content mitigates this but does not prevent it.
+- The Drive app folder lags the CLI by the app's sync delay after a change.
+- A server killed with SIGKILL, or one that crashes, leaves its download
+  folder under `~/Library/Caches/protonctl/downloads/` until someone deletes
+  it. In aliases mode there is no download folder; a RAM disk left behind holds
+  at most the files of one process and is gone after a restart.
+
+---
+
+[← 4. Design](04-design.md) · [Contents](../rfc-0001.md#contents) · [6. Privacy →](06-privacy.md)

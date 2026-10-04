@@ -1,10 +1,48 @@
 # protonctl
 
 A local MCP server and CLI that lets Claude (Claude Code, Claude Desktop and
-Cowork) read Proton Mail, Calendar and Drive through Proton's own apps. It
-holds no Proton password or keys, cannot send mail, share files or delete
-anything permanently, and keeps its secrets in the macOS Keychain. Design and
-requirements: [docs/rfc-0001.md](docs/rfc-0001.md).
+Cowork) read Proton Mail, Calendar and Drive through Proton's own apps. It is
+read-only: it cannot send, share, draft, label, move or delete. It holds no
+Proton password or keys, and keeps its secrets in the macOS Keychain. Design
+and requirements: [docs/rfc-0001.md](docs/rfc-0001.md).
+
+![Illustration in three chapters: protonctl answering from synthetic mail and calendar data; where that data goes once Claude reads it; and aliases mode, where the same answers come from results that hold aliases instead of names](docs/demo/protonctl-demo.gif)
+
+*Illustration with synthetic data, not a recording, about two minutes long.
+Chapter 1 (what it does) shows what is built. Chapter 2 explains where your
+data goes once Claude reads it. Chapter 3 (aliases mode, `setup privacy`
+and `reveal_message`) is planned ([RFC-0001](docs/rfc-0001.md), Phases 2
+and 3).
+[Full-resolution video (MP4)](docs/demo/protonctl-demo.mp4), rendered from
+[`docs/demo/storyboard.html`](docs/demo/storyboard.html) by
+[`docs/demo/render.mjs`](docs/demo/render.mjs).*
+
+## How it fits together
+
+```mermaid
+flowchart LR
+    CC["Claude Code"] -->|"stdio MCP"| P["protonctl serve"]
+    CD["Claude Desktop<br/>and Cowork"] -->|"stdio MCP"| P
+    P -->|"IMAP on 127.0.0.1,<br/>pinned certificate"| B["Proton Mail Bridge"]
+    P -->|"signature-checked"| CLI["Proton Drive CLI"]
+    P -->|"read-only"| DF["Proton Drive<br/>app folder"]
+    P -->|"link on stdin"| CURL["/usr/bin/curl"]
+    P --- KC[("macOS Keychain:<br/>Bridge password,<br/>calendar links")]
+    B --> API[("Proton")]
+    CLI --> API
+    CURL -->|"HTTPS GET"| API
+
+    classDef host fill:#E0E7FF,stroke:#4F46E5,color:#1E1B4B
+    classDef core fill:#D1FAE5,stroke:#059669,color:#064E3B
+    classDef prot fill:#EDE9FE,stroke:#7C3AED,color:#2E1065
+    classDef store fill:#FEF9C3,stroke:#CA8A04,color:#422006
+    classDef ext fill:#E2E8F0,stroke:#475569,color:#0F172A
+    class CC,CD host
+    class P core
+    class B,CLI,DF,CURL prot
+    class KC store
+    class API ext
+```
 
 ## What works now
 
@@ -91,10 +129,13 @@ python3 -c 'import json, os, shutil; p = os.path.expanduser("~/Library/Applicati
 
 Then open the app again.
 
-In Claude Code, these rules allow the read tools without a prompt, and leave
-`export_drive_manifest`, which writes a file, on ask: `mcp__proton__get_*`,
-`mcp__proton__list_*`, `mcp__proton__search_*`, `mcp__proton__count_*`,
-`mcp__proton__read_*`, `mcp__proton__download_*`.
+In Claude Code, these rules allow the tools that only read without a
+prompt, and leave the three that can save files (`get_attachment`,
+`download_file` and `export_drive_manifest`) on ask:
+`mcp__proton__get_status`, `mcp__proton__get_event`,
+`mcp__proton__get_file_metadata`, `mcp__proton__get_message`,
+`mcp__proton__get_thread`, `mcp__proton__list_*`, `mcp__proton__search_*`,
+`mcp__proton__count_*`, `mcp__proton__read_*`.
 
 ## Check, and revoke
 
