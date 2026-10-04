@@ -115,10 +115,10 @@ def page(d: dict) -> str:
 
 
 def attached(kind: str, size: int | None = None) -> str:
-    """The block after the JSON: an image, or a base64 blob of `size` bytes."""
+    """The blocks after the JSON: images, or a base64 blob of `size` bytes."""
     block = blocks[0] if blocks else {}
     if kind == "image":
-        ok = block.get("type") == "image" and bool(block.get("data"))
+        ok = any(b.get("type") == "image" and b.get("data") for b in blocks)
     else:
         blob = (block.get("resource") or {}).get("blob") or ""
         ok = block.get("type") == "resource" and len(base64.b64decode(blob)) == size
@@ -186,8 +186,20 @@ else:
 # Over 1 KB: a real PDF is larger than its own trailer.
 pdfs = (call("search_files", {"query": "*.pdf", "kind": "file", "pageSize": 25}, label="*.pdf") or {}).get("files") or []
 pdfs = [f for f in pdfs if (f.get("size") or 0) > 1024]
+def pdf_pages(d: dict) -> str:
+    """Page images: how many, each after a "Page N:" label, and which pages."""
+    images = sum(b.get("type") == "image" for b in blocks)
+    labels = sum(b.get("type") == "text" and b.get("text", "").startswith("Page ") for b in blocks)
+    if not images or labels != images:
+        failures.append(f"page images: {images} images, {labels} labels")
+    return f"{attached('image')}, images {images}, labels {labels}, pages {d.get('pagesShown')} of {d.get('pdfPages')}"
+
+
 if pdfs:
-    call("read_file_content", {"path": pdfs[0]["path"]}, lambda d: page(d) + f", pdfPages {d.get('pdfPages')}", label="pdf")
+    call("read_file_content", {"path": pdfs[0]["path"]}, lambda d: (
+        f"no text layer, {pdf_pages(d)}" if d.get("textLayer") is False else page(d) + f", pdfPages {d.get('pdfPages')}"
+    ), label="pdf")
+    call("read_file_content", {"path": pdfs[0]["path"], "page": 1}, pdf_pages, label="pdf pages")
 else:
     print("skip  read_file_content (pdf)            no PDF over 1 KB found")
 images = (call("search_files", {"query": "*.png", "kind": "file", "pageSize": 25}, label="*.png") or {}).get("files") or []

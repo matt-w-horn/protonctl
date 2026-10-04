@@ -102,6 +102,9 @@ pub struct ReadReq {
     /// Most characters to return, 1 to 40,000. Default 20,000.
     #[arg(long)]
     pub max_chars: Option<usize>,
+    /// For a PDF: the page to start from, counted from 1, to get its pages as images, 4 per call; for scans, figures and layout. A PDF with no text layer comes as page images without it.
+    #[arg(long)]
+    pub page: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema, clap::Args)]
@@ -641,9 +644,10 @@ impl Drive {
     }
 
     /// A file's content inline: a page of its text (text in any common
-    /// encoding, or a PDF's, or a Word, RTF or OpenDocument document's), or
-    /// an image for the host to show. The last document read is kept, so
-    /// its next page needs no second download or extraction.
+    /// encoding, or a PDF's, or a Word, RTF or OpenDocument document's), a
+    /// PDF's pages as images, or an image for the host to show. The last
+    /// document read is kept, so its next page needs no second download or
+    /// extraction.
     pub async fn read_file_content(&self, req: &ReadReq, cli: &Cli) -> Result<Reply> {
         let (e, local, real) = self.locate(&req.path, cli).await?;
         if e.folder {
@@ -682,7 +686,11 @@ impl Drive {
                 Content::Image { mime } if bytes.len() <= MAX_IMAGE => {
                     out["image"] = json!({ "mimeType": mime, "bytes": bytes.len(),
                         "note": "the image follows this JSON as image content" });
-                    let attached = Some(Attached::Image { mime, bytes });
+                    let attached = vec![Attached::Image {
+                        mime,
+                        bytes,
+                        label: None,
+                    }];
                     return Ok(Reply {
                         json: out,
                         attached,
@@ -699,12 +707,14 @@ impl Drive {
                 }
             }
         };
-        if let (Value::Object(o), Value::Object(page)) =
-            (&mut out, doc.page(req.offset, req.max_chars)?)
-        {
+        let (page, attached) = doc.read(req.offset, req.max_chars, req.page).await?;
+        if let (Value::Object(o), Value::Object(page)) = (&mut out, page) {
             o.extend(page);
         }
-        Ok(out.into())
+        Ok(Reply {
+            json: out,
+            attached,
+        })
     }
 
     /// The bytes of the file `locate` found, at most `MAX_SOURCE`: from this
@@ -783,7 +793,7 @@ impl Drive {
                     "note": "the file follows this JSON as an embedded resource, base64" } });
             digest::bytes(&bytes).add(&mut out, claimed.as_deref());
             let uri = format!("protonctl:drive{}", extract::uri_path(&e.path));
-            let attached = Some(Attached::Blob { uri, mime, bytes });
+            let attached = vec![Attached::Blob { uri, mime, bytes }];
             return Ok(Reply {
                 json: out,
                 attached,
@@ -3023,11 +3033,12 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         assert_eq!(doc["textFrom"], "pdf");
         let pic = read("/Projects/pic.png", None).await;
         assert!(matches!(
-            pic.attached,
-            Some(Attached::Image {
+            pic.attached.as_slice(),
+            [Attached::Image {
                 mime: "image/png",
+                label: None,
                 ..
-            })
+            }]
         ));
         // Inline, the bytes follow the JSON and nothing is saved.
         let req = DownloadReq {
@@ -3039,12 +3050,16 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
             .download_file(&req, &no_cli(), None, no_export())
             .await
             .unwrap();
-        let Some(Attached::Blob { uri, mime, bytes }) = got.attached else {
+        let [Attached::Blob { uri, mime, bytes }] = got.attached.as_slice() else {
             panic!("no blob: {}", got.json);
         };
         assert_eq!(
-            (uri.as_str(), mime, bytes),
-            ("protonctl:drive/Projects/pic.png", "image/png", png.clone())
+            (uri.as_str(), *mime, bytes),
+            (
+                "protonctl:drive/Projects/pic.png",
+                "image/png",
+                &png.clone()
+            )
         );
         assert_eq!(got.json["sha256"], digest::bytes(&png).sha256);
         assert!(got.json.get("savedTo").is_none(), "{}", got.json);
@@ -3066,6 +3081,7 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
                 path: "/notes.txt".into(),
                 offset,
                 max_chars: Some(2),
+                page: None,
             };
             d.read_file_content(&req, &cli).await.unwrap().json
         };

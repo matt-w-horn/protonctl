@@ -48,14 +48,16 @@ async fn reply<R: Into<Reply>>(
     };
     let base64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
     let mut blocks = vec![ContentBlock::text(reply.json.to_string())];
-    match reply.attached {
-        Some(Attached::Image { mime, bytes }) => {
-            blocks.push(ContentBlock::image(base64(&bytes), mime));
+    for attached in reply.attached {
+        match attached {
+            Attached::Image { mime, bytes, label } => {
+                blocks.extend(label.map(ContentBlock::text));
+                blocks.push(ContentBlock::image(base64(&bytes), mime));
+            }
+            Attached::Blob { uri, mime, bytes } => blocks.push(ContentBlock::resource(
+                ResourceContents::blob(base64(&bytes), uri).with_mime_type(mime),
+            )),
         }
-        Some(Attached::Blob { uri, mime, bytes }) => blocks.push(ContentBlock::resource(
-            ResourceContents::blob(base64(&bytes), uri).with_mime_type(mime),
-        )),
-        None => {}
     }
     Ok(CallToolResult::success(blocks))
 }
@@ -195,7 +197,7 @@ impl Server {
         .await
     }
 
-    /// Read a Proton Drive file's content into the conversation, a page at a time: the text of a text file (UTF-8, UTF-16, or older encodings, flagged as a guess), a PDF, or a Word, RTF or OpenDocument document, or an image (PNG, JPEG, GIF or WebP up to 5 MiB) returned as image content. Files up to 64 MiB. Each call returns up to maxChars characters (default 20,000) from offset (default 0), with `totalChars` and `nextOffset`; while `nextOffset` is not null, call again with offset set to it to read on. A PDF's pages are separated by a form feed (\f), and `pageStarts` gives the offset where each page begins. A cloud-only file is fetched through the official Proton Drive CLI. Other files return metadata and a `reason` instead; `download_file` saves any file.
+    /// Read a Proton Drive file's content into the conversation, a page at a time: the text of a text file (UTF-8, UTF-16, or older encodings, flagged as a guess), a PDF, or a Word, RTF or OpenDocument document, or an image (PNG, JPEG, GIF or WebP up to 5 MiB) returned as image content. Files up to 64 MiB. Each call returns up to maxChars characters (default 20,000) from offset (default 0), with `totalChars` and `nextOffset`; while `nextOffset` is not null, call again with offset set to it to read on. A PDF's pages are separated by a form feed (\f), and `pageStarts` gives the offset where each page begins. A PDF with no text layer (a scan) comes instead as images of its pages, up to 4 per call, each after a "Page N:" label, with `pdfPages` and `nextPage`; call again with page set to `nextPage` to see on. Set page on any PDF to get its pages as images, for figures, tables or layout. A cloud-only file is fetched through the official Proton Drive CLI. Other files return metadata and a `reason` instead; `download_file` saves any file.
     #[tool(annotations(
         title = "Read Drive file",
         read_only_hint = true,
@@ -346,7 +348,7 @@ impl Server {
         reply(async { self.app.mail()?.list_labels().await }).await
     }
 
-    /// Read one email attachment into the conversation. Takes a messageId and an attachment index from `get_message`. Text, PDF, Word, RTF and OpenDocument attachments return their text a page at a time: up to maxChars characters (default 20,000) from offset (default 0), with `totalChars` and `nextOffset`; while `nextOffset` is not null, call again with offset set to it to read on. Images (PNG, JPEG, GIF or WebP up to 5 MiB) come back as image content. Anything else is saved to protonctl's private temporary folder on this Mac (removed after an hour) and its `path` returned. With `export: true` the attachment is saved instead into the export folder set in protonctl's config, at mail/<messageId>/<index>-<name>, where it stays until someone deletes it; with `inline: true` (up to 5 MiB) its bytes follow the JSON as an MCP embedded resource, base64, which not every host accepts. The result carries the attachment's `sha256` and `sha1`.
+    /// Read one email attachment into the conversation. Takes a messageId and an attachment index from `get_message`. Text, PDF, Word, RTF and OpenDocument attachments return their text a page at a time: up to maxChars characters (default 20,000) from offset (default 0), with `totalChars` and `nextOffset`; while `nextOffset` is not null, call again with offset set to it to read on. A PDF with no text layer (a scan) comes instead as images of its pages, up to 4 per call, each after a "Page N:" label; call again with page set to `nextPage` to see on, and set page on any PDF to get its pages as images. Images (PNG, JPEG, GIF or WebP up to 5 MiB) come back as image content. Anything else is saved to protonctl's private temporary folder on this Mac (removed after an hour) and its `path` returned. With `export: true` the attachment is saved instead into the export folder set in protonctl's config, at mail/<messageId>/<index>-<name>, where it stays until someone deletes it; with `inline: true` (up to 5 MiB) its bytes follow the JSON as an MCP embedded resource, base64, which not every host accepts. The result carries the attachment's `sha256` and `sha1`.
     #[tool(annotations(
         title = "Get email attachment",
         read_only_hint = true,

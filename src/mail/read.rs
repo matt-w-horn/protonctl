@@ -189,6 +189,9 @@ pub struct AttachmentReq {
     /// Most characters of text to return, 1 to 40,000. Default 20,000.
     #[arg(long)]
     pub max_chars: Option<usize>,
+    /// For a PDF: the page to start from, counted from 1, to get its pages as images, 4 per call; for scans, figures and layout. A PDF with no text layer comes as page images without it.
+    #[arg(long)]
+    pub page: Option<usize>,
 }
 
 /// Characters of `X-Pm-Internal-Id` a messageId shows. Every ID in a test
@@ -399,6 +402,29 @@ fn save_once(dir: &Path, file: &str, contents: &[u8]) -> Result<PathBuf> {
         Err(e) => return Err(e).with_context(|| format!("cannot create {}", path.display())),
     }
     Ok(path)
+}
+
+/// An attachment's bytes after `out`, as a base64 embedded resource.
+fn inline_attachment(
+    mut out: Value,
+    req: &AttachmentReq,
+    name: &str,
+    bytes: Vec<u8>,
+) -> Result<Reply> {
+    if bytes.len() > MAX_IMAGE {
+        bail!(
+            "the attachment is larger than 5 MiB, the most returned inline; call again without inline"
+        );
+    }
+    out["inline"] = json!({ "bytes": bytes.len(),
+        "note": "the attachment follows this JSON as an embedded resource, base64" });
+    let id = extract::uri_path(short_id(&req.message_id));
+    let uri = format!("protonctl:mail/{id}/{}", req.index);
+    let mime = extract::mime_type(name);
+    Ok(Reply {
+        json: out,
+        attached: vec![Attached::Blob { uri, mime, bytes }],
+    })
 }
 
 /// The name an attachment is saved under: its index, then the last part of
@@ -1045,34 +1071,20 @@ impl Mail {
             return Ok(out.into());
         }
         if req.inline {
-            if bytes.len() > MAX_IMAGE {
-                bail!(
-                    "the attachment is larger than 5 MiB, the most returned inline; call again without inline"
-                );
-            }
-            out["inline"] = json!({ "bytes": bytes.len(),
-                "note": "the attachment follows this JSON as an embedded resource, base64" });
             out["hiddenCharactersRemoved"] = json!(removed);
-            let uri = format!(
-                "protonctl:mail/{}/{}",
-                extract::uri_path(short_id(&req.message_id)),
-                req.index
-            );
-            let mime = extract::mime_type(&name);
-            return Ok(Reply {
-                json: out,
-                attached: Some(Attached::Blob { uri, mime, bytes }),
-            });
+            return inline_attachment(out, req, &name, bytes);
         }
         match extract::content(&bytes, &name).await? {
             Content::Text(doc) => {
-                if let (Value::Object(o), Value::Object(page)) =
-                    (&mut out, doc.page(req.offset, req.max_chars)?)
-                {
+                let (page, attached) = doc.read(req.offset, req.max_chars, req.page).await?;
+                if let (Value::Object(o), Value::Object(page)) = (&mut out, page) {
                     o.extend(page);
                 }
                 out["hiddenCharactersRemoved"] = json!(removed + doc.hidden());
-                Ok(out.into())
+                Ok(Reply {
+                    json: out,
+                    attached,
+                })
             }
             Content::Image { mime } if bytes.len() <= MAX_IMAGE => {
                 out["image"] = json!({ "mimeType": mime,
@@ -1080,7 +1092,11 @@ impl Mail {
                 out["hiddenCharactersRemoved"] = json!(removed);
                 Ok(Reply {
                     json: out,
-                    attached: Some(Attached::Image { mime, bytes }),
+                    attached: vec![Attached::Image {
+                        mime,
+                        bytes,
+                        label: None,
+                    }],
                 })
             }
             // Neither text nor an image small enough to show: saved where this
@@ -2462,7 +2478,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            saved.json["path"].is_string() && saved.attached.is_none(),
+            saved.json["path"].is_string() && saved.attached.is_empty(),
             "{}",
             saved.json
         );
@@ -2472,11 +2488,11 @@ mod tests {
             .unwrap();
         assert!(
             matches!(
-                inline.attached,
-                Some(Attached::Blob {
+                inline.attached.as_slice(),
+                [Attached::Blob {
                     mime: "application/pdf",
                     ..
-                })
+                }]
             ),
             "{}",
             inline.json

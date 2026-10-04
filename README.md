@@ -20,8 +20,10 @@ Content comes back in the tool result wherever it can, so no folder is
 needed to read it. Text pages by `offset` and `maxChars` (20,000 characters
 unless asked otherwise), and each result says where the next page starts.
 PDF text comes from macOS's PDFKit and Word, RTF and OpenDocument text from
-`textutil`, both part of macOS, so there is nothing more to install. Images
-come back as image content. A file saved by `download_file`, or an
+`textutil`, both part of macOS, so there is nothing more to install. A
+scanned PDF, which has no text, comes back as images of its pages, a few
+per call, and any PDF's pages can be asked for that way. Images come back
+as image content. A file saved by `download_file`, or an
 attachment that is neither text nor an image, goes to a private folder and
 is removed after an hour, or when the server stops. With `export: true` it
 goes to the export folder instead (see Configuration). With `inline: true`

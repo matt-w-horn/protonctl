@@ -4,7 +4,9 @@
 //! from macOS's PDFKit through `/usr/bin/osascript`, and Word, RTF and
 //! OpenDocument text from `/usr/bin/textutil`: both are part of macOS, read
 //! the document from stdin, and run as their own processes, so a hostile
-//! document can crash only them. Images are named for the host to show.
+//! document can crash only them. Images are named for the host to show, and
+//! a PDF's pages are rendered to images by PDFKit too: a scan has no text
+//! layer, and Claude reads a page image as it reads any other.
 
 use std::fmt::Write as _;
 use std::process::Stdio;
@@ -14,7 +16,9 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::content::clean;
+use base64::Engine as _;
+
+use crate::content::{Attached, clean};
 
 /// Largest file read for its text or shown as an image.
 pub const MAX_SOURCE: u64 = 64 << 20;
@@ -30,6 +34,13 @@ const HELPER_LIMIT: Duration = Duration::from_secs(60);
 pub const PAGE_CHARS: usize = 20_000;
 /// Most characters one page may hold.
 pub const MAX_PAGE_CHARS: usize = 40_000;
+/// PDF pages one call returns as images: within the 20 images claude.ai
+/// takes in a message, with room for the conversation's others.
+const PAGE_IMAGES: usize = 4;
+/// The long edge of a rendered page, in pixels: 2000, the most any image may
+/// have once a request holds over 20, and between the 1568 that older
+/// models scale down to and the 2576 that current ones read.
+const PAGE_EDGE: u32 = 2000;
 
 /// What a file's bytes hold, as far as the tools can return it inline.
 pub enum Content {
@@ -51,6 +62,8 @@ pub struct Document {
     /// The character offset of each PDF page; empty for other files.
     page_starts: Vec<usize>,
     hidden: usize,
+    /// A PDF's bytes, kept to render its pages as images.
+    pdf: Option<Vec<u8>>,
 }
 
 impl Document {
@@ -77,6 +90,30 @@ impl Document {
             from,
             page_starts,
             hidden,
+            pdf: None,
+        }
+    }
+
+    /// What a read returns: a PDF's pages as images from `page` (counted
+    /// from 1) when one is asked for, or when it has no text layer, as a scan
+    /// has not; else a page of the text from `offset`.
+    pub async fn read(
+        &self,
+        offset: Option<usize>,
+        max_chars: Option<usize>,
+        page: Option<usize>,
+    ) -> Result<(Value, Vec<Attached>)> {
+        let blank = self.text.trim().is_empty();
+        match &self.pdf {
+            Some(pdf) if page.is_some() || blank => {
+                let (mut v, images) = page_images(pdf, page.unwrap_or(1)).await?;
+                if blank {
+                    v["textLayer"] = json!(false);
+                }
+                Ok((v, images))
+            }
+            None if page.is_some() => bail!("page applies to PDFs; other text is read by offset"),
+            _ => Ok((self.page(offset, max_chars)?, Vec::new())),
         }
     }
 
@@ -124,12 +161,8 @@ impl Document {
             v["pdfPages"] = json!(self.page_starts.len());
             v["pageStarts"] = json!(self.page_starts);
         }
-        // Blank, form feeds aside: a scanned PDF has pages but no text layer.
         if self.text.trim().is_empty() {
-            v["note"] = json!(match self.from {
-                "pdf" => "the PDF has no text layer (a scan?); download_file saves it",
-                _ => "the file holds no text",
-            });
+            v["note"] = json!("the file holds no text");
         }
         Ok(v)
     }
@@ -222,7 +255,84 @@ async fn pdf(bytes: &[u8]) -> Result<Content> {
         .iter()
         .map(|p| p.as_str().unwrap_or_default().to_string())
         .collect();
-    Ok(Content::Text(Document::new(&pages, "pdf")))
+    let mut doc = Document::new(&pages, "pdf");
+    doc.pdf = Some(bytes.to_vec());
+    Ok(Content::Text(doc))
+}
+
+/// Up to `argv[1]` pages from page `argv[0]` (counted from 0), each
+/// rendered with its long edge `argv[2]` pixels and saved as JPEG, printed
+/// as JSON with the page count.
+const RENDER_SCRIPT: &str = r#"ObjC.import("PDFKit");
+ObjC.import("AppKit");
+function run(argv) {
+  const [first, count, edge] = argv.map(Number);
+  const doc = $.PDFDocument.alloc.initWithData($.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile);
+  if (doc.isNil() || doc.isLocked) return "";
+  const images = [];
+  for (let i = first; i < Math.min(doc.pageCount, first + count); i++) {
+    const page = doc.pageAtIndex(i);
+    const box = page.boundsForBox($.kPDFDisplayBoxCropBox).size;
+    const scale = edge / Math.max(box.width, box.height);
+    const size = $.NSMakeSize(Math.round(box.width * scale), Math.round(box.height * scale));
+    const image = page.thumbnailOfSizeForBox(size, $.kPDFDisplayBoxCropBox);
+    const bitmap = $.NSBitmapImageRep.imageRepWithData(image.TIFFRepresentation);
+    const jpeg = bitmap.representationUsingTypeProperties($.NSBitmapImageFileTypeJPEG, $({ NSImageCompressionFactor: 0.85 }));
+    images.push(jpeg.base64EncodedStringWithOptions(0).js);
+  }
+  return JSON.stringify({ pages: Number(doc.pageCount), images: images });
+}"#;
+
+/// Pages of the PDF `bytes` from `first` (counted from 1) as JPEG images,
+/// `PAGE_IMAGES` at most, each after a "Page N:" label, and the JSON that
+/// says which pages they are and where the next call starts.
+async fn page_images(bytes: &[u8], first: usize) -> Result<(Value, Vec<Attached>)> {
+    if first == 0 {
+        bail!("page counts from 1");
+    }
+    let args = [
+        (first - 1).to_string(),
+        PAGE_IMAGES.to_string(),
+        PAGE_EDGE.to_string(),
+    ];
+    let mut command = vec!["-l", "JavaScript", "-e", RENDER_SCRIPT];
+    command.extend(args.iter().map(String::as_str));
+    let out = helper("/usr/bin/osascript", &command, bytes).await?;
+    let read: Value = serde_json::from_slice(&out).context("PDFKit could not render the PDF")?;
+    let total = read["pages"]
+        .as_u64()
+        .map_or(0, |n| usize::try_from(n).unwrap_or(0));
+    if first > total {
+        bail!("page {first} is past the PDF's {total} pages");
+    }
+    let mut images = Vec::new();
+    for (i, data) in read["images"].as_array().into_iter().flatten().enumerate() {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data.as_str().unwrap_or_default())
+            .context("PDFKit returned an image that is not base64")?;
+        images.push(Attached::Image {
+            mime: "image/jpeg",
+            bytes,
+            label: Some(format!("Page {}:", first + i)),
+        });
+    }
+    if images.is_empty() {
+        bail!("PDFKit rendered no page");
+    }
+    let last = first + images.len() - 1;
+    let next = (last < total).then_some(last + 1);
+    let mut v = json!({
+        "pdfPages": total,
+        "pagesShown": [first, last],
+        "nextPage": next,
+        "note": format!("pages {first} to {last} of {total} follow as images, each after its \"Page N:\" label"),
+    });
+    if let Some(next) = next {
+        v["note"] = json!(format!(
+            "pages {first} to {last} of {total} follow as images, each after its \"Page N:\" label; call again with page {next} to see on"
+        ));
+    }
+    Ok((v, images))
 }
 
 /// Run one of macOS's own helpers on `input` with an empty environment and
@@ -432,10 +542,12 @@ pub(crate) mod tests {
             (Value::Null, json!(false))
         );
         assert_eq!(d.page(Some(11), None).unwrap()["content"], "");
-        // Pages with no text, as a scan has, say so.
-        let scan = Document::new(&[String::new(), " ".to_string()], "pdf");
-        let note = scan.page(None, None).unwrap()["note"].clone();
-        assert!(note.as_str().unwrap().contains("no text layer"), "{note}");
+        // Pages with no text say so.
+        let blank = Document::new(&[String::new(), " ".to_string()], "utf-8");
+        assert_eq!(
+            blank.page(None, None).unwrap()["note"],
+            "the file holds no text"
+        );
         assert!(d.page(Some(12), None).is_err());
         // Hidden characters go before offsets are counted, so pages line up.
         let hidden = Document::new(&["a\u{200B}b".to_string(), "c".to_string()], "pdf");
@@ -452,9 +564,14 @@ pub(crate) mod tests {
 
     /// A one-page PDF made by macOS's own text-to-PDF filter.
     pub(crate) fn sample_pdf() -> Vec<u8> {
+        pdf_of("Hello from page one.\nCafé — accents.\n")
+    }
+
+    /// A PDF of `text`, a new page at each form feed.
+    fn pdf_of(text: &str) -> Vec<u8> {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("t.txt");
-        std::fs::write(&src, "Hello from page one.\nCafé — accents.\n").unwrap();
+        std::fs::write(&src, text).unwrap();
         let out = std::process::Command::new("/usr/sbin/cupsfilter")
             .args(["-i", "text/plain"])
             .arg(&src)
@@ -463,6 +580,96 @@ pub(crate) mod tests {
             .unwrap();
         assert!(out.stdout.starts_with(b"%PDF-"), "cupsfilter made no PDF");
         out.stdout
+    }
+
+    #[tokio::test]
+    async fn pdf_pages_come_as_images_and_a_scan_s_without_asking() {
+        let six = text(
+            content(&pdf_of("one\u{C}two\u{C}3\u{C}4\u{C}5\u{C}six"), "a.pdf")
+                .await
+                .unwrap(),
+        );
+        let (v, images) = six.read(None, None, Some(1)).await.unwrap();
+        assert_eq!(
+            (
+                v["pdfPages"].clone(),
+                v["pagesShown"].clone(),
+                v["nextPage"].clone()
+            ),
+            (json!(6), json!([1, 4]), json!(5)),
+            "{v}"
+        );
+        let labels: Vec<&str> = images
+            .iter()
+            .map(|a| match a {
+                Attached::Image {
+                    mime: "image/jpeg",
+                    bytes,
+                    label: Some(label),
+                } => {
+                    assert!(bytes.starts_with(b"\xFF\xD8\xFF"), "{label} is not a JPEG");
+                    label.as_str()
+                }
+                other => panic!("not a labelled JPEG: {other:?}"),
+            })
+            .collect();
+        assert_eq!(labels, ["Page 1:", "Page 2:", "Page 3:", "Page 4:"]);
+        let (rest, images) = six.read(None, None, Some(5)).await.unwrap();
+        assert_eq!(
+            (
+                rest["pagesShown"].clone(),
+                rest["nextPage"].clone(),
+                images.len()
+            ),
+            (json!([5, 6]), Value::Null, 2)
+        );
+        assert!(six.read(None, None, Some(7)).await.is_err());
+        assert!(six.read(None, None, Some(0)).await.is_err());
+        // Without page, a PDF with text comes as text.
+        let (page, images) = six.read(None, None, None).await.unwrap();
+        assert!(
+            page["content"].as_str().unwrap().starts_with("one"),
+            "{page}"
+        );
+        assert!(images.is_empty());
+        // page is for PDFs.
+        let plain = Document::new(&["x".to_string()], "utf-8");
+        assert!(plain.read(None, None, Some(1)).await.is_err());
+
+        // A scan: a page rendered to JPEG, made back into a PDF by sips,
+        // has no text layer, and its pages come as images unasked.
+        let Attached::Image { bytes: jpeg, .. } =
+            &six.read(None, None, Some(6)).await.unwrap().1[0]
+        else {
+            panic!("no image");
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (src, scan) = (dir.path().join("p.jpg"), dir.path().join("scan.pdf"));
+        std::fs::write(&src, jpeg).unwrap();
+        let made = std::process::Command::new("/usr/bin/sips")
+            .args(["-s", "format", "pdf"])
+            .arg(&src)
+            .arg("--out")
+            .arg(&scan)
+            .stdout(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let scanned = text(
+            content(&std::fs::read(&scan).unwrap(), "scan.pdf")
+                .await
+                .unwrap(),
+        );
+        let (v, images) = scanned.read(None, None, None).await.unwrap();
+        assert_eq!(
+            (
+                v["textLayer"].clone(),
+                v["pagesShown"].clone(),
+                images.len()
+            ),
+            (json!(false), json!([1, 1]), 1),
+            "{v}"
+        );
     }
 
     #[tokio::test]

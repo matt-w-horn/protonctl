@@ -108,13 +108,18 @@ pub fn unescape_hidden(s: &str) -> String {
 #[derive(Debug)]
 pub struct Reply {
     pub json: Value,
-    pub attached: Option<Attached>,
+    pub attached: Vec<Attached>,
 }
 
 #[derive(Debug)]
 pub enum Attached {
-    /// PNG, JPEG, GIF or WebP, which hosts show the model.
-    Image { mime: &'static str, bytes: Vec<u8> },
+    /// PNG, JPEG, GIF or WebP, which hosts show the model, after its label
+    /// (such as "Page 3:") when there is one.
+    Image {
+        mime: &'static str,
+        bytes: Vec<u8>,
+        label: Option<String>,
+    },
     /// Any other file, as an embedded resource, which not every host takes.
     Blob {
         uri: String,
@@ -127,7 +132,7 @@ impl From<Value> for Reply {
     fn from(json: Value) -> Self {
         Self {
             json,
-            attached: None,
+            attached: Vec::new(),
         }
     }
 }
