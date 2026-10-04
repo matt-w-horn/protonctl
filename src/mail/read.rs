@@ -1304,12 +1304,21 @@ fn wanted(hit: &Hit, excluded: &HashSet<String>, attachment: Option<bool>) -> bo
     !excluded.contains(&hit.id) && attachment.is_none_or(|want| want == (hit.attachments > 0))
 }
 
+/// A search row: the hit that opened it, how many hits of its thread it
+/// stands for (`matching`, that hit included), and how many copies of
+/// those merged into it.
+struct Row {
+    hit: Hit,
+    matching: usize,
+    copies: usize,
+}
+
 /// One page of search rows. A hit merges into the first row of its thread
 /// in the page's order, or into the row holding a copy of it; only a hit
 /// that needs a new row can find the page full.
 #[derive(Default)]
 struct Page {
-    rows: Vec<(Hit, usize, usize)>,
+    rows: Vec<Row>,
     by_thread: HashMap<String, usize>,
     by_copy: HashMap<CopyKey, usize>,
 }
@@ -1325,13 +1334,13 @@ impl Page {
             .copied();
         let mate = self.by_thread.get(&hit.thread).copied();
         if let Some(i) = copy.or(mate) {
-            let (row, matching, copies) = &mut self.rows[i];
-            row.unread |= hit.unread;
-            row.starred |= hit.starred;
+            let row = &mut self.rows[i];
+            row.hit.unread |= hit.unread;
+            row.hit.starred |= hit.starred;
             if copy.is_some() {
-                *copies += 1;
+                row.copies += 1;
             } else {
-                *matching += 1;
+                row.matching += 1;
                 if let Some(k) = hit.copy_of {
                     self.by_copy.insert(k, i);
                 }
@@ -1346,7 +1355,11 @@ impl Page {
         if let Some(k) = hit.copy_of.clone() {
             self.by_copy.insert(k, i);
         }
-        self.rows.push((hit, 1, 0));
+        self.rows.push(Row {
+            hit,
+            matching: 1,
+            copies: 0,
+        });
         None
     }
 
@@ -1355,25 +1368,31 @@ impl Page {
     fn rows(self) -> Vec<Value> {
         self.rows
             .into_iter()
-            .map(|(hit, matching, copies)| {
-                let mut row = hit.row;
-                let extras = [
-                    ("unread", hit.unread.then_some(json!(true))),
-                    ("starred", hit.starred.then_some(json!(true))),
-                    (
-                        "attachments",
-                        (hit.attachments > 0).then_some(json!(hit.attachments)),
-                    ),
-                    ("matching", (matching > 1).then_some(json!(matching))),
-                    ("copies", (copies > 0).then_some(json!(copies))),
-                ];
-                for (name, value) in extras {
-                    if let Some(v) = value {
-                        row.insert(name.into(), v);
+            .map(
+                |Row {
+                     hit,
+                     matching,
+                     copies,
+                 }| {
+                    let mut row = hit.row;
+                    let extras = [
+                        ("unread", hit.unread.then_some(json!(true))),
+                        ("starred", hit.starred.then_some(json!(true))),
+                        (
+                            "attachments",
+                            (hit.attachments > 0).then_some(json!(hit.attachments)),
+                        ),
+                        ("matching", (matching > 1).then_some(json!(matching))),
+                        ("copies", (copies > 0).then_some(json!(copies))),
+                    ];
+                    for (name, value) in extras {
+                        if let Some(v) = value {
+                            row.insert(name.into(), v);
+                        }
                     }
-                }
-                Value::Object(row)
-            })
+                    Value::Object(row)
+                },
+            )
             .collect()
     }
 }
