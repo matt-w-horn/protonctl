@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
+use async_imap::types::Fetch;
 use chrono::{Duration, Local, NaiveDate};
 use futures::TryStreamExt;
 use mail_parser::{Address, Message, MessageParser, MimeHeaders};
@@ -46,6 +47,8 @@ const SUMMARY: &str = "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM TO 
 const SUMMARY_WITH_TEXT: &str = "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT \
      X-PM-INTERNAL-ID MESSAGE-ID IN-REPLY-TO REFERENCES X-PM-ORIGIN X-PM-CONTENT-ENCRYPTION X-ATTACHED \
      CONTENT-TYPE CONTENT-TRANSFER-ENCODING)] BODY.PEEK[TEXT]<0.32768>)";
+/// What `get_message` and `get_thread` read of a message: all of it.
+const FULL: &str = "(UID FLAGS INTERNALDATE BODY.PEEK[])";
 /// What `count_messages` reads of every match; for the whole of a test
 /// mailbox of about 20,000 messages the headers took 4.7 s (RFC Appendix A).
 const COUNTED: &str =
@@ -654,14 +657,8 @@ impl Conn {
             if Instant::now() >= deadline {
                 bail!(OVER_BUDGET);
             }
-            let fetched: Vec<_> = self
-                .session
-                .uid_fetch(
-                    uid_set(chunk),
-                    "(UID BODY.PEEK[HEADER.FIELDS (X-PM-INTERNAL-ID)])",
-                )
-                .await?
-                .try_collect()
+            let fetched = self
+                .fetch(chunk, "(UID BODY.PEEK[HEADER.FIELDS (X-PM-INTERNAL-ID)])")
                 .await?;
             ids.extend(
                 fetched
@@ -692,12 +689,7 @@ impl Conn {
             if Instant::now() >= deadline {
                 bail!(OVER_BUDGET);
             }
-            let fetched: Vec<_> = self
-                .session
-                .uid_fetch(uid_set(chunk), "(UID INTERNALDATE)")
-                .await?
-                .try_collect()
-                .await?;
+            let fetched = self.fetch(chunk, "(UID INTERNALDATE)").await?;
             dated.extend(
                 fetched
                     .iter()
@@ -709,6 +701,36 @@ impl Conn {
             Order::Oldest => dated.sort_unstable(),
         }
         Ok(dated)
+    }
+
+    /// Internal IDs of the messages in Trash and Spam that match
+    /// `criteria`: All Mail holds them too, so a search of it leaves these out.
+    async fn trash_and_spam_ids(
+        &mut self,
+        criteria: &str,
+        deadline: Instant,
+    ) -> Result<HashSet<String>> {
+        let mut ids = HashSet::new();
+        for role in ["\\trash", "\\junk"] {
+            let name = self.by_role(role)?;
+            ids.extend(self.ids_matching(&name, criteria, deadline).await?);
+        }
+        Ok(ids)
+    }
+
+    /// `items` for each of `uids` in the examined mailbox, in one UID FETCH.
+    async fn fetch<'a>(
+        &mut self,
+        uids: impl IntoIterator<Item = &'a u32>,
+        items: &str,
+    ) -> Result<Vec<Fetch>> {
+        let set = uid_set(uids);
+        Ok(self
+            .session
+            .uid_fetch(set, items)
+            .await?
+            .try_collect()
+            .await?)
     }
 }
 
@@ -805,14 +827,10 @@ impl Mail {
 
     /// One whole message by ID. The remembered UID is checked against the
     /// message that comes back, because a Bridge resync can reassign UIDs.
-    async fn fetch_message(
-        &self,
-        conn: &mut Conn,
-        message_id: &str,
-    ) -> Result<async_imap::types::Fetch> {
+    async fn fetch_message(&self, conn: &mut Conn, message_id: &str) -> Result<Fetch> {
         for _ in 0..2 {
             let (_, uid) = self.uid_of(conn, message_id).await?;
-            if let Some(f) = Self::fetch_full(conn, &[uid]).await?.pop()
+            if let Some(f) = conn.fetch(&[uid], FULL).await?.pop()
                 && f.body()
                     .and_then(|b| header(b, "X-Pm-Internal-Id"))
                     .is_some_and(|full| id_matches(&full, message_id))
@@ -822,16 +840,6 @@ impl Mail {
             self.uids.lock().await.remove(short_id(message_id));
         }
         bail!("no message {message_id:?}")
-    }
-
-    async fn fetch_full(conn: &mut Conn, uids: &[u32]) -> Result<Vec<async_imap::types::Fetch>> {
-        let set = uid_set(uids);
-        Ok(conn
-            .session
-            .uid_fetch(set, "(UID FLAGS INTERNALDATE BODY.PEEK[])")
-            .await?
-            .try_collect()
-            .await?)
     }
 
     pub async fn search_threads(&self, req: &SearchThreadsReq) -> Result<Value> {
@@ -852,13 +860,12 @@ impl Mail {
         deadline: Instant,
     ) -> Result<Value> {
         let order = req.order.unwrap_or_default();
-        let mut excluded = HashSet::new();
-        if query.mailbox == Mailbox::All && !req.include_trash {
-            for role in ["\\trash", "\\junk"] {
-                let name = conn.by_role(role)?;
-                excluded.extend(conn.ids_matching(&name, &query.criteria, deadline).await?);
-            }
-        }
+        let skip_trash = query.mailbox == Mailbox::All && !req.include_trash;
+        let excluded = if skip_trash {
+            conn.trash_and_spam_ids(&query.criteria, deadline).await?
+        } else {
+            HashSet::new()
+        };
         let mailbox = conn.name(&query.mailbox)?;
         let uidvalidity = conn
             .session
@@ -884,21 +891,13 @@ impl Mail {
                 .take(page_size * 2)
                 .map(|(_, uid)| *uid)
                 .collect();
-            let set = uid_set(&chunk);
-            let fetched: Vec<_> = conn
-                .session
-                .uid_fetch(
-                    set,
-                    if req.snippets {
-                        SUMMARY_WITH_TEXT
-                    } else {
-                        SUMMARY
-                    },
-                )
-                .await?
-                .try_collect()
-                .await?;
-            let by_uid: HashMap<u32, &async_imap::types::Fetch> =
+            let items = if req.snippets {
+                SUMMARY_WITH_TEXT
+            } else {
+                SUMMARY
+            };
+            let fetched = conn.fetch(&chunk, items).await?;
+            let by_uid: HashMap<u32, &Fetch> =
                 fetched.iter().filter_map(|f| Some((f.uid?, f))).collect();
             for uid in &chunk {
                 let mut row_removed = 0;
@@ -947,7 +946,7 @@ impl Mail {
             // them too; has:attachment is tested later, row by row.
             "estimatedTotal": dated.len().saturating_sub(excluded.len()),
             "searched": mailbox,
-            "trashAndSpam": if query.mailbox == Mailbox::All && !req.include_trash { "excluded" } else { "included" },
+            "trashAndSpam": if skip_trash { "excluded" } else { "included" },
             "provenance": PROVENANCE,
             "hiddenCharactersRemoved": removed,
         }))
@@ -961,13 +960,12 @@ impl Mail {
         let query = compile(&req.query, Local::now().date_naive())?;
         let limit = req.limit.unwrap_or(100).clamp(1, 1000);
         self.with_conn(async |conn| {
-            let mut excluded = HashSet::new();
-            if query.mailbox == Mailbox::All && !req.include_trash {
-                for role in ["\\trash", "\\junk"] {
-                    let name = conn.by_role(role)?;
-                    excluded.extend(conn.ids_matching(&name, &query.criteria, deadline).await?);
-                }
-            }
+            let skip_trash = query.mailbox == Mailbox::All && !req.include_trash;
+            let excluded = if skip_trash {
+                conn.trash_and_spam_ids(&query.criteria, deadline).await?
+            } else {
+                HashSet::new()
+            };
             let mailbox = conn.name(&query.mailbox)?;
             conn.session.examine(&mailbox).await?;
             let dated = conn.dated(&query.criteria, Order::Newest, deadline).await?;
@@ -977,39 +975,24 @@ impl Mail {
                     bail!("too many messages to count at once; narrow the query with after: or before:");
                 }
                 let date_of: HashMap<u32, i64> = chunk.iter().map(|&(date, uid)| (uid, date)).collect();
-                let fetched: Vec<_> = conn
-                    .session
-                    .uid_fetch(uid_set(chunk.iter().map(|(_, uid)| uid)), COUNTED)
-                    .await?
-                    .try_collect()
-                    .await?;
+                let fetched = conn.fetch(chunk.iter().map(|(_, uid)| uid), COUNTED).await?;
                 for f in &fetched {
                     let Some(m) = f.header().and_then(|b| MessageParser::default().parse_headers(b)) else {
                         continue;
                     };
-                    let Some(id) = m.header_raw("X-Pm-Internal-Id").map(|v| v.trim().to_string()) else {
+                    let Some(id) = internal_id(&m) else {
                         continue;
                     };
-                    let attachments = m
-                        .headers()
-                        .iter()
-                        .filter(|h| h.name().eq_ignore_ascii_case("X-Attached"))
-                        .count();
+                    let attachments = attachment_count(&m);
                     if excluded.contains(&id)
                         || query.attachment.is_some_and(|want| want != (attachments > 0))
                     {
                         continue;
                     }
-                    let mut ignored = 0;
-                    let copy_of = m.header_raw("Message-Id").map(|mid| {
-                        let from = addresses(m.from(), &mut ignored).into_iter().next();
-                        let subject = clean(m.subject().unwrap_or_default(), &mut ignored);
-                        (mid.trim().to_string(), from.unwrap_or_default(), subject)
-                    });
                     rows.push(Counted {
                         date: f.uid.and_then(|uid| date_of.get(&uid).copied()).unwrap_or_default(),
                         id,
-                        copy_of,
+                        copy_of: copy_key(&m),
                         from: bare_addresses(m.from(), &mut removed).into_iter().next(),
                         to: bare_addresses(m.to(), &mut removed),
                     });
@@ -1025,7 +1008,7 @@ impl Mail {
                 "messages": messages,
                 "estimatedTotal": dated.len().saturating_sub(excluded.len()),
                 "searched": mailbox,
-                "trashAndSpam": if query.mailbox == Mailbox::All && !req.include_trash { "excluded" } else { "included" },
+                "trashAndSpam": if skip_trash { "excluded" } else { "included" },
                 "provenance": COUNT_PROVENANCE,
                 "hiddenCharactersRemoved": removed,
             });
@@ -1066,7 +1049,7 @@ impl Mail {
             }
             uids.sort_unstable();
             let total = uids.len();
-            let fetched = Self::fetch_full(conn, &uids[uids.len().saturating_sub(THREAD_MAX)..]).await?;
+            let fetched = conn.fetch(&uids[uids.len().saturating_sub(THREAD_MAX)..], FULL).await?;
             let view = View { max_body: THREAD_BODY_CHARS, quotes_removed: !req.raw, raw: req.raw };
             let mut rendered: Vec<(i64, Rendered)> = fetched
                 .iter()
@@ -1184,7 +1167,7 @@ struct Meta {
     starred: bool,
 }
 
-fn meta(f: &async_imap::types::Fetch) -> Meta {
+fn meta(f: &Fetch) -> Meta {
     use async_imap::types::Flag;
     let fl: Vec<Flag<'_>> = f.flags().collect();
     Meta {
@@ -1201,7 +1184,7 @@ fn common(
     meta: &Meta,
     removed: &mut usize,
 ) -> Option<(String, serde_json::Map<String, Value>)> {
-    let id = m.header_raw("X-Pm-Internal-Id")?.trim().to_string();
+    let id = internal_id(m)?;
     let Meta {
         date,
         unread,
@@ -1250,7 +1233,7 @@ struct Hit {
 }
 
 /// A search hit from the summary header fields.
-fn summarize(f: &async_imap::types::Fetch, removed: &mut usize) -> Option<Hit> {
+fn summarize(f: &Fetch, removed: &mut usize) -> Option<Hit> {
     let parsed = MessageParser::default().parse_headers(f.header()?)?;
     hit(&parsed, &meta(f), removed)
 }
@@ -1258,19 +1241,9 @@ fn summarize(f: &async_imap::types::Fetch, removed: &mut usize) -> Option<Hit> {
 /// A search hit from a message's headers and what IMAP knows about it.
 fn hit(parsed: &Message, meta: &Meta, removed: &mut usize) -> Option<Hit> {
     let (id, mut row) = common(parsed, meta, removed)?;
-    let attachments = parsed
-        .headers()
-        .iter()
-        .filter(|h| h.name().eq_ignore_ascii_case("X-Attached"))
-        .count();
-    let text = |v: Option<&Value>| v.and_then(Value::as_str).unwrap_or_default().to_string();
-    let copy_of = copy_key(parsed, &row);
-    let thread = text(row.get("threadId"));
-    let thread = if thread.is_empty() {
-        id.clone()
-    } else {
-        thread
-    };
+    let attachments = attachment_count(parsed);
+    let copy_of = copy_key(parsed);
+    let thread = thread_key(parsed).unwrap_or_else(|| id.clone());
     let (unread, starred) = (meta.unread, meta.starred);
     for flag in ["unread", "starred", "encryption"] {
         row.remove(flag);
@@ -1493,16 +1466,30 @@ fn bare_addresses(a: Option<&Address>, removed: &mut usize) -> Vec<String> {
         .collect()
 }
 
-/// The copy key of a message whose row holds its cleaned From and Subject.
-fn copy_key(m: &Message, row: &serde_json::Map<String, Value>) -> Option<CopyKey> {
-    let text = |k: &str| {
-        row.get(k)
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
-    };
+/// A message's copy key: its `Message-Id`, and its From and Subject as
+/// rows show them. Hidden characters they lose are counted where the rows
+/// are made, not here.
+fn copy_key(m: &Message) -> Option<CopyKey> {
     let mid = m.header_raw("Message-Id")?.trim().to_string();
-    Some((mid, text("from"), text("subject")))
+    let mut ignored = 0;
+    let from = addresses(m.from(), &mut ignored).into_iter().next();
+    let subject = clean(m.subject().unwrap_or_default(), &mut ignored);
+    Some((mid, from.unwrap_or_default(), subject))
+}
+
+/// A parsed message's full `X-Pm-Internal-Id`.
+fn internal_id(m: &Message) -> Option<String> {
+    m.header_raw("X-Pm-Internal-Id")
+        .map(|v| v.trim().to_string())
+}
+
+/// A message's attachments, which Bridge lists in one `X-Attached` header
+/// each (RFC Appendix A).
+fn attachment_count(m: &Message) -> usize {
+    m.headers()
+        .iter()
+        .filter(|h| h.name().eq_ignore_ascii_case("X-Attached"))
+        .count()
 }
 
 /// The first copy of a header: the topmost, added by the last server to
@@ -1772,7 +1759,7 @@ struct Rendered {
 }
 
 /// A whole message: headers, body text (HTML converted), attachment list.
-fn render(f: &async_imap::types::Fetch, view: View) -> Result<Rendered> {
+fn render(f: &Fetch, view: View) -> Result<Rendered> {
     let raw = f.body().context("Bridge returned no message body")?;
     let message: Message = MessageParser::default()
         .parse(raw)
@@ -1780,7 +1767,7 @@ fn render(f: &async_imap::types::Fetch, view: View) -> Result<Rendered> {
     let mut removed = 0;
     let (_, mut row) =
         common(&message, &meta(f), &mut removed).context("the message has no X-Pm-Internal-Id")?;
-    let copy_of = copy_key(&message, &row);
+    let copy_of = copy_key(&message);
     let (body, quoted) = readable_body(&message, view.quotes_removed);
     if quoted > 0 {
         row.insert("quotedLinesRemoved".into(), json!(quoted));
