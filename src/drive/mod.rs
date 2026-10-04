@@ -9,6 +9,7 @@
 
 pub mod cli;
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io::{Read, Write as _};
 use std::os::macos::fs::MetadataExt;
@@ -765,8 +766,7 @@ impl Drive {
         };
         let (mut rows, mut next) = (0, folders.len());
         if req.with_sha1 {
-            let mut children: std::collections::HashMap<&str, Vec<&Entry>> =
-                std::collections::HashMap::new();
+            let mut children: HashMap<&str, Vec<&Entry>> = HashMap::new();
             for e in &entries {
                 children.entry(parent(&e.path)).or_default().push(e);
             }
@@ -856,8 +856,7 @@ impl Drive {
         let nodes = nodes
             .as_array()
             .context("the Proton Drive CLI's listing was not a list")?;
-        let mut theirs: std::collections::HashMap<String, &Value> =
-            std::collections::HashMap::new();
+        let mut theirs: HashMap<String, &Value> = HashMap::new();
         let mut unnamed = Vec::new();
         for n in nodes {
             match n["name"]["value"]
