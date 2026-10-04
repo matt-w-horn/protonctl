@@ -380,7 +380,7 @@ impl Drive {
         let root = root.to_path_buf();
         let exclude = self.exclude.clone();
         let (entries, complete) =
-            tokio::task::spawn_blocking(move || walk(&root, &exclude)).await?;
+            tokio::task::spawn_blocking(move || walk_from(&root, "", &exclude)).await?;
         let entries = Arc::new(entries);
         *guard = Some(Index {
             built: Instant::now(),
@@ -1131,11 +1131,9 @@ fn normalize(path: &str) -> Result<String> {
     plain(path).map(|p| p.nfc().collect())
 }
 
-fn walk(root: &Path, exclude: &[String]) -> (Vec<Entry>, bool) {
-    walk_from(root, "", exclude)
-}
-
-/// `walk` from the folder `dir`, whose Drive path is `base` ("" for the root).
+/// Every entry under the folder `dir`, whose Drive path is `base` ("" for
+/// the root), except hidden names and excluded subtrees; false if the walk
+/// hit its limits.
 fn walk_from(dir: &Path, base: &str, exclude: &[String]) -> (Vec<Entry>, bool) {
     let started = Instant::now();
     let mut out = Vec::new();
