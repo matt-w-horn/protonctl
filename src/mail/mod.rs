@@ -19,6 +19,8 @@ use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 
+mod body;
+mod query;
 pub mod read;
 
 pub use read::Mail;
