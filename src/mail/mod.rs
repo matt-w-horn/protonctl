@@ -2,8 +2,7 @@
 //! does all the decryption (RFC R3). Bridge's TLS certificate is self-signed,
 //! so `protonctl setup mail` pins its SHA-256 the first time it connects and
 //! every later connection refuses any other certificate (RFC R9): another
-//! process listening on the port cannot collect the Bridge password. Reading
-//! mail arrives in Phase 1a; this module is the connection and the login check.
+//! process listening on the port cannot collect the Bridge password.
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::process::Stdio;
