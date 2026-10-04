@@ -89,6 +89,11 @@ pub fn home() -> PathBuf {
     std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
 }
 
+/// protonctl's cache folder, which holds the download folders and the CLI's lock file.
+pub fn cache_dir() -> PathBuf {
+    home().join("Library/Caches/protonctl")
+}
+
 pub fn path() -> PathBuf {
     if let Some(p) = std::env::var_os("PROTONCTL_CONFIG") {
         return p.into();

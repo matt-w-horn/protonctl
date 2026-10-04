@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
-use crate::config::home;
+use crate::config::cache_dir;
 
 /// Unicode tag characters, which can hide text from a human reader, and bidi
 /// override/isolate controls, which can make text display differently than it
@@ -134,7 +134,7 @@ fn downloads_path() -> PathBuf {
     let base = if cfg!(test) {
         std::env::temp_dir().join("protonctl-test")
     } else {
-        home().join("Library/Caches/protonctl")
+        cache_dir()
     };
     base.join(format!("downloads/{}", std::process::id()))
 }
