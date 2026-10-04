@@ -803,6 +803,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_event_finds_a_single_event_an_occurrence_and_a_moved_one() {
+        let cals = one_calendar(feed(&[
+            event(
+                "single@x.test",
+                "20261005T170000Z",
+                "DTEND:20261005T180000Z\r\nSUMMARY:Dentist\r\nLOCATION:Main St\r\n",
+            ),
+            event(
+                "weekly@x.test",
+                "20261005T160000Z",
+                "DTEND:20261005T163000Z\r\nSUMMARY:Standup\r\nRRULE:FREQ=WEEKLY;COUNT=4\r\n",
+            ),
+            event(
+                "weekly@x.test",
+                "20261019T200000Z",
+                "RECURRENCE-ID:20261019T160000Z\r\nDTEND:20261019T203000Z\r\nSUMMARY:Standup (moved)\r\n",
+            ),
+        ]))
+        .await;
+        for (name, id) in [
+            ("get_event_single", "single@x.test"),
+            ("get_event_occurrence", "weekly@x.test|20261012T160000Z"),
+            ("get_event_moved", "weekly@x.test|20261019T160000Z"),
+        ] {
+            let req = GetEventReq {
+                event_id: id.into(),
+                ..Default::default()
+            };
+            let found = cals.get_event(&req).await.unwrap();
+            insta::assert_json_snapshot!(name, found["event"]);
+        }
+    }
+
+    #[tokio::test]
     async fn search_no_longer_matches_html_tag_names() {
         let html = "DESCRIPTION:<p>Agenda</p><br><a href=\"https://x.test/n\">Notes</a>\r\n";
         let cals = one_calendar(feed(&[event(
