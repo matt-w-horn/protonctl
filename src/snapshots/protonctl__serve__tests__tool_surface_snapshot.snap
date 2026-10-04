@@ -1,0 +1,733 @@
+---
+source: src/serve.rs
+expression: tools
+---
+[
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Count mail"
+    },
+    "description": "Count Proton Mail messages matching a Gmail-style query (the same as `search_threads`), optionally grouped by sender (`from`), sender domain (`fromDomain`), To address (`to`) or To domain (`toDomain`); each group has its count and its newest and oldest message. Duplicate copies of a message count once, and a message with several To addresses counts in each of their groups. Domains are exact hosts, so mail.example.com and example.com are separate groups. One call reads the whole match; a query too broad to count within 120 s fails and says to narrow it with after: or before:.",
+    "inputSchema": {
+      "$defs": {
+        "GroupBy": {
+          "description": "What `count_messages` groups by.",
+          "enum": [
+            "from",
+            "fromDomain",
+            "to",
+            "toDomain"
+          ],
+          "type": "string"
+        },
+        "GroupOrder": {
+          "description": "The order `count_messages` returns groups in.",
+          "enum": [
+            "count",
+            "newest",
+            "oldest"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GroupBy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Group by sender address (`from`), sender domain (`fromDomain`), To address (`to`) or To domain (`toDomain`). Omit for totals only."
+        },
+        "includeTrash": {
+          "default": false,
+          "description": "Also count messages in Trash and Spam. Default false.",
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "Groups to return, 1 to 1,000. Default 100.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "order": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GroupOrder"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Groups by `count` (default, largest first), `newest` (most recent message first) or `oldest` (earliest message first)."
+        },
+        "query": {
+          "description": "The same Gmail-style query as `search_threads`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "meta": null,
+    "name": "count_messages"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Download Drive file"
+    },
+    "description": "Save one Proton Drive file to protonctl's private temporary folder on this Mac (removed after an hour, or when the server stops) and return its path, downloading it through the official Proton Drive CLI even when it is only in the cloud. For a text file, `read_file_content` returns the text directly. The result carries the saved file's `sha256` and `sha1`, and `matchesClaimedSha1` when Proton's claimed SHA-1 is at hand (without the Proton Drive app). With `export: true` it saves into the export folder set in protonctl's config instead, at drive/<Drive path>, where the file stays until someone deletes it; an agent whose shell cannot reach this Mac's private folder can read it there.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "export": {
+          "default": false,
+          "description": "Save into the configured export folder, at drive/<Drive path>, where the file stays until someone deletes it, instead of the private temporary folder. Default false.",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "Drive path from `search_files` or `list_folder`, e.g. \"/Projects/notes.md\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "meta": null,
+    "name": "download_file"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false,
+      "title": "Export Drive manifest"
+    },
+    "description": "Write an inventory of one Proton Drive folder and everything under it, as JSON lines, into manifests/ in the export folder set in protonctl's config, and return the file's path, its row count and, once complete, its `sha256`. Each row has a path, kind, size, the Proton Drive app's local file time and whether the file is only in the cloud. With `withSha1: true` each folder is also listed through the official Proton Drive CLI, adding node IDs and the SHA-1 Proton stored at upload (the uploader's claim, which Proton does not verify); that costs about 4.3 s per folder, so a large tree returns a nextPageToken to continue with, and it is for occasional inventories, since Proton asks clients not to walk the tree often. Needs the Proton Drive app's folder on this Mac.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "pageToken": {
+          "description": "The nextPageToken from a previous call with the same path and withSha1.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "Drive folder to inventory, everything under it included. Default \"/\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "withSha1": {
+          "default": false,
+          "description": "Also list every folder through the Proton Drive CLI, adding node IDs and the SHA-1 Proton stored at upload: about 4.3 s per folder, so a large tree takes several calls. Default false.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "meta": null,
+    "name": "export_drive_manifest"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Get email attachment"
+    },
+    "description": "Save one email attachment to protonctl's private temporary folder on this Mac (removed after an hour, or when the server stops) and return its path; text attachments up to 64 KB also come back inline. Takes a messageId and an attachment index from `get_message`. The result carries the attachment's `sha256` and `sha1`. With `export: true` it saves into the export folder set in protonctl's config instead, at mail/<messageId>/<index>-<name>, where the file stays until someone deletes it.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "export": {
+          "default": false,
+          "description": "Save into the configured export folder, at mail/<messageId>/<index>-<name>, where it stays until someone deletes it, instead of the private temporary folder. Default false.",
+          "type": "boolean"
+        },
+        "index": {
+          "description": "The attachment's index from `get_message`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "messageId": {
+          "description": "A messageId from `search_threads` or `get_thread`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "messageId",
+        "index"
+      ],
+      "type": "object"
+    },
+    "meta": null,
+    "name": "get_attachment"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Get event"
+    },
+    "description": "Get one event or one occurrence of a recurring event, with its full description and attendees. Takes an eventId from `list_events` or `search_events`.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "calendarId": {
+          "description": "Calendar id; omit to look in every configured calendar.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "eventId": {
+          "description": "An eventId from `list_events` or `search_events`.",
+          "type": "string"
+        },
+        "timeZone": {
+          "description": "IANA time zone for the result. Default: the configured zone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "eventId"
+      ],
+      "type": "object"
+    },
+    "meta": null,
+    "name": "get_event"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Drive file details"
+    },
+    "description": "Size, modification time and local-or-cloud-only state of one Proton Drive path, as `list_folder` shows it. With `digests: true` it also returns Proton's view: through the Proton Drive app's folder that takes one Proton Drive CLI call (about 5 s) and comes back as `proton` (nodeId, revisionId, claimedSha1, modified, claimedModified, size), or as `protonError` if the call fails; without the app these fields are in `file` already. A file on this Mac up to 1 GiB also gets its `sha256` and `sha1`, with `matchesClaimedSha1` when a claim is known. `claimedSha1` and `claimedModified` are the uploader's claims, which Proton does not verify.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "digests": {
+          "default": false,
+          "description": "Also return Proton's view of the file and its SHA-256 and SHA-1 when it is on this Mac. Default false.",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "Drive path from `search_files` or `list_folder`, e.g. \"/Projects/notes.md\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "meta": null,
+    "name": "get_file_metadata"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Read email"
+    },
+    "description": "Read one email: headers, body as text (HTML converted, up to 60,000 characters), Proton's origin and encryption markers, the attachment list, and `authentication`, a summary of the receiving server's SPF, DKIM and DMARC verdicts (`raw: true` gives the header itself). Takes a messageId from `search_threads` or `get_thread`.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "messageId": {
+          "description": "A messageId from `search_threads` or `get_thread`.",
+          "type": "string"
+        },
+        "raw": {
+          "default": false,
+          "description": "Return the Authentication-Results header verbatim instead of its summary. Default false.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "messageId"
+      ],
+      "type": "object"
+    },
+    "meta": null,
+    "name": "get_message"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Proton status"
+    },
+    "description": "What protonctl can reach right now, every secret it holds, and how to revoke them.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "meta": null,
+    "name": "get_status"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Read email thread"
+    },
+    "description": "Read a whole email conversation, oldest first. Copies of one message merge (`copies`), quoted replies are removed from each body (`quotedLinesRemoved` counts the lines; `raw: true` keeps them), and each body is then cut at 8,000 characters. Takes a threadId from `search_threads` or `get_message`.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "raw": {
+          "default": false,
+          "description": "Keep quoted text in bodies and return Authentication-Results headers verbatim. Default false.",
+          "type": "boolean"
+        },
+        "threadId": {
+          "description": "A threadId from `search_threads` or `get_message`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "meta": null,
+    "name": "get_thread"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "List calendars"
+    },
+    "description": "List the Proton calendars protonctl can read. Use a calendarId from here with `list_events`, `search_events` or `get_event`.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "meta": null,
+    "name": "list_calendars"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "List events"
+    },
+    "description": "List calendar events in a time window (default: the next 7 days), with recurring events expanded into occurrences. Read-only. Times are RFC 3339 in the requested time zone; all-day events use {\"date\": ...}.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "calendarId": {
+          "description": "Calendar id from `list_calendars`. Omit to cover every configured calendar.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "endTime": {
+          "description": "Window end, same formats. Default: start plus 7 days for `list_events`; for `search_events`, 275 days ahead, or 365 days after startTime if only that is given. The window can span at most 366 days.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pageSize": {
+          "description": "Events per page, 1 to 250. Default 50.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pageToken": {
+          "description": "The nextPageToken from a previous call. It carries that call's window, so the pages line up.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "startTime": {
+          "description": "Window start: RFC 3339 (2026-10-05T09:00:00-07:00), a local time (2026-10-05T09:00:00) or a date (2026-10-05). Default: now for `list_events`; for `search_events`, 90 days ago, or 365 days before endTime if only that is given.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeZone": {
+          "description": "IANA time zone for interpreting inputs and formatting results, e.g. `America/Los_Angeles`. Default: the configured zone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "meta": null,
+    "name": "list_events"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "List Drive folder"
+    },
+    "description": "List the files and folders directly inside one Proton Drive folder, folders first. With the Proton Drive app, entries come from its local folder: `localModified` is the app's own file time, and `hiddenNames` counts names starting with '.' that are left out. Without the app, the listing comes through the official Proton Drive CLI and entries carry Proton's `nodeId`, `revisionId` and `modified`, plus `claimedSha1` and `claimedModified`, the uploader's claims, which Proton does not verify; `unlisted` names by nodeId the entries no path can reach (a name that does not decrypt, or holds '/'), and `unlistedHidden` counts undecryptable ones when an exclusion could be among them.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "pageSize": {
+          "description": "Entries per page, 1 to 200. Default 100.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pageToken": {
+          "description": "The nextPageToken from a previous call with the same arguments.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "Drive folder to list, e.g. \"/\" or \"/Projects\". Default \"/\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "meta": null,
+    "name": "list_folder"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "List mail labels"
+    },
+    "description": "List Proton Mail folders and labels with message and unread counts, for `label:` and `in:` in `search_threads`.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "meta": null,
+    "name": "list_labels"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Read Drive file"
+    },
+    "description": "Read a UTF-8 text file from Proton Drive (up to 1 MiB, returned up to 100,000 characters). A cloud-only file is fetched through the official Proton Drive CLI first. Binary files return metadata and a reason instead of content; `download_file` saves any file.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Drive path from `search_files` or `list_folder`, e.g. \"/Projects/notes.md\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "meta": null,
+    "name": "read_file_content"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Search events"
+    },
+    "description": "Find calendar events by words and \"quoted phrases\", each of which must appear in the title, description or location (case-insensitive). -word or -\"phrase\" leaves matching events out, and a query of only - terms keeps every other event in the window: `-Lunch -\"Focus time\"` leaves those routine blocks out. Default window: 90 days back to 275 days ahead; with only startTime or only endTime, the 365 days on that side of it. An empty result over the default window carries a `note`; pass startTime and endTime to look outside it. Read-only.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "calendarId": {
+          "description": "Calendar id from `list_calendars`. Omit to cover every configured calendar.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "endTime": {
+          "description": "Window end, same formats. Default: start plus 7 days for `list_events`; for `search_events`, 275 days ahead, or 365 days after startTime if only that is given. The window can span at most 366 days.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pageSize": {
+          "description": "Events per page, 1 to 250. Default 50.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pageToken": {
+          "description": "The nextPageToken from a previous call. It carries that call's window, so the pages line up.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "query": {
+          "description": "Words and \"quoted phrases\", each of which must appear in the title, description or location (case-insensitive), and -word or -\"phrase\" for events to leave out. A query of only - terms keeps every event in the window but those: `-Lunch -\"Focus time\"` leaves those routine blocks out.",
+          "type": "string"
+        },
+        "startTime": {
+          "description": "Window start: RFC 3339 (2026-10-05T09:00:00-07:00), a local time (2026-10-05T09:00:00) or a date (2026-10-05). Default: now for `list_events`; for `search_events`, 90 days ago, or 365 days before endTime if only that is given.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeZone": {
+          "description": "IANA time zone for interpreting inputs and formatting results, e.g. `America/Los_Angeles`. Default: the configured zone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "meta": null,
+    "name": "search_events"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Search Drive"
+    },
+    "description": "Search Proton Drive by file or folder name (substring, or glob with * and ?). Searches the Proton Drive app's local folder rather than calling Proton, so it needs the app installed; without it, browse with `list_folder`. Use `read_file_content`, `download_file` or `get_file_metadata` on a returned path.",
+    "inputSchema": {
+      "$defs": {
+        "Kind": {
+          "enum": [
+            "file",
+            "folder"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Kind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Only files or only folders."
+        },
+        "modifiedAfter": {
+          "description": "Only items whose local file time (the Proton Drive app's, which can differ from Proton's) is on or after this date (YYYY-MM-DD) or RFC 3339 time.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modifiedBefore": {
+          "description": "Only items whose local file time (the Proton Drive app's) is before this date (YYYY-MM-DD) or RFC 3339 time.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pageSize": {
+          "description": "Results per page, 1 to 100. Default 25.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pageToken": {
+          "description": "The nextPageToken from a previous call with the same arguments.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "Only look under this Drive folder, e.g. \"/Projects\". Default: everywhere.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "query": {
+          "description": "Name to find: a case-insensitive substring, or a glob with * and ? (matched against the whole name).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "meta": null,
+    "name": "search_files"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Search mail"
+    },
+    "description": "Search Proton Mail with a Gmail-style query (see the query parameter). Returns one row per thread on each page, newest first or oldest first with `order`, plus `estimatedTotal` (matching messages). A row shows its thread's first matching message on the page: messageId, threadId, date, from, subject, up to 3 To and Cc addresses (`toMore` and `ccMore` count the rest), and `origin`: internal (sent within Proton), external (received from outside Proton) or import (brought in by an import). `matching` counts the thread's matching messages merged into the row and `copies` the duplicate copies merged (imports can store a message twice); `unread`, `starred` and `attachments` appear only when set. A long thread can show again on a later page. Trash and Spam are left out unless includeTrash. Use `get_thread` or `get_message` for the content.",
+    "inputSchema": {
+      "$defs": {
+        "Order": {
+          "description": "Which end of the date order a search starts from.",
+          "enum": [
+            "newest",
+            "oldest"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "includeTrash": {
+          "default": false,
+          "description": "Also return messages in Trash and Spam. Default false.",
+          "type": "boolean"
+        },
+        "order": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Order"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`newest` (default) or `oldest` first."
+        },
+        "pageSize": {
+          "description": "Messages per page, 1 to 50. Default 20.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pageToken": {
+          "description": "The nextPageToken from a previous call with the same query and order.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "query": {
+          "description": "Gmail-style query. Words and \"quoted phrases\" match headers and body text; body matching runs on raw bytes, so it can miss accented words and words split across lines. `from:`, `to:`, `cc:`, `bcc:` and `subject:` match a case-insensitive substring of that header, display name included: `to:` is the To header only (any recipient: `to:x OR cc:x OR bcc:x`), and `from:@example.com` also matches longer domains such as example.com.au (`count_messages` groups by exact domain). `label:NAME` searches one label or folder, a nested folder written as `list_labels` shows it (`Parent/Child`); `in:inbox|sent|drafts|archive|starred|spam|trash`; at most one `label:` or `in:`. `is:unread|read|starred`, `has:attachment`. Dates are UTC days: `after:YYYY-MM-DD` includes that day and `before:YYYY-MM-DD` excludes it; `newer_than:` and `older_than:` take 7d, 3m (30-day months) or 1y (365 days) back from today. `-term` negates. `OR` joins the terms on its two sides: `a OR b c` means (a or b) and c, and `a OR b OR c` chains.",
+          "type": "string"
+        },
+        "snippets": {
+          "default": false,
+          "description": "Add `snippet`, the first 200 characters of each row's message text without quoted replies. Default false.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "meta": null,
+    "name": "search_threads"
+  }
+]

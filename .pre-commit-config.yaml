@@ -1,0 +1,14 @@
+# Gates for every commit; `pre-commit install` sets up the hook.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+  - repo: local
+    hooks:
+      - id: check
+        name: fmt, clippy, tests, cargo-deny, coverage floor
+        entry: scripts/check.sh
+        language: system
+        pass_filenames: false
+        always_run: true

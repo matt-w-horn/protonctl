@@ -1,0 +1,12 @@
+/target
+
+# Secrets and local credentials. The !.env.example line keeps the committed
+# sample visible (github/gitignore Node.gitignore uses exactly this triple).
+.env
+.env.*
+!.env.example
+
+# Claude Code working files. A global git ignore file may block these too, but
+# that is per-machine and invisible to clones, so the rule lives here.
+.claude/
+CLAUDE.md
