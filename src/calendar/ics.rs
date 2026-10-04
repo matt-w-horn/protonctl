@@ -288,13 +288,14 @@ fn unescape(v: &str) -> String {
     let mut out = String::with_capacity(v.len());
     let mut chars = v.chars();
     while let Some(c) = chars.next() {
-        match (c, c == '\\') {
-            (_, true) => match chars.next() {
+        if c == '\\' {
+            match chars.next() {
                 Some('n' | 'N') => out.push('\n'),
                 Some(other) => out.push(other),
                 None => {}
-            },
-            (c, false) => out.push(c),
+            }
+        } else {
+            out.push(c);
         }
     }
     out
