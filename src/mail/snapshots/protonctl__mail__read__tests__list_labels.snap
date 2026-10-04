@@ -1,0 +1,69 @@
+---
+source: src/mail/read.rs
+expression: mail.list_labels().await.unwrap()
+---
+{
+  "labels": [
+    {
+      "kind": "system",
+      "messages": 2,
+      "name": "INBOX",
+      "unread": 1
+    },
+    {
+      "kind": "system",
+      "messages": 0,
+      "name": "Sent",
+      "unread": 0
+    },
+    {
+      "kind": "system",
+      "messages": 0,
+      "name": "Drafts",
+      "unread": 0
+    },
+    {
+      "kind": "system",
+      "messages": 0,
+      "name": "Archive",
+      "unread": 0
+    },
+    {
+      "kind": "system",
+      "messages": 1,
+      "name": "Starred",
+      "unread": 0
+    },
+    {
+      "kind": "system",
+      "messages": 0,
+      "name": "Spam",
+      "unread": 0
+    },
+    {
+      "kind": "system",
+      "messages": 1,
+      "name": "Trash",
+      "unread": 0
+    },
+    {
+      "kind": "system",
+      "messages": 5,
+      "name": "All Mail",
+      "unread": 1
+    },
+    {
+      "kind": "folder",
+      "messages": 0,
+      "name": "Receipts",
+      "unread": 0
+    },
+    {
+      "kind": "label",
+      "messages": 1,
+      "name": "Work",
+      "unread": 0
+    }
+  ],
+  "use": "label:NAME for a label or folder (a nested folder as shown, Parent/Child); in:NAME for a system mailbox; in search_threads"
+}

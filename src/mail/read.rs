@@ -598,8 +598,8 @@ struct Conn {
 }
 
 impl Conn {
-    async fn new(cfg: &MailConfig) -> Result<Self> {
-        let mut session = open(cfg).await?;
+    /// A connection over a logged-in session, with every mailbox it lists.
+    async fn listing(mut session: Session) -> Result<Self> {
         let listed: Vec<_> = session.list(None, Some("*")).await?.try_collect().await?;
         let boxes = listed
             .iter()
@@ -772,7 +772,12 @@ impl Mail {
 
     /// Run `op` on the shared session, opened on first use (see `with_cached`).
     async fn with_conn<T>(&self, op: impl AsyncFnOnce(&mut Conn) -> Result<T>) -> Result<T> {
-        with_cached(&self.conn, async || Conn::new(&self.cfg).await, op).await
+        with_cached(
+            &self.conn,
+            async || Conn::listing(open(&self.cfg).await?).await,
+            op,
+        )
+        .await
     }
 
     /// The All Mail UID of the message `message_id` names. A shown messageId
@@ -1813,6 +1818,8 @@ fn merge_copies(rendered: Vec<Rendered>) -> (Vec<Value>, usize) {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use std::fmt::Write as _;
+    use std::sync::Arc;
 
     /// Hits in a mailbox of UID -> date, sorted for `order`.
     fn sorted(mailbox: &std::collections::BTreeMap<u32, i64>, order: Order) -> Vec<(i64, u32)> {
@@ -2523,5 +2530,410 @@ mod tests {
             addresses(message.from(), &mut removed),
             ["Ann <ann@example.test>"]
         );
+    }
+
+    /// A message the fake Bridge holds: its flags, INTERNALDATE and text.
+    struct Stored {
+        flags: &'static str,
+        date: &'static str,
+        raw: String,
+    }
+
+    /// A mailbox the fake Bridge lists: its attributes, UIDVALIDITY, and
+    /// (UID, index into the messages) for each message it holds. With
+    /// `status` false it answers STATUS with "no such mailbox", as Bridge
+    /// does for the Labels parent.
+    struct FakeBox {
+        name: &'static str,
+        attrs: &'static str,
+        uidvalidity: u32,
+        status: bool,
+        held: Vec<(u32, usize)>,
+    }
+
+    /// A raw message whose `X-Pm-Internal-Id` repeats `id` to 88 characters.
+    fn stored(id: char, flags: &'static str, date: &'static str, head: &str, body: &str) -> Stored {
+        let raw = format!(
+            "X-Pm-Internal-Id: {}==\r\n{head}\r\n{body}",
+            id.to_string().repeat(86)
+        );
+        Stored { flags, date, raw }
+    }
+
+    /// Two messages of one thread, an import's second copy of the first, a
+    /// message with an attachment, and a message that is also in Trash.
+    fn bridge_messages() -> Vec<Stored> {
+        let m1 = "Message-Id: <m1@x.test>\r\nFrom: Ann <ann@x.test>\r\nTo: Me <me@x.test>\r\n\
+                  Subject: Plan\r\nContent-Type: text/plain\r\n";
+        let m2 = "Message-Id: <m2@x.test>\r\nIn-Reply-To: <m1@x.test>\r\nReferences: <m1@x.test>\r\n\
+                  From: Bob <bob@x.test>\r\nTo: Ann <ann@x.test>, Me <me@x.test>\r\nSubject: Re: Plan\r\n\
+                  Authentication-Results: mx.proton.test; dkim=pass header.d=x.test; spf=pass smtp.mailfrom=bob@x.test\r\n\
+                  Content-Type: text/plain\r\n";
+        let m3 = "Message-Id: <m3@x.test>\r\nFrom: Carl <carl@y.test>\r\nTo: me@x.test, odd\u{202E}@y.test\r\n\
+                  Subject: Report\r\nX-Attached: report.pdf\r\nContent-Type: multipart/mixed; boundary=\"b\"\r\n";
+        let m4 = "Message-Id: <m4@x.test>\r\nFrom: Dee <dee@z.test>\r\nTo: me@x.test\r\nSubject: Old news\r\n\
+                  Content-Type: text/plain\r\n";
+        let attached = "--b\r\nContent-Type: text/plain\r\n\r\nThe report is attached.\r\n--b\r\n\
+                        Content-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"report.pdf\"\r\n\r\n\
+                        %PDF-1.4\r\n--b--\r\n";
+        let reply = "Monday works.\r\n\r\nOn Thu, Ann wrote:\r\n> Shall we meet on Monday?\r\n";
+        let ask = "Shall we meet on Monday?\r\n";
+        vec![
+            stored('A', "", "01-Oct-2026 09:00:00 +0000", m1, ask),
+            stored('C', "\\Seen", "02-Oct-2026 08:00:00 +0000", m2, reply),
+            stored(
+                'B',
+                "\\Seen",
+                "01-Oct-2026 09:05:00 +0000",
+                &format!("{m1}X-Pm-Origin: import\r\n"),
+                ask,
+            ),
+            stored(
+                'D',
+                "\\Seen \\Flagged",
+                "02-Oct-2026 12:00:00 +0000",
+                m3,
+                attached,
+            ),
+            stored(
+                'T',
+                "\\Seen",
+                "03-Oct-2026 07:00:00 +0000",
+                m4,
+                "Out of date.\r\n",
+            ),
+        ]
+    }
+
+    fn bridge_boxes() -> Vec<FakeBox> {
+        let b = |name, attrs, uidvalidity, held: &[(u32, usize)]| FakeBox {
+            name,
+            attrs,
+            uidvalidity,
+            status: true,
+            held: held.to_vec(),
+        };
+        vec![
+            b("INBOX", "\\HasNoChildren", 1, &[(1, 0), (2, 3)]),
+            b("Sent", "\\HasNoChildren \\Sent", 2, &[]),
+            b("Drafts", "\\HasNoChildren \\Drafts", 3, &[]),
+            b("Archive", "\\HasNoChildren \\Archive", 4, &[]),
+            b("Starred", "\\HasNoChildren \\Flagged", 5, &[(1, 3)]),
+            b("Spam", "\\HasNoChildren \\Junk", 6, &[]),
+            b("Trash", "\\HasNoChildren \\Trash", 7, &[(3, 4)]),
+            b(
+                "All Mail",
+                "\\HasNoChildren \\All",
+                8,
+                &[(11, 0), (12, 1), (13, 2), (14, 3), (15, 4)],
+            ),
+            FakeBox {
+                status: false,
+                ..b("Folders", "\\HasChildren", 9, &[])
+            },
+            b("Folders/Receipts", "\\HasNoChildren", 10, &[]),
+            b("Labels", "\\HasChildren \\Noselect", 11, &[]),
+            b("Labels/Work", "\\HasNoChildren", 12, &[(1, 1)]),
+        ]
+    }
+
+    /// A raw message's header block, with the blank line that ends it, and its text.
+    fn split_message(raw: &str) -> (&str, &str) {
+        raw.split_at(raw.find("\r\n\r\n").map_or(raw.len(), |i| i + 4))
+    }
+
+    /// The fields of a header block named in `names`, as
+    /// `BODY[HEADER.FIELDS (...)]` returns them.
+    fn header_fields(block: &str, names: &str) -> String {
+        let names: Vec<String> = names
+            .split_whitespace()
+            .map(str::to_ascii_lowercase)
+            .collect();
+        let (mut out, mut keep) = (String::new(), false);
+        for line in block.split_inclusive("\r\n").take_while(|l| *l != "\r\n") {
+            if !line.starts_with([' ', '\t']) {
+                keep = line
+                    .split_once(':')
+                    .is_some_and(|(n, _)| names.contains(&n.to_ascii_lowercase()));
+            }
+            if keep {
+                out.push_str(line);
+            }
+        }
+        out + "\r\n"
+    }
+
+    /// FETCH items, split at spaces outside brackets and parentheses.
+    fn fetch_items(items: &str) -> Vec<&str> {
+        let items = items
+            .strip_prefix('(')
+            .and_then(|i| i.strip_suffix(')'))
+            .unwrap_or(items);
+        let (mut out, mut depth, mut start) = (Vec::new(), 0, 0);
+        for (i, c) in items.char_indices() {
+            match c {
+                '[' | '(' => depth += 1,
+                ']' | ')' => depth -= 1,
+                ' ' if depth == 0 => {
+                    out.push(&items[start..i]);
+                    start = i + 1;
+                }
+                _ => {}
+            }
+        }
+        out.push(&items[start..]);
+        out
+    }
+
+    /// The FETCH response for message `m`, number `seq` in its mailbox, at
+    /// `uid`: each requested item, and each `BODY.PEEK[...]` section echoed
+    /// as `BODY[...]`, cut to the requested range if there is one.
+    fn fetch_response(seq: usize, uid: u32, m: &Stored, items: &str) -> String {
+        let (head, text) = split_message(&m.raw);
+        let parts: Vec<String> = fetch_items(items)
+            .into_iter()
+            .map(|item| match item {
+                "UID" => format!("UID {uid}"),
+                "FLAGS" => format!("FLAGS ({})", m.flags),
+                "INTERNALDATE" => format!("INTERNALDATE \"{}\"", m.date),
+                _ => {
+                    let peek = item.strip_prefix("BODY.PEEK[").unwrap();
+                    let (section, range) = peek.split_once(']').unwrap();
+                    let data = match section {
+                        "" => m.raw.clone(),
+                        "TEXT" => text.to_string(),
+                        fields => {
+                            let names = fields.strip_prefix("HEADER.FIELDS (").unwrap();
+                            header_fields(head, names.strip_suffix(')').unwrap())
+                        }
+                    };
+                    let (data, origin) = match range.strip_prefix('<') {
+                        Some(r) => {
+                            let (from, len) = r.strip_suffix('>').unwrap().split_once('.').unwrap();
+                            let (from, len): (usize, usize) =
+                                (from.parse().unwrap(), len.parse().unwrap());
+                            let cut = &data[from.min(data.len())..(from + len).min(data.len())];
+                            (cut.to_string(), format!("<{from}>"))
+                        }
+                        None => (data, String::new()),
+                    };
+                    format!("BODY[{section}]{origin} {{{}}}\r\n{data}", data.len())
+                }
+            })
+            .collect();
+        format!("* {seq} FETCH ({})\r\n", parts.join(" "))
+    }
+
+    /// What UID SEARCH finds in `held`: the messages matching any
+    /// `HEADER name "value"` term of `criteria` (a case-insensitive
+    /// substring), or every message when it has none; `compile`'s own tests
+    /// cover the rest of the criteria.
+    fn search_hits(criteria: &str, held: &[(u32, usize)], messages: &[Stored]) -> Vec<u32> {
+        let term = regex::Regex::new(r#"HEADER (\S+) "([^"]*)""#).unwrap();
+        let terms: Vec<(String, String)> = term
+            .captures_iter(criteria)
+            .map(|c| (c[1].to_string(), c[2].to_ascii_lowercase()))
+            .collect();
+        let matches = |m: &Stored| {
+            let (block, _) = split_message(&m.raw);
+            terms.iter().any(|(name, value)| {
+                block.split("\r\n").any(|line| {
+                    line.split_once(':').is_some_and(|(n, v)| {
+                        n.eq_ignore_ascii_case(name) && v.to_ascii_lowercase().contains(value)
+                    })
+                })
+            })
+        };
+        held.iter()
+            .filter(|(_, i)| terms.is_empty() || matches(&messages[*i]))
+            .map(|(uid, _)| *uid)
+            .collect()
+    }
+
+    /// The fake Bridge's answer to one command: untagged lines, then the
+    /// tagged completion without its tag.
+    fn respond(
+        command: &str,
+        boxes: &[FakeBox],
+        messages: &[Stored],
+        examined: &mut Option<usize>,
+    ) -> (String, &'static str) {
+        let find = |name: &str| boxes.iter().position(|b| b.name == name.trim_matches('"'));
+        let (verb, args) = command.split_once(' ').unwrap_or((command, ""));
+        match verb {
+            "LOGIN" => (String::new(), "OK LOGIN completed"),
+            "LIST" => {
+                let mut untagged = String::new();
+                for b in boxes {
+                    write!(untagged, "* LIST ({}) \"/\" \"{}\"\r\n", b.attrs, b.name).unwrap();
+                }
+                (untagged, "OK LIST completed")
+            }
+            "EXAMINE" => match find(args) {
+                Some(i) => {
+                    *examined = Some(i);
+                    let b = &boxes[i];
+                    let untagged = format!(
+                        "* {} EXISTS\r\n* OK [UIDVALIDITY {}] UIDs valid\r\n",
+                        b.held.len(),
+                        b.uidvalidity
+                    );
+                    (untagged, "OK [READ-ONLY] EXAMINE completed")
+                }
+                None => (String::new(), "NO no such mailbox"),
+            },
+            "STATUS" => {
+                let (name, _) = args.rsplit_once(" (").unwrap();
+                match find(name).filter(|&i| boxes[i].status) {
+                    Some(i) => {
+                        let b = &boxes[i];
+                        let unseen = b
+                            .held
+                            .iter()
+                            .filter(|(_, m)| !messages[*m].flags.contains("\\Seen"))
+                            .count();
+                        let untagged = format!(
+                            "* STATUS \"{}\" (MESSAGES {} UNSEEN {unseen})\r\n",
+                            b.name,
+                            b.held.len()
+                        );
+                        (untagged, "OK STATUS completed")
+                    }
+                    None => (String::new(), "NO no such mailbox"),
+                }
+            }
+            "UID" => {
+                let b = &boxes[examined.unwrap()];
+                match args.split_once(' ').unwrap() {
+                    ("SEARCH", criteria) => {
+                        let mut untagged = String::from("* SEARCH");
+                        for uid in search_hits(criteria, &b.held, messages) {
+                            write!(untagged, " {uid}").unwrap();
+                        }
+                        (untagged + "\r\n", "OK SEARCH completed")
+                    }
+                    ("FETCH", rest) => {
+                        let (set, items) = rest.split_once(' ').unwrap();
+                        let wanted: Vec<u32> = set.split(',').map(|u| u.parse().unwrap()).collect();
+                        let untagged = b
+                            .held
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, (uid, _))| wanted.contains(uid))
+                            .map(|(seq, (uid, m))| {
+                                fetch_response(seq + 1, *uid, &messages[*m], items)
+                            })
+                            .collect();
+                        (untagged, "OK FETCH completed")
+                    }
+                    _ => (String::new(), "BAD unknown UID command"),
+                }
+            }
+            _ => (String::new(), "BAD unknown command"),
+        }
+    }
+
+    /// `command` with the UID set of a UID FETCH in ascending order: the
+    /// order of a set that comes from SEARCH (a `HashSet`) varies by run.
+    fn sorted_sets(command: &str) -> String {
+        let Some(rest) = command.strip_prefix("UID FETCH ") else {
+            return command.to_string();
+        };
+        let (set, items) = rest.split_once(' ').unwrap();
+        let mut uids: Vec<u32> = set.split(',').map(|u| u.parse().unwrap()).collect();
+        uids.sort_unstable();
+        format!("UID FETCH {} {items}", uid_set(&uids))
+    }
+
+    /// A scripted Bridge serving `boxes` over one TLS session, and the
+    /// commands it was sent, without their tags.
+    async fn fake_imap(
+        boxes: Vec<FakeBox>,
+        messages: Vec<Stored>,
+    ) -> (
+        u16,
+        super::super::Fingerprint,
+        Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let (listener, acceptor, port, fingerprint) = super::super::tests::tls_listener().await;
+        let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = sent.clone();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut io = BufReader::new(acceptor.accept(tcp).await.unwrap());
+            let greeting = b"* OK [CAPABILITY IMAP4rev1] Proton Mail Bridge ready\r\n";
+            io.get_mut().write_all(greeting).await.unwrap();
+            let (mut examined, mut line) = (None, String::new());
+            while io.read_line(&mut line).await.unwrap_or(0) > 0 {
+                let (tag, command) = line.trim_end().split_once(' ').unwrap();
+                log.lock().unwrap().push(sorted_sets(command));
+                let (untagged, done) = respond(command, &boxes, &messages, &mut examined);
+                let reply = format!("{untagged}{tag} {done}\r\n");
+                io.get_mut().write_all(reply.as_bytes()).await.unwrap();
+                line.clear();
+            }
+        });
+        (port, fingerprint, sent)
+    }
+
+    /// Every IMAP operation, on one `Mail`, against the scripted Bridge. The
+    /// snapshots pin each result and the exact commands sent.
+    #[tokio::test]
+    async fn every_operation_against_a_scripted_bridge() {
+        let (port, fingerprint, sent) = fake_imap(bridge_boxes(), bridge_messages()).await;
+        let (tls, _) = super::super::connect(port, Some(fingerprint))
+            .await
+            .unwrap();
+        let session = super::super::login(tls, "user@example.test", "password")
+            .await
+            .unwrap();
+        let mail = Mail::new(MailConfig {
+            address: "user@example.test".into(),
+            port,
+            cert_sha256: hex::encode(fingerprint),
+        });
+        *mail.conn.lock().await = Some(Conn::listing(session).await.unwrap());
+        let search = |query: &str| SearchThreadsReq {
+            query: query.into(),
+            ..Default::default()
+        };
+        let found = mail.search_threads(&search("")).await.unwrap();
+        insta::assert_json_snapshot!("search_default", found);
+        let attached = mail
+            .search_threads(&search("has:attachment"))
+            .await
+            .unwrap();
+        insta::assert_json_snapshot!("search_has_attachment", attached);
+        let everything = SearchThreadsReq {
+            include_trash: true,
+            snippets: true,
+            ..search("")
+        };
+        let everything = mail.search_threads(&everything).await.unwrap();
+        insta::assert_json_snapshot!("search_include_trash", everything);
+        let count = CountMessagesReq {
+            by: Some(GroupBy::From),
+            ..Default::default()
+        };
+        let counted = mail.count_messages(&count).await.unwrap();
+        insta::assert_json_snapshot!("count_by_from", counted);
+        // The thread's row; its UID comes from the search's cache.
+        let message_id = found["messages"][1]["messageId"].as_str().unwrap().into();
+        let message = mail
+            .get_message(&MessageReq {
+                message_id,
+                raw: false,
+            })
+            .await
+            .unwrap();
+        insta::assert_json_snapshot!("get_message", message);
+        let thread = ThreadReq {
+            thread_id: "m1@x.test".into(),
+            raw: false,
+        };
+        insta::assert_json_snapshot!("get_thread", mail.get_thread(&thread).await.unwrap());
+        insta::assert_json_snapshot!("list_labels", mail.list_labels().await.unwrap());
+        insta::assert_json_snapshot!("imap_commands", sent.lock().unwrap().clone());
     }
 }
