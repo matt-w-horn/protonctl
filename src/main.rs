@@ -209,7 +209,7 @@ enum Setup {
         #[arg(long)]
         address: String,
         /// Bridge's IMAP port.
-        #[arg(long, default_value_t = 1143)]
+        #[arg(long, default_value_t = config::DEFAULT_IMAP_PORT)]
         port: u16,
     },
 }
