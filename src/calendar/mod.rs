@@ -339,32 +339,25 @@ impl Calendars {
     }
 
     pub async fn list_events(&self, req: &ListEventsReq) -> Result<Value> {
-        let zone = self.zone_for(req.time_zone.as_deref())?;
-        let start = req.start_time.as_deref().map(|s| parse_time(s, zone));
-        let from = start.transpose()?.unwrap_or_else(Utc::now);
-        let end = req.end_time.as_deref().map(|s| parse_time(s, zone));
-        let to = end.transpose()?.unwrap_or(from + Duration::days(7));
-        let defaulted = req.start_time.is_none() && req.end_time.is_none();
-        self.query(req, zone, from, to, None, defaulted).await
+        let (zone, start, end) = self.bounds(req)?;
+        let from = start.unwrap_or_else(Utc::now);
+        let to = end.unwrap_or(from + Duration::days(7));
+        self.query(req, zone, from, to, None).await
     }
 
     pub async fn search_events(&self, req: &SearchEventsReq) -> Result<Value> {
         let terms = Terms::parse(&req.query)?;
-        let w = &req.window;
-        let zone = self.zone_for(w.time_zone.as_deref())?;
-        let start = w.start_time.as_deref().map(|s| parse_time(s, zone));
-        let end = w.end_time.as_deref().map(|s| parse_time(s, zone));
+        let (zone, start, end) = self.bounds(&req.window)?;
         // Unless told otherwise, 90 days back and 275 ahead; one bound alone
         // covers the 365 days on its side, so the window stays valid.
         let (year, now) = (Duration::days(365), Utc::now());
-        let (from, to) = match (start.transpose()?, end.transpose()?) {
+        let (from, to) = match (start, end) {
             (Some(f), Some(t)) => (f, t),
             (Some(f), None) => (f, f + year),
             (None, Some(t)) => (t - year, t),
             (None, None) => (now - Duration::days(90), now + Duration::days(275)),
         };
-        let defaulted = w.start_time.is_none() && w.end_time.is_none();
-        self.query(w, zone, from, to, Some(&terms), defaulted).await
+        self.query(&req.window, zone, from, to, Some(&terms)).await
     }
 
     pub async fn get_event(&self, req: &GetEventReq) -> Result<Value> {
@@ -412,13 +405,12 @@ impl Calendars {
                     .find(|e| e.uid == req.event_id && e.recurrence_id.is_none())
                     .map(|e| {
                         let start = e.start.utc(zone);
-                        let recurring = e.rrule.is_some() || !e.rdates.is_empty();
                         let o = Occurrence {
                             event: e,
                             start,
                             end: e.end_at(start, zone),
                             id: e.uid.clone(),
-                            recurring,
+                            recurring: e.is_recurring(),
                         };
                         event_json(&o, cal, zone, FULL_DESCRIPTION_CHARS, &mut removed)
                     }),
@@ -453,6 +445,16 @@ impl Calendars {
         }
     }
 
+    /// A request's zone, start and end, read in that order, so the same
+    /// input still decides which error comes back; a time not given is `None`.
+    fn bounds(&self, req: &ListEventsReq) -> Result<Bounds> {
+        let zone = self.zone_for(req.time_zone.as_deref())?;
+        let start = req.start_time.as_deref().map(|s| parse_time(s, zone));
+        let start = start.transpose()?;
+        let end = req.end_time.as_deref().map(|s| parse_time(s, zone));
+        Ok((zone, start, end.transpose()?))
+    }
+
     async fn query(
         &self,
         req: &ListEventsReq,
@@ -460,7 +462,6 @@ impl Calendars {
         from: DateTime<Utc>,
         to: DateTime<Utc>,
         terms: Option<&Terms>,
-        defaulted: bool,
     ) -> Result<Value> {
         // Later pages reuse the first page's window, so a window anchored to
         // "now" cannot shift between pages and skip or repeat events.
@@ -517,6 +518,7 @@ impl Calendars {
         // The feed reaches further back than search's default 90 days (RFC
         // Appendix A), and a caller that sets no window could take a miss
         // there for a miss everywhere.
+        let defaulted = req.start_time.is_none() && req.end_time.is_none();
         if defaulted && rows.is_empty() && !feeds.is_empty() {
             out["note"] = json!(format!(
                 "no events in the default window, {} to {}; for events outside it, pass startTime and endTime",
@@ -527,6 +529,9 @@ impl Calendars {
         Ok(out)
     }
 }
+
+/// A request's zone, and the window start and end it gives, if any.
+type Bounds = (Zone, Option<DateTime<Utc>>, Option<DateTime<Utc>>);
 
 /// A calendar page token: `<offset>.<window start>.<window end>`, in Unix seconds.
 fn read_page_token(token: &str) -> Result<(usize, DateTime<Utc>, DateTime<Utc>)> {
@@ -548,12 +553,12 @@ fn read_page_token(token: &str) -> Result<(usize, DateTime<Utc>, DateTime<Utc>)>
     Ok((offset, from, to))
 }
 
-/// RFC 3339, a local date-time in `zone`, or a date (midnight in `zone`).
 /// The years a time from the caller may name. Nothing on a personal calendar
 /// lies outside them, and inside them every window, step and look-back stays
 /// within chrono's range, where arithmetic past the end panics.
 const YEARS: std::ops::RangeInclusive<i32> = 1900..=2200;
 
+/// RFC 3339, a local date-time in `zone`, or a date (midnight in `zone`).
 pub fn parse_time(s: &str, zone: Zone) -> Result<DateTime<Utc>> {
     let s = s.trim();
     // Checked before any conversion, since a zone's offset can carry a time
@@ -614,7 +619,7 @@ fn event_json(
         "end": end,
         "allDay": e.start.is_date(),
         "recurring": o.recurring,
-        "status": e.status.clone().unwrap_or_else(|| "confirmed".into()),
+        "status": e.status.as_deref().unwrap_or("confirmed"),
         "showsAs": if e.transparent { "free" } else { "busy" },
     });
     let obj = v.as_object_mut().expect("json object");
@@ -800,6 +805,40 @@ mod tests {
         );
         assert!(summaries(&cals, "\"").await.is_err());
         assert!(summaries(&cals, " \"\" ").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_event_finds_a_single_event_an_occurrence_and_a_moved_one() {
+        let cals = one_calendar(feed(&[
+            event(
+                "single@x.test",
+                "20261005T170000Z",
+                "DTEND:20261005T180000Z\r\nSUMMARY:Dentist\r\nLOCATION:Main St\r\n",
+            ),
+            event(
+                "weekly@x.test",
+                "20261005T160000Z",
+                "DTEND:20261005T163000Z\r\nSUMMARY:Standup\r\nRRULE:FREQ=WEEKLY;COUNT=4\r\n",
+            ),
+            event(
+                "weekly@x.test",
+                "20261019T200000Z",
+                "RECURRENCE-ID:20261019T160000Z\r\nDTEND:20261019T203000Z\r\nSUMMARY:Standup (moved)\r\n",
+            ),
+        ]))
+        .await;
+        for (name, id) in [
+            ("get_event_single", "single@x.test"),
+            ("get_event_occurrence", "weekly@x.test|20261012T160000Z"),
+            ("get_event_moved", "weekly@x.test|20261019T160000Z"),
+        ] {
+            let req = GetEventReq {
+                event_id: id.into(),
+                ..Default::default()
+            };
+            let found = cals.get_event(&req).await.unwrap();
+            insta::assert_json_snapshot!(name, found["event"]);
+        }
     }
 
     #[tokio::test]

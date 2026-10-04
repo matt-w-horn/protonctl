@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
-use chrono::{Duration, Local, NaiveDate};
+use async_imap::types::{Fetch, NameAttribute};
+use chrono::Local;
 use futures::TryStreamExt;
 use mail_parser::{Address, Message, MessageParser, MimeHeaders};
 use schemars::JsonSchema;
@@ -18,9 +19,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
+use super::body::{auth_summary, readable_body, snippet, top_header};
+use super::query::{Mailbox, Query, compile, quoted};
 use super::{Session, open};
 use crate::config::MailConfig;
-use crate::content::{clean, downloads, escape_hidden, tokens, truncate, unquote};
+use crate::content::{clean, downloads, escape_hidden, truncate};
 use crate::export::Export;
 
 const PROVENANCE: &str = "subject, names and addresses, body, snippet, attachment names and text, threadId and \
@@ -46,26 +49,12 @@ const SUMMARY: &str = "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM TO 
 const SUMMARY_WITH_TEXT: &str = "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT \
      X-PM-INTERNAL-ID MESSAGE-ID IN-REPLY-TO REFERENCES X-PM-ORIGIN X-PM-CONTENT-ENCRYPTION X-ATTACHED \
      CONTENT-TYPE CONTENT-TRANSFER-ENCODING)] BODY.PEEK[TEXT]<0.32768>)";
+/// What `get_message` and `get_thread` read of a message: all of it.
+const FULL: &str = "(UID FLAGS INTERNALDATE BODY.PEEK[])";
 /// What `count_messages` reads of every match; for the whole of a test
 /// mailbox of about 20,000 messages the headers took 4.7 s (RFC Appendix A).
 const COUNTED: &str =
     "(UID BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT MESSAGE-ID X-PM-INTERNAL-ID X-ATTACHED)])";
-const OPERATORS: [&str; 13] = [
-    "from",
-    "to",
-    "cc",
-    "bcc",
-    "subject",
-    "label",
-    "in",
-    "is",
-    "has",
-    "after",
-    "before",
-    "newer_than",
-    "older_than",
-];
-
 /// Which end of the date order a search starts from.
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, clap::ValueEnum, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -179,186 +168,6 @@ pub struct AttachmentReq {
     #[arg(long)]
     #[serde(default)]
     pub export: bool,
-}
-
-/// Where a query searches.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Mailbox {
-    /// All Mail, minus Trash and Spam unless includeTrash.
-    All,
-    /// A mailbox found by its special-use attribute, or INBOX.
-    Role(&'static str),
-    Label(String),
-}
-
-/// A query as one mailbox, IMAP SEARCH criteria and an attachment test.
-#[derive(Debug, PartialEq)]
-pub struct Query {
-    pub mailbox: Mailbox,
-    pub criteria: String,
-    /// has:attachment (true) or -has:attachment (false), tested on each fetched
-    /// summary: Bridge matches every message for `HEADER X-Attached ""`.
-    pub attachment: Option<bool>,
-}
-
-/// An IMAP quoted string. The value is sent as UTF-8; CR, LF and NUL are refused.
-fn quoted(s: &str) -> Result<String> {
-    if s.contains(['\r', '\n', '\0']) {
-        bail!("search terms cannot contain line breaks");
-    }
-    Ok(format!(
-        "\"{}\"",
-        s.replace('\\', "\\\\").replace('"', "\\\"")
-    ))
-}
-
-fn date(value: &str) -> Result<NaiveDate> {
-    NaiveDate::parse_from_str(&value.replace('/', "-"), "%Y-%m-%d")
-        .with_context(|| format!("cannot read date {value:?}; use YYYY-MM-DD"))
-}
-
-/// IMAP dates look like 2-Oct-2026.
-fn imap_date(d: NaiveDate) -> String {
-    d.format("%-d-%b-%Y").to_string()
-}
-
-/// A span such as 7d, 3m or 1y (a month is 30 days, a year 365). Every step
-/// is checked: the value comes from the query, and chrono panics on overflow.
-fn span(value: &str) -> Result<Duration> {
-    let usage = || format!("cannot read {value:?}; use 7d, 3m or 1y");
-    let (cut, unit) = value.char_indices().last().with_context(usage)?;
-    let n: i64 = value[..cut].parse().with_context(usage)?;
-    let days = match unit {
-        'd' => Some(n),
-        'm' => n.checked_mul(30),
-        'y' => n.checked_mul(365),
-        _ => bail!(usage()),
-    };
-    days.and_then(Duration::try_days)
-        .with_context(|| format!("{value:?} is too long"))
-}
-
-/// The day that the span `value` reaches back to from `today`.
-fn day_before(today: NaiveDate, value: &str) -> Result<NaiveDate> {
-    today
-        .checked_sub_signed(span(value)?)
-        .with_context(|| format!("{value:?} reaches outside the calendar"))
-}
-
-/// The mailbox an `in:` value names: a special-use role, INBOX, or All Mail.
-fn in_mailbox(value: &str) -> Result<Mailbox> {
-    Ok(match value.to_ascii_lowercase().as_str() {
-        "inbox" => Mailbox::Role("inbox"),
-        "sent" => Mailbox::Role("\\sent"),
-        "drafts" => Mailbox::Role("\\drafts"),
-        "archive" => Mailbox::Role("\\archive"),
-        "starred" => Mailbox::Role("\\flagged"),
-        "spam" => Mailbox::Role("\\junk"),
-        "trash" => Mailbox::Role("\\trash"),
-        "anywhere" | "all" => Mailbox::All,
-        _ => bail!(
-            "in:{value} is not supported; use inbox, sent, drafts, archive, starred, spam or trash"
-        ),
-    })
-}
-
-/// Translate the Gmail-style subset into a [`Query`].
-pub fn compile(query: &str, today: NaiveDate) -> Result<Query> {
-    let mut mailbox: Option<Mailbox> = None;
-    let mut attachment: Option<bool> = None;
-    let mut terms: Vec<String> = Vec::new();
-    // OR joins the term just added to the next one; in:, label: and has: add none.
-    let mut after_term = false;
-    let mut or_pending = false;
-    for token in tokens(query)? {
-        if token == "OR" {
-            if !after_term || or_pending {
-                bail!(
-                    "OR needs a search term on each side; in:, label: and has: are not search terms"
-                );
-            }
-            or_pending = true;
-            continue;
-        }
-        let (negated, token) = match token.strip_prefix('-') {
-            Some(rest) if !rest.is_empty() => (true, rest),
-            _ => (false, token.as_str()),
-        };
-        let operator = token
-            .split_once(':')
-            .filter(|(op, _)| OPERATORS.contains(&op.to_ascii_lowercase().as_str()));
-        let criterion = match operator {
-            None => format!("TEXT {}", quoted(unquote(token))?),
-            Some((op, value)) => {
-                let value = unquote(value);
-                match op.to_ascii_lowercase().as_str() {
-                    "in" | "label" => {
-                        if negated || or_pending || mailbox.is_some() {
-                            bail!("use at most one in: or label:, without - or OR");
-                        }
-                        mailbox = Some(if op.eq_ignore_ascii_case("label") {
-                            Mailbox::Label(value.to_string())
-                        } else {
-                            in_mailbox(value)?
-                        });
-                        after_term = false;
-                        continue;
-                    }
-                    "is" => match value.to_ascii_lowercase().as_str() {
-                        "unread" => "UNSEEN".to_string(),
-                        "read" => "SEEN".to_string(),
-                        "starred" => "FLAGGED".to_string(),
-                        _ => bail!("is:{value} is not supported; use unread, read or starred"),
-                    },
-                    "has" if value.eq_ignore_ascii_case("attachment") => {
-                        if or_pending || attachment.is_some() {
-                            bail!("use has:attachment at most once, without OR");
-                        }
-                        attachment = Some(!negated);
-                        after_term = false;
-                        continue;
-                    }
-                    "has" => bail!("has:{value} is not supported; use has:attachment"),
-                    "after" => format!("SINCE {}", imap_date(date(value)?)),
-                    "before" => format!("BEFORE {}", imap_date(date(value)?)),
-                    "newer_than" => format!("SINCE {}", imap_date(day_before(today, value)?)),
-                    "older_than" => format!("BEFORE {}", imap_date(day_before(today, value)?)),
-                    field => format!("{} {}", field.to_ascii_uppercase(), quoted(value)?),
-                }
-            }
-        };
-        let criterion = if negated {
-            format!("NOT {criterion}")
-        } else {
-            criterion
-        };
-        match (or_pending, terms.pop()) {
-            (true, Some(left)) => terms.push(format!("OR {left} {criterion}")),
-            (_, left) => {
-                terms.extend(left);
-                terms.push(criterion);
-            }
-        }
-        or_pending = false;
-        after_term = true;
-    }
-    if or_pending {
-        bail!("OR needs a search term on each side; in:, label: and has: are not search terms");
-    }
-    if terms.is_empty() {
-        terms.push("ALL".into());
-    }
-    let criteria = terms.join(" ");
-    let criteria = if criteria.is_ascii() {
-        criteria
-    } else {
-        format!("CHARSET UTF-8 {criteria}")
-    };
-    Ok(Query {
-        mailbox: mailbox.unwrap_or(Mailbox::All),
-        criteria,
-        attachment,
-    })
 }
 
 /// Characters of `X-Pm-Internal-Id` a messageId shows. Every ID in a test
@@ -479,7 +288,7 @@ fn resume_at(
 /// The mailbox a `label:` value names: a label, or a folder written as
 /// `list_labels` shows it (`Parent/Child`). When a label and a folder share
 /// a name, `Labels/NAME` or `Folders/NAME` picks one.
-fn label_mailbox(boxes: &[(String, Vec<String>)], label: &str) -> Result<String> {
+fn label_mailbox(boxes: &[(String, Vec<NameAttribute<'static>>)], label: &str) -> Result<String> {
     let found: Vec<&String> = boxes
         .iter()
         .map(|(name, _)| name)
@@ -593,13 +402,13 @@ fn check_thread_id(id: &str) -> Result<()> {
 
 struct Conn {
     session: Session,
-    /// (name, lower-case attributes) for every mailbox.
-    boxes: Vec<(String, Vec<String>)>,
+    /// (name, attributes) for every mailbox.
+    boxes: Vec<(String, Vec<NameAttribute<'static>>)>,
 }
 
 impl Conn {
-    async fn new(cfg: &MailConfig) -> Result<Self> {
-        let mut session = open(cfg).await?;
+    /// A connection over a logged-in session, with every mailbox it lists.
+    async fn listing(mut session: Session) -> Result<Self> {
         let listed: Vec<_> = session.list(None, Some("*")).await?.try_collect().await?;
         let boxes = listed
             .iter()
@@ -607,29 +416,26 @@ impl Conn {
                 let attrs = n
                     .attributes()
                     .iter()
-                    .map(|a| format!("{a:?}").to_ascii_lowercase());
-                let attrs =
-                    attrs.map(|a| format!("\\{}", a.trim_matches(|c: char| !c.is_alphanumeric())));
+                    .cloned()
+                    .map(NameAttribute::into_owned);
                 (n.name().to_string(), attrs.collect())
             })
             .collect();
         Ok(Self { session, boxes })
     }
 
-    fn by_role(&self, role: &str) -> Result<String> {
-        if role == "inbox" {
-            return Ok("INBOX".into());
-        }
+    fn by_role(&self, role: &NameAttribute) -> Result<String> {
         self.boxes
             .iter()
-            .find(|(_, attrs)| attrs.iter().any(|a| a == role))
+            .find(|(_, attrs)| attrs.contains(role))
             .map(|(name, _)| name.clone())
-            .with_context(|| format!("Bridge has no {role} mailbox; is Show All Mail on?"))
+            .with_context(|| format!("Bridge has no {role:?} mailbox; is Show All Mail on?"))
     }
 
     fn name(&self, mailbox: &Mailbox) -> Result<String> {
         match mailbox {
-            Mailbox::All => self.by_role("\\all"),
+            Mailbox::All => self.by_role(&NameAttribute::All),
+            Mailbox::Inbox => Ok("INBOX".into()),
             Mailbox::Role(role) => self.by_role(role),
             Mailbox::Label(label) => label_mailbox(&self.boxes, label),
         }
@@ -654,14 +460,8 @@ impl Conn {
             if Instant::now() >= deadline {
                 bail!(OVER_BUDGET);
             }
-            let fetched: Vec<_> = self
-                .session
-                .uid_fetch(
-                    uid_set(chunk),
-                    "(UID BODY.PEEK[HEADER.FIELDS (X-PM-INTERNAL-ID)])",
-                )
-                .await?
-                .try_collect()
+            let fetched = self
+                .fetch(chunk, "(UID BODY.PEEK[HEADER.FIELDS (X-PM-INTERNAL-ID)])")
                 .await?;
             ids.extend(
                 fetched
@@ -692,12 +492,7 @@ impl Conn {
             if Instant::now() >= deadline {
                 bail!(OVER_BUDGET);
             }
-            let fetched: Vec<_> = self
-                .session
-                .uid_fetch(uid_set(chunk), "(UID INTERNALDATE)")
-                .await?
-                .try_collect()
-                .await?;
+            let fetched = self.fetch(chunk, "(UID INTERNALDATE)").await?;
             dated.extend(
                 fetched
                     .iter()
@@ -709,6 +504,36 @@ impl Conn {
             Order::Oldest => dated.sort_unstable(),
         }
         Ok(dated)
+    }
+
+    /// Internal IDs of the messages in Trash and Spam that match
+    /// `criteria`: All Mail holds them too, so a search of it leaves these out.
+    async fn trash_and_spam_ids(
+        &mut self,
+        criteria: &str,
+        deadline: Instant,
+    ) -> Result<HashSet<String>> {
+        let mut ids = HashSet::new();
+        for role in [NameAttribute::Trash, NameAttribute::Junk] {
+            let name = self.by_role(&role)?;
+            ids.extend(self.ids_matching(&name, criteria, deadline).await?);
+        }
+        Ok(ids)
+    }
+
+    /// `items` for each of `uids` in the examined mailbox, in one UID FETCH.
+    async fn fetch<'a>(
+        &mut self,
+        uids: impl IntoIterator<Item = &'a u32>,
+        items: &str,
+    ) -> Result<Vec<Fetch>> {
+        let set = uid_set(uids);
+        Ok(self
+            .session
+            .uid_fetch(set, items)
+            .await?
+            .try_collect()
+            .await?)
     }
 }
 
@@ -736,9 +561,7 @@ fn mime(p: &mail_parser::MessagePart) -> Option<String> {
 
 fn addresses(a: Option<&Address>, removed: &mut usize) -> Vec<String> {
     let Some(a) = a else { return Vec::new() };
-    a.clone()
-        .into_list()
-        .iter()
+    a.iter()
         .map(|addr| {
             let email = addr.address().unwrap_or_default();
             match addr.name() {
@@ -772,7 +595,12 @@ impl Mail {
 
     /// Run `op` on the shared session, opened on first use (see `with_cached`).
     async fn with_conn<T>(&self, op: impl AsyncFnOnce(&mut Conn) -> Result<T>) -> Result<T> {
-        with_cached(&self.conn, async || Conn::new(&self.cfg).await, op).await
+        with_cached(
+            &self.conn,
+            async || Conn::listing(open(&self.cfg).await?).await,
+            op,
+        )
+        .await
     }
 
     /// The All Mail UID of the message `message_id` names. A shown messageId
@@ -802,14 +630,10 @@ impl Mail {
 
     /// One whole message by ID. The remembered UID is checked against the
     /// message that comes back, because a Bridge resync can reassign UIDs.
-    async fn fetch_message(
-        &self,
-        conn: &mut Conn,
-        message_id: &str,
-    ) -> Result<async_imap::types::Fetch> {
+    async fn fetch_message(&self, conn: &mut Conn, message_id: &str) -> Result<Fetch> {
         for _ in 0..2 {
             let (_, uid) = self.uid_of(conn, message_id).await?;
-            if let Some(f) = Self::fetch_full(conn, &[uid]).await?.pop()
+            if let Some(f) = conn.fetch(&[uid], FULL).await?.pop()
                 && f.body()
                     .and_then(|b| header(b, "X-Pm-Internal-Id"))
                     .is_some_and(|full| id_matches(&full, message_id))
@@ -819,16 +643,6 @@ impl Mail {
             self.uids.lock().await.remove(short_id(message_id));
         }
         bail!("no message {message_id:?}")
-    }
-
-    async fn fetch_full(conn: &mut Conn, uids: &[u32]) -> Result<Vec<async_imap::types::Fetch>> {
-        let set = uid_set(uids);
-        Ok(conn
-            .session
-            .uid_fetch(set, "(UID FLAGS INTERNALDATE BODY.PEEK[])")
-            .await?
-            .try_collect()
-            .await?)
     }
 
     pub async fn search_threads(&self, req: &SearchThreadsReq) -> Result<Value> {
@@ -849,13 +663,12 @@ impl Mail {
         deadline: Instant,
     ) -> Result<Value> {
         let order = req.order.unwrap_or_default();
-        let mut excluded = HashSet::new();
-        if query.mailbox == Mailbox::All && !req.include_trash {
-            for role in ["\\trash", "\\junk"] {
-                let name = conn.by_role(role)?;
-                excluded.extend(conn.ids_matching(&name, &query.criteria, deadline).await?);
-            }
-        }
+        let skip_trash = query.mailbox == Mailbox::All && !req.include_trash;
+        let excluded = if skip_trash {
+            conn.trash_and_spam_ids(&query.criteria, deadline).await?
+        } else {
+            HashSet::new()
+        };
         let mailbox = conn.name(&query.mailbox)?;
         let uidvalidity = conn
             .session
@@ -881,21 +694,13 @@ impl Mail {
                 .take(page_size * 2)
                 .map(|(_, uid)| *uid)
                 .collect();
-            let set = uid_set(&chunk);
-            let fetched: Vec<_> = conn
-                .session
-                .uid_fetch(
-                    set,
-                    if req.snippets {
-                        SUMMARY_WITH_TEXT
-                    } else {
-                        SUMMARY
-                    },
-                )
-                .await?
-                .try_collect()
-                .await?;
-            let by_uid: HashMap<u32, &async_imap::types::Fetch> =
+            let items = if req.snippets {
+                SUMMARY_WITH_TEXT
+            } else {
+                SUMMARY
+            };
+            let fetched = conn.fetch(&chunk, items).await?;
+            let by_uid: HashMap<u32, &Fetch> =
                 fetched.iter().filter_map(|f| Some((f.uid?, f))).collect();
             for uid in &chunk {
                 let mut row_removed = 0;
@@ -944,7 +749,7 @@ impl Mail {
             // them too; has:attachment is tested later, row by row.
             "estimatedTotal": dated.len().saturating_sub(excluded.len()),
             "searched": mailbox,
-            "trashAndSpam": if query.mailbox == Mailbox::All && !req.include_trash { "excluded" } else { "included" },
+            "trashAndSpam": if skip_trash { "excluded" } else { "included" },
             "provenance": PROVENANCE,
             "hiddenCharactersRemoved": removed,
         }))
@@ -958,13 +763,12 @@ impl Mail {
         let query = compile(&req.query, Local::now().date_naive())?;
         let limit = req.limit.unwrap_or(100).clamp(1, 1000);
         self.with_conn(async |conn| {
-            let mut excluded = HashSet::new();
-            if query.mailbox == Mailbox::All && !req.include_trash {
-                for role in ["\\trash", "\\junk"] {
-                    let name = conn.by_role(role)?;
-                    excluded.extend(conn.ids_matching(&name, &query.criteria, deadline).await?);
-                }
-            }
+            let skip_trash = query.mailbox == Mailbox::All && !req.include_trash;
+            let excluded = if skip_trash {
+                conn.trash_and_spam_ids(&query.criteria, deadline).await?
+            } else {
+                HashSet::new()
+            };
             let mailbox = conn.name(&query.mailbox)?;
             conn.session.examine(&mailbox).await?;
             let dated = conn.dated(&query.criteria, Order::Newest, deadline).await?;
@@ -974,39 +778,24 @@ impl Mail {
                     bail!("too many messages to count at once; narrow the query with after: or before:");
                 }
                 let date_of: HashMap<u32, i64> = chunk.iter().map(|&(date, uid)| (uid, date)).collect();
-                let fetched: Vec<_> = conn
-                    .session
-                    .uid_fetch(uid_set(chunk.iter().map(|(_, uid)| uid)), COUNTED)
-                    .await?
-                    .try_collect()
-                    .await?;
+                let fetched = conn.fetch(chunk.iter().map(|(_, uid)| uid), COUNTED).await?;
                 for f in &fetched {
                     let Some(m) = f.header().and_then(|b| MessageParser::default().parse_headers(b)) else {
                         continue;
                     };
-                    let Some(id) = m.header_raw("X-Pm-Internal-Id").map(|v| v.trim().to_string()) else {
+                    let Some(id) = internal_id(&m) else {
                         continue;
                     };
-                    let attachments = m
-                        .headers()
-                        .iter()
-                        .filter(|h| h.name().eq_ignore_ascii_case("X-Attached"))
-                        .count();
+                    let attachments = attachment_count(&m);
                     if excluded.contains(&id)
                         || query.attachment.is_some_and(|want| want != (attachments > 0))
                     {
                         continue;
                     }
-                    let mut ignored = 0;
-                    let copy_of = m.header_raw("Message-Id").map(|mid| {
-                        let from = addresses(m.from(), &mut ignored).into_iter().next();
-                        let subject = clean(m.subject().unwrap_or_default(), &mut ignored);
-                        (mid.trim().to_string(), from.unwrap_or_default(), subject)
-                    });
                     rows.push(Counted {
                         date: f.uid.and_then(|uid| date_of.get(&uid).copied()).unwrap_or_default(),
                         id,
-                        copy_of,
+                        copy_of: copy_key(&m),
                         from: bare_addresses(m.from(), &mut removed).into_iter().next(),
                         to: bare_addresses(m.to(), &mut removed),
                     });
@@ -1022,7 +811,7 @@ impl Mail {
                 "messages": messages,
                 "estimatedTotal": dated.len().saturating_sub(excluded.len()),
                 "searched": mailbox,
-                "trashAndSpam": if query.mailbox == Mailbox::All && !req.include_trash { "excluded" } else { "included" },
+                "trashAndSpam": if skip_trash { "excluded" } else { "included" },
                 "provenance": COUNT_PROVENANCE,
                 "hiddenCharactersRemoved": removed,
             });
@@ -1063,7 +852,7 @@ impl Mail {
             }
             uids.sort_unstable();
             let total = uids.len();
-            let fetched = Self::fetch_full(conn, &uids[uids.len().saturating_sub(THREAD_MAX)..]).await?;
+            let fetched = conn.fetch(&uids[uids.len().saturating_sub(THREAD_MAX)..], FULL).await?;
             let view = View { max_body: THREAD_BODY_CHARS, quotes_removed: !req.raw, raw: req.raw };
             let mut rendered: Vec<(i64, Rendered)> = fetched
                 .iter()
@@ -1087,13 +876,13 @@ impl Mail {
     pub async fn list_labels(&self) -> Result<Value> {
         self.with_conn(async |conn| {
             let mut out = Vec::new();
-            for (name, attrs) in conn.boxes.clone() {
-                if attrs.iter().any(|a| a == "\\noselect") {
+            for (name, attrs) in &conn.boxes {
+                if attrs.contains(&NameAttribute::NoSelect) {
                     continue;
                 }
                 // Bridge lists the Labels parent without \\NoSelect but answers
                 // "no such mailbox" for it: skip what cannot report counts.
-                let Ok(status) = conn.session.status(&name, "(MESSAGES UNSEEN)").await else {
+                let Ok(status) = conn.session.status(name, "(MESSAGES UNSEEN)").await else {
                     continue;
                 };
                 let (kind, shown) = match (name.strip_prefix("Labels/"), name.strip_prefix("Folders/")) {
@@ -1181,7 +970,7 @@ struct Meta {
     starred: bool,
 }
 
-fn meta(f: &async_imap::types::Fetch) -> Meta {
+fn meta(f: &Fetch) -> Meta {
     use async_imap::types::Flag;
     let fl: Vec<Flag<'_>> = f.flags().collect();
     Meta {
@@ -1198,13 +987,13 @@ fn common(
     meta: &Meta,
     removed: &mut usize,
 ) -> Option<(String, serde_json::Map<String, Value>)> {
-    let id = m.header_raw("X-Pm-Internal-Id")?.trim().to_string();
+    let id = internal_id(m)?;
     let Meta {
         date,
         unread,
         starred,
     } = meta;
-    let row = json!({
+    let Value::Object(row) = json!({
         "messageId": short_id(&id),
         "threadId": thread_key(m),
         "date": date,
@@ -1216,8 +1005,10 @@ fn common(
         "starred": starred,
         "origin": m.header_raw("X-Pm-Origin").map(str::trim),
         "encryption": m.header_raw("X-Pm-Content-Encryption").map(str::trim),
-    });
-    Some((id, row.as_object().cloned()?))
+    }) else {
+        return None;
+    };
+    Some((id, row))
 }
 
 /// Addresses a search row lists before it only counts the rest.
@@ -1245,7 +1036,7 @@ struct Hit {
 }
 
 /// A search hit from the summary header fields.
-fn summarize(f: &async_imap::types::Fetch, removed: &mut usize) -> Option<Hit> {
+fn summarize(f: &Fetch, removed: &mut usize) -> Option<Hit> {
     let parsed = MessageParser::default().parse_headers(f.header()?)?;
     hit(&parsed, &meta(f), removed)
 }
@@ -1253,19 +1044,9 @@ fn summarize(f: &async_imap::types::Fetch, removed: &mut usize) -> Option<Hit> {
 /// A search hit from a message's headers and what IMAP knows about it.
 fn hit(parsed: &Message, meta: &Meta, removed: &mut usize) -> Option<Hit> {
     let (id, mut row) = common(parsed, meta, removed)?;
-    let attachments = parsed
-        .headers()
-        .iter()
-        .filter(|h| h.name().eq_ignore_ascii_case("X-Attached"))
-        .count();
-    let text = |v: Option<&Value>| v.and_then(Value::as_str).unwrap_or_default().to_string();
-    let copy_of = copy_key(parsed, &row);
-    let thread = text(row.get("threadId"));
-    let thread = if thread.is_empty() {
-        id.clone()
-    } else {
-        thread
-    };
+    let attachments = attachment_count(parsed);
+    let copy_of = copy_key(parsed);
+    let thread = thread_key(parsed).unwrap_or_else(|| id.clone());
     let (unread, starred) = (meta.unread, meta.starred);
     for flag in ["unread", "starred", "encryption"] {
         row.remove(flag);
@@ -1299,12 +1080,21 @@ fn wanted(hit: &Hit, excluded: &HashSet<String>, attachment: Option<bool>) -> bo
     !excluded.contains(&hit.id) && attachment.is_none_or(|want| want == (hit.attachments > 0))
 }
 
+/// A search row: the hit that opened it, how many hits of its thread it
+/// stands for (`matching`, that hit included), and how many copies of
+/// those merged into it.
+struct Row {
+    hit: Hit,
+    matching: usize,
+    copies: usize,
+}
+
 /// One page of search rows. A hit merges into the first row of its thread
 /// in the page's order, or into the row holding a copy of it; only a hit
 /// that needs a new row can find the page full.
 #[derive(Default)]
 struct Page {
-    rows: Vec<(Hit, usize, usize)>,
+    rows: Vec<Row>,
     by_thread: HashMap<String, usize>,
     by_copy: HashMap<CopyKey, usize>,
 }
@@ -1320,13 +1110,13 @@ impl Page {
             .copied();
         let mate = self.by_thread.get(&hit.thread).copied();
         if let Some(i) = copy.or(mate) {
-            let (row, matching, copies) = &mut self.rows[i];
-            row.unread |= hit.unread;
-            row.starred |= hit.starred;
+            let row = &mut self.rows[i];
+            row.hit.unread |= hit.unread;
+            row.hit.starred |= hit.starred;
             if copy.is_some() {
-                *copies += 1;
+                row.copies += 1;
             } else {
-                *matching += 1;
+                row.matching += 1;
                 if let Some(k) = hit.copy_of {
                     self.by_copy.insert(k, i);
                 }
@@ -1341,7 +1131,11 @@ impl Page {
         if let Some(k) = hit.copy_of.clone() {
             self.by_copy.insert(k, i);
         }
-        self.rows.push((hit, 1, 0));
+        self.rows.push(Row {
+            hit,
+            matching: 1,
+            copies: 0,
+        });
         None
     }
 
@@ -1350,25 +1144,31 @@ impl Page {
     fn rows(self) -> Vec<Value> {
         self.rows
             .into_iter()
-            .map(|(hit, matching, copies)| {
-                let mut row = hit.row;
-                let extras = [
-                    ("unread", hit.unread.then_some(json!(true))),
-                    ("starred", hit.starred.then_some(json!(true))),
-                    (
-                        "attachments",
-                        (hit.attachments > 0).then_some(json!(hit.attachments)),
-                    ),
-                    ("matching", (matching > 1).then_some(json!(matching))),
-                    ("copies", (copies > 0).then_some(json!(copies))),
-                ];
-                for (name, value) in extras {
-                    if let Some(v) = value {
-                        row.insert(name.into(), v);
+            .map(
+                |Row {
+                     hit,
+                     matching,
+                     copies,
+                 }| {
+                    let mut row = hit.row;
+                    let extras = [
+                        ("unread", hit.unread.then_some(json!(true))),
+                        ("starred", hit.starred.then_some(json!(true))),
+                        (
+                            "attachments",
+                            (hit.attachments > 0).then_some(json!(hit.attachments)),
+                        ),
+                        ("matching", (matching > 1).then_some(json!(matching))),
+                        ("copies", (copies > 0).then_some(json!(copies))),
+                    ];
+                    for (name, value) in extras {
+                        if let Some(v) = value {
+                            row.insert(name.into(), v);
+                        }
                     }
-                }
-                Value::Object(row)
-            })
+                    Value::Object(row)
+                },
+            )
             .collect()
     }
 }
@@ -1463,272 +1263,36 @@ fn tally(rows: &[Counted], by: Option<GroupBy>, order: GroupOrder) -> (usize, Ve
 /// characters.
 fn bare_addresses(a: Option<&Address>, removed: &mut usize) -> Vec<String> {
     let Some(a) = a else { return Vec::new() };
-    a.clone()
-        .into_list()
-        .iter()
+    a.iter()
         .filter_map(|addr| addr.address())
         .map(|email| clean(email, removed))
         .collect()
 }
 
-/// The copy key of a message whose row holds its cleaned From and Subject.
-fn copy_key(m: &Message, row: &serde_json::Map<String, Value>) -> Option<CopyKey> {
-    let text = |k: &str| {
-        row.get(k)
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
-    };
+/// A message's copy key: its `Message-Id`, and its From and Subject as
+/// rows show them. Hidden characters they lose are counted where the rows
+/// are made, not here.
+fn copy_key(m: &Message) -> Option<CopyKey> {
     let mid = m.header_raw("Message-Id")?.trim().to_string();
-    Some((mid, text("from"), text("subject")))
+    let mut ignored = 0;
+    let from = addresses(m.from(), &mut ignored).into_iter().next();
+    let subject = clean(m.subject().unwrap_or_default(), &mut ignored);
+    Some((mid, from.unwrap_or_default(), subject))
 }
 
-/// The first copy of a header: the topmost, added by the last server to
-/// handle the message. mail-parser's `header_raw` returns the last copy,
-/// which for Authentication-Results can be one the sender wrote.
-fn top_header<'a>(m: &'a Message, name: &str) -> Option<&'a str> {
-    let h = m
-        .headers()
+/// A parsed message's full `X-Pm-Internal-Id`.
+fn internal_id(m: &Message) -> Option<String> {
+    m.header_raw("X-Pm-Internal-Id")
+        .map(|v| v.trim().to_string())
+}
+
+/// A message's attachments, which Bridge lists in one `X-Attached` header
+/// each (RFC Appendix A).
+fn attachment_count(m: &Message) -> usize {
+    m.headers()
         .iter()
-        .find(|h| h.name().eq_ignore_ascii_case(name))?;
-    let span = m
-        .raw_message()
-        .get(h.offset_start() as usize..h.offset_end() as usize)?;
-    std::str::from_utf8(span).ok()
-}
-
-/// The verdicts an Authentication-Results header records, compactly, as in
-/// `dmarc=pass (header.from=x.com); dkim=pass (header.d=x.com); spf=pass;
-/// by mx.example`. Comments, such as key sizes, are dropped.
-fn auth_summary(raw: &str) -> String {
-    let (mut text, mut depth) = (String::new(), 0usize);
-    for c in raw.chars() {
-        match c {
-            '(' => depth += 1,
-            ')' => depth = depth.saturating_sub(1),
-            c if depth == 0 => text.push(if c.is_whitespace() { ' ' } else { c }),
-            _ => {}
-        }
-    }
-    let mut clauses = text.split(';').map(str::trim);
-    let by = clauses.next().unwrap_or_default().to_string();
-    let mut out: Vec<String> = clauses
-        .filter_map(|clause| {
-            let mut words = clause.split_whitespace();
-            let (method, result) = words.next()?.split_once('=')?;
-            let method = method.to_ascii_lowercase();
-            let property = match method.as_str() {
-                "dmarc" => "header.from",
-                "dkim" => "header.d",
-                "spf" => "smtp.mailfrom",
-                _ => return None,
-            };
-            let result = result.to_ascii_lowercase();
-            Some(
-                match words.find_map(|w| {
-                    w.split_once('=')
-                        .filter(|(k, _)| k.eq_ignore_ascii_case(property))
-                }) {
-                    Some((_, value)) => format!("{method}={result} ({property}={value})"),
-                    None => format!("{method}={result}"),
-                },
-            )
-        })
-        .collect();
-    if out.is_empty() {
-        out.push("no spf, dkim or dmarc result".into());
-    }
-    if !by.is_empty() {
-        out.push(format!("by {by}"));
-    }
-    out.join("; ")
-}
-
-/// Endings of the line that introduces a quoted reply, in the languages
-/// handled so far.
-const ATTRIBUTIONS: [&str; 5] = ["wrote:", "a écrit :", "a écrit:", "schrieb:", "escribió:"];
-
-/// Whether a line starts an Outlook-style quoted original: "-----Original
-/// Message-----", or a From line with a Sent line among the next three.
-fn starts_original(lines: &[&str], i: usize) -> bool {
-    let line = lines[i].trim();
-    let dashes = line.trim_matches('-');
-    if line.starts_with("--") && dashes.trim().eq_ignore_ascii_case("original message") {
-        return true;
-    }
-    line.starts_with("From:")
-        && lines[i + 1..]
-            .iter()
-            .take(3)
-            .any(|l| l.trim_start().starts_with("Sent:"))
-}
-
-/// `text` without quoted replies, and the number of non-blank lines that
-/// went. Lines starting with `>` go, with the attribution line before them;
-/// an Outlook-style original goes to the end, except in a forward, whose
-/// original is the point. Unquoted lines always stay, so inline replies keep
-/// their answers.
-fn strip_quotes(text: &str, forward: bool) -> (String, usize) {
-    let lines: Vec<&str> = text.lines().collect();
-    let end = (0..lines.len())
-        .find(|&i| !forward && starts_original(&lines, i))
-        .unwrap_or(lines.len());
-    let quoted = |i: usize| lines[i].trim_start().starts_with('>');
-    let mut keep = vec![true; end];
-    for i in 0..end {
-        if quoted(i) {
-            keep[i] = false;
-            continue;
-        }
-        let line = lines[i].trim_end();
-        if !ATTRIBUTIONS.iter().any(|a| line.ends_with(a)) {
-            continue;
-        }
-        // An attribution introduces a quote, or nothing but the cut-off original.
-        let next = (i + 1..end).find(|&j| !lines[j].trim().is_empty());
-        if next.is_none_or(quoted) {
-            keep[i] = false;
-            // Gmail wraps a long attribution: "On ... <" then "... wrote:".
-            if i > 0 && lines[i - 1].trim_start().starts_with("On ") {
-                keep[i - 1] = false;
-            }
-        }
-    }
-    let gone = (0..lines.len())
-        .filter(|&i| i >= end || !keep[i])
-        .filter(|&i| !lines[i].trim().is_empty())
-        .count();
-    let mut out = String::new();
-    let mut blank = false;
-    for (line, _) in lines[..end].iter().zip(&keep).filter(|(_, k)| **k) {
-        let empty = line.trim().is_empty();
-        if !(empty && blank) {
-            out.push_str(line);
-            out.push('\n');
-        }
-        blank = empty;
-    }
-    (out.trim_end().to_string(), gone)
-}
-
-/// Where the element starting at `start` in `lower` (lower-cased HTML) ends,
-/// counting nested elements of the same name; the end of the text if it
-/// never closes.
-fn element_end(lower: &str, start: usize, name: &str) -> usize {
-    let (open, close) = (format!("<{name}"), format!("</{name}"));
-    let mut depth = 0usize;
-    let mut i = start;
-    while let Some(at) = lower[i..].find('<').map(|j| i + j) {
-        let rest = &lower[at..];
-        let boundary = |tag: &str| {
-            rest.starts_with(tag)
-                && rest[tag.len()..]
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_whitespace() || c == '>' || c == '/')
-        };
-        if boundary(&open) {
-            depth += 1;
-        } else if boundary(&close) {
-            depth = depth.saturating_sub(1);
-            if depth == 0 {
-                return lower[at..].find('>').map_or(lower.len(), |j| at + j + 1);
-            }
-        }
-        i = at + 1;
-    }
-    lower.len()
-}
-
-/// `html` without the elements that hold quoted replies: every
-/// `<blockquote>`, the `gmail_quote` and `protonmail_quote` containers, and
-/// Outlook's reply header (`divRplyFwdMsg`) with everything after it.
-fn strip_html_quotes(html: &str) -> String {
-    // ASCII lower-casing keeps every byte offset.
-    let lower = html.to_ascii_lowercase();
-    let end = lower
-        .find("id=\"divrplyfwdmsg\"")
-        .and_then(|i| lower[..i].rfind('<'))
-        .unwrap_or(lower.len());
-    let quote_at = |from: usize| -> Option<(usize, &'static str)> {
-        let mut i = from;
-        while let Some(at) = lower[i..end].find('<').map(|j| i + j) {
-            let tag = &lower[at..lower[at..].find('>').map_or(end, |j| at + j)];
-            if tag.starts_with("<blockquote")
-                && tag[11..]
-                    .chars()
-                    .next()
-                    .is_none_or(|c| c.is_whitespace() || c == '>')
-            {
-                return Some((at, "blockquote"));
-            }
-            if tag.starts_with("<div")
-                && (tag.contains("gmail_quote") || tag.contains("protonmail_quote"))
-            {
-                return Some((at, "div"));
-            }
-            i = at + 1;
-        }
-        None
-    };
-    let (mut out, mut i) = (String::new(), 0);
-    while let Some((at, name)) = quote_at(i) {
-        out.push_str(&html[i..at]);
-        i = element_end(&lower, at, name).min(end);
-    }
-    out.push_str(&html[i..end]);
-    out
-}
-
-/// A message's body as text (HTML converted) and, when `quotes_removed`,
-/// without quoted replies, with the number of non-blank lines that went.
-/// Quotes in HTML-only mail leave no `>` once converted, so they go from
-/// the HTML first.
-fn readable_body(message: &Message, quotes_removed: bool) -> (String, usize) {
-    let body = message.body_text(0).unwrap_or_default().into_owned();
-    if !quotes_removed {
-        return (body, 0);
-    }
-    let subject = message.subject().unwrap_or_default().to_ascii_lowercase();
-    let forward = ["fw:", "fwd:", "tr:", "wg:"]
-        .iter()
-        .any(|p| subject.starts_with(p));
-    let html_only = message
-        .text_body
-        .first()
-        .and_then(|&id| message.parts.get(id as usize))
-        .is_some_and(|p| matches!(p.body, mail_parser::PartType::Html(_)));
-    let lines = |t: &str| t.lines().filter(|l| !l.trim().is_empty()).count();
-    let before = lines(&body);
-    let text = match message.body_html(0) {
-        Some(html) if html_only => {
-            mail_parser::decoders::html::html_to_text(&strip_html_quotes(&html))
-        }
-        _ => body,
-    };
-    let (stripped, _) = strip_quotes(&text, forward);
-    let gone = before.saturating_sub(lines(&stripped));
-    (stripped, gone)
-}
-
-/// The characters of a search row's snippet.
-const SNIPPET_CHARS: usize = 200;
-
-/// The start of a message's text, from its header block and the first part
-/// of its body (`BODY.PEEK[TEXT]<0.N>`), joined into a message mail-parser
-/// can decode: without quoted replies, whitespace collapsed, at most 200
-/// characters.
-fn snippet(header_block: &[u8], partial: &[u8], removed: &mut usize) -> Option<String> {
-    let mut raw = header_block.to_vec();
-    raw.extend_from_slice(partial);
-    let message = MessageParser::default().parse(&raw)?;
-    let (text, _) = readable_body(&message, true);
-    let mut text = clean(
-        &text.split_whitespace().collect::<Vec<_>>().join(" "),
-        removed,
-    );
-    truncate(&mut text, SNIPPET_CHARS);
-    (!text.is_empty()).then_some(text)
+        .filter(|h| h.name().eq_ignore_ascii_case("X-Attached"))
+        .count()
 }
 
 /// How `render` shows a message.
@@ -1750,7 +1314,7 @@ struct Rendered {
 }
 
 /// A whole message: headers, body text (HTML converted), attachment list.
-fn render(f: &async_imap::types::Fetch, view: View) -> Result<Rendered> {
+fn render(f: &Fetch, view: View) -> Result<Rendered> {
     let raw = f.body().context("Bridge returned no message body")?;
     let message: Message = MessageParser::default()
         .parse(raw)
@@ -1758,7 +1322,7 @@ fn render(f: &async_imap::types::Fetch, view: View) -> Result<Rendered> {
     let mut removed = 0;
     let (_, mut row) =
         common(&message, &meta(f), &mut removed).context("the message has no X-Pm-Internal-Id")?;
-    let copy_of = copy_key(&message, &row);
+    let copy_of = copy_key(&message);
     let (body, quoted) = readable_body(&message, view.quotes_removed);
     if quoted > 0 {
         row.insert("quotedLinesRemoved".into(), json!(quoted));
@@ -1813,6 +1377,8 @@ fn merge_copies(rendered: Vec<Rendered>) -> (Vec<Value>, usize) {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use std::fmt::Write as _;
+    use std::sync::Arc;
 
     /// Hits in a mailbox of UID -> date, sorted for `order`.
     fn sorted(mailbox: &std::collections::BTreeMap<u32, i64>, order: Order) -> Vec<(i64, u32)> {
@@ -1931,7 +1497,7 @@ mod tests {
 
     #[test]
     fn labels_and_folders_are_both_searchable() {
-        let boxes: Vec<(String, Vec<String>)> = [
+        let boxes: Vec<(String, Vec<NameAttribute>)> = [
             "INBOX",
             "Folders",
             "Folders/Work",
@@ -2151,113 +1717,6 @@ mod tests {
     }
 
     #[test]
-    fn quoted_replies_leave_plain_text_bodies() {
-        let reply = "Thanks, see below.\n\nOn Mon, 5 Oct 2026 at 10:00, Ann <ann@x.test> wrote:\n> Can you send it?\n> Ann\n";
-        assert_eq!(strip_quotes(reply, false), ("Thanks, see below.".into(), 3));
-        // Gmail wraps a long attribution over two lines.
-        let wrapped =
-            "Done.\n\nOn Mon, Oct 5, 2026 at 10:00 AM Ann Example <\nann@x.test> wrote:\n\n> Old\n";
-        assert_eq!(strip_quotes(wrapped, false), ("Done.".into(), 3));
-        // Inline answers stay; only the quoted lines go.
-        let inline = "> Question one?\nAnswer one.\n> Question two?\nAnswer two.";
-        assert_eq!(
-            strip_quotes(inline, false),
-            ("Answer one.\nAnswer two.".into(), 2)
-        );
-        // A line that merely ends in "wrote:" and quotes nothing stays.
-        let prose = "She wrote:\nthe plan is fine.";
-        assert_eq!(strip_quotes(prose, false).0, prose);
-        // Outlook puts the original under a header block; a forward keeps it.
-        let outlook = "Sounds good.\n\nFrom: Bob <b@x.test>\nSent: Monday, October 5, 2026 10:00 AM\nTo: Ann\nSubject: Re: Plan\n\nOld text";
-        assert_eq!(strip_quotes(outlook, false), ("Sounds good.".into(), 5));
-        assert_eq!(strip_quotes(outlook, true).0, outlook);
-        let original = "Yes.\n-----Original Message-----\nFrom: Bob\nOld";
-        assert_eq!(strip_quotes(original, false), ("Yes.".into(), 3));
-    }
-
-    #[test]
-    fn quoted_replies_leave_html_bodies() {
-        let gmail = "<div>New text</div><div class=\"gmail_quote\"><div class=\"gmail_attr\">On Mon, Ann wrote:</div>\
-                     <blockquote class=\"gmail_quote\"><div>Old</div><blockquote>Older</blockquote></blockquote></div><p>After</p>";
-        assert_eq!(strip_html_quotes(gmail), "<div>New text</div><p>After</p>");
-        let proton = "<p>Hi</p><div class=\"protonmail_quote\">Ann wrote:<blockquote type=\"cite\">x</blockquote></div>";
-        assert_eq!(strip_html_quotes(proton), "<p>Hi</p>");
-        // Outlook's reply header and everything after it go.
-        let outlook =
-            "<p>Yes</p><hr><div id=\"divRplyFwdMsg\"><b>From:</b> Bob</div><div>Old</div>";
-        assert_eq!(strip_html_quotes(outlook), "<p>Yes</p><hr>");
-        // Other elements stay, and an unclosed quote runs to the end.
-        assert_eq!(
-            strip_html_quotes("<div class=\"x\">a</div><blockquote>b"),
-            "<div class=\"x\">a</div>"
-        );
-        assert_eq!(
-            strip_html_quotes("<blockquotes>kept</blockquotes>"),
-            "<blockquotes>kept</blockquotes>"
-        );
-    }
-
-    #[test]
-    fn authentication_comes_from_the_receiving_server_s_header() {
-        // The topmost header is the receiving server's; one lower down was
-        // written by the sender.
-        let block = "Authentication-Results: mx.proton.test; dkim=fail header.d=bank.test;\r\n \
-                     dmarc=fail (p=reject) header.from=bank.test; spf=softfail smtp.mailfrom=x@evil.test\r\n\
-                     Authentication-Results: evil.test; dkim=pass header.d=bank.test; dmarc=pass header.from=bank.test\r\n\r\n";
-        let m = headers(block);
-        let top = top_header(&m, "Authentication-Results").unwrap();
-        assert_eq!(
-            auth_summary(top),
-            "dkim=fail (header.d=bank.test); dmarc=fail (header.from=bank.test); spf=softfail (smtp.mailfrom=x@evil.test); by mx.proton.test"
-        );
-        let two = "mx.test; dkim=pass (2048-bit key) header.d=a.test header.b=xyz; dkim=pass header.d=b.test; spf=none";
-        assert_eq!(
-            auth_summary(two),
-            "dkim=pass (header.d=a.test); dkim=pass (header.d=b.test); spf=none; by mx.test"
-        );
-        assert_eq!(
-            auth_summary("nonsense"),
-            "no spf, dkim or dmarc result; by nonsense"
-        );
-    }
-
-    #[test]
-    fn snippets_are_the_start_of_the_text_without_quotes() {
-        let mut n = 0;
-        let mut snip = |head: &str, body: &[u8]| snippet(head.as_bytes(), body, &mut n);
-        // The plain alternative, its quoted reply gone, whitespace collapsed.
-        let alternative = "Content-Type: multipart/alternative; boundary=\"b\"\r\n\r\n";
-        let body = b"--b\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nSee   you\r\nat noon.\r\n\r\n\
-                     On Mon, Ann wrote:\r\n> earlier\r\n--b\r\nContent-Type: text/html\r\n\r\n<p>See you</p>\r\n--b--\r\n";
-        assert_eq!(snip(alternative, body).as_deref(), Some("See you at noon."));
-        // HTML only: styles and the quoted part go; the fetch cut it mid-document.
-        let html = format!(
-            "<html><head><style>{}</style></head><body><p>New text</p><blockquote>old</blockquote><p>cut he",
-            "p{color:red}".repeat(500)
-        );
-        let snipped = snip(
-            "Content-Type: text/html; charset=utf-8\r\n\r\n",
-            html.as_bytes(),
-        );
-        assert_eq!(snipped.as_deref(), Some("New text cut he"));
-        let qp = "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n";
-        assert_eq!(snip(qp, b"Caf=C3=A9 at 5").as_deref(), Some("Café at 5"));
-        // Base64 cut mid-quad by the fetch limit still gives its start.
-        let b64 = "Content-Type: text/plain\r\nContent-Transfer-Encoding: base64\r\n\r\n";
-        let cut = snip(b64, b"SGVsbG8gd29ybGQsIHRoaXMgaXMgYSB0ZXN0");
-        assert!(
-            cut.as_deref().is_some_and(|s| s.starts_with("Hello world")),
-            "{cut:?}"
-        );
-        let long = "x ".repeat(300);
-        assert_eq!(
-            snip("Content-Type: text/plain\r\n\r\n", long.as_bytes()).map(|s| s.chars().count()),
-            Some(200)
-        );
-        assert_eq!(snip("Content-Type: text/plain\r\n\r\n", b"  \r\n "), None);
-    }
-
-    #[test]
     fn copies_in_a_thread_merge_into_the_first() {
         let rendered = |id: &str, mid: &str, removed: usize| Rendered {
             json: json!({ "messageId": id }),
@@ -2344,135 +1803,8 @@ mod tests {
         );
     }
 
-    /// Query-like text: operators with odd values, quotes, negation, OR and
-    /// anything else.
-    fn query_text() -> impl Strategy<Value = String> {
-        let token = prop_oneof![
-            any::<String>(),
-            "(from|to|subject|label|in|is|has):[a-z0-9/\"\\\\-]{0,10}",
-            "(newer_than|older_than):-?[0-9]{1,20}[dmyé]?",
-            "(newer_than|older_than|after|before):\\PC{0,6}",
-            "(after|before):[0-9]{1,6}[-/][0-9]{1,3}[-/][0-9]{1,3}",
-            Just("OR".to_string()),
-            Just("\"".to_string()),
-            Just("-".to_string()),
-        ];
-        prop::collection::vec(token, 0..8).prop_map(|t| t.join(" "))
-    }
-
-    proptest! {
-        #[test]
-        fn compile_never_panics_and_keeps_line_breaks_out(q in query_text()) {
-            if let Ok(query) = compile(&q, day()) {
-                prop_assert!(!query.criteria.contains(['\r', '\n', '\0']), "{:?}", query.criteria);
-            }
-        }
-
-        #[test]
-        fn quoted_strings_read_back(s in "\\PC*") {
-            let q = quoted(&s).unwrap();
-            let inner = q.strip_prefix('"').and_then(|q| q.strip_suffix('"')).unwrap();
-            let (mut back, mut chars) = (String::new(), inner.chars());
-            while let Some(c) = chars.next() {
-                if c == '\\' {
-                    let next = chars.next().unwrap();
-                    prop_assert!(next == '\\' || next == '"', "{:?}", q);
-                    back.push(next);
-                } else {
-                    prop_assert!(c != '"', "an unescaped quote in {:?}", q);
-                    back.push(c);
-                }
-            }
-            prop_assert_eq!(back, s);
-        }
-    }
-
-    fn day() -> NaiveDate {
-        NaiveDate::from_ymd_opt(2026, 10, 3).unwrap()
-    }
-
-    fn criteria(q: &str) -> String {
-        compile(q, day()).unwrap().criteria
-    }
-
     #[test]
-    fn plain_words_and_phrases_search_text() {
-        assert_eq!(criteria("lease renewal"), "TEXT \"lease\" TEXT \"renewal\"");
-        assert_eq!(criteria("\"lease renewal\""), "TEXT \"lease renewal\"");
-        assert_eq!(criteria(""), "ALL");
-    }
-
-    #[test]
-    fn operators_translate_to_imap() {
-        assert_eq!(
-            criteria("from:\"Ann Lee\" subject:invoice is:unread"),
-            "FROM \"Ann Lee\" SUBJECT \"invoice\" UNSEEN"
-        );
-        assert_eq!(
-            criteria("after:2026/09/01 before:2026-10-01"),
-            "SINCE 1-Sep-2026 BEFORE 1-Oct-2026"
-        );
-        assert_eq!(
-            criteria("newer_than:7d older_than:1y"),
-            "SINCE 26-Sep-2026 BEFORE 3-Oct-2025"
-        );
-    }
-
-    #[test]
-    fn negation_and_or_nest_like_gmail() {
-        assert_eq!(criteria("-is:read"), "NOT SEEN");
-        assert_eq!(
-            criteria("from:a OR from:b invoice"),
-            "OR FROM \"a\" FROM \"b\" TEXT \"invoice\""
-        );
-        // The documented idiom for any recipient chains.
-        assert_eq!(
-            criteria("to:x OR cc:x OR bcc:x"),
-            "OR OR TO \"x\" CC \"x\" BCC \"x\""
-        );
-        assert!(compile("OR from:a", day()).is_err());
-        assert!(compile("from:a OR", day()).is_err());
-        // An OR beside in: or label: must not reach past it to an earlier term.
-        assert!(compile("from:b in:sent OR from:a", day()).is_err());
-    }
-
-    #[test]
-    fn has_attachment_filters_summaries_instead_of_searching() {
-        let q = compile("has:attachment from:a", day()).unwrap();
-        assert_eq!(
-            (q.criteria.as_str(), q.attachment),
-            ("FROM \"a\"", Some(true))
-        );
-        let q = compile("-has:attachment", day()).unwrap();
-        assert_eq!((q.criteria.as_str(), q.attachment), ("ALL", Some(false)));
-        assert!(compile("has:attachment OR from:a", day()).is_err());
-        assert!(compile("from:b has:attachment OR from:a", day()).is_err());
-        assert!(compile("from:a OR has:attachment", day()).is_err());
-    }
-
-    #[test]
-    fn mailboxes_come_from_in_and_label() {
-        assert_eq!(
-            compile("in:sent x", day()).unwrap().mailbox,
-            Mailbox::Role("\\sent")
-        );
-        assert_eq!(
-            compile("label:\"Project Notes\"", day()).unwrap().mailbox,
-            Mailbox::Label("Project Notes".into())
-        );
-        assert_eq!(compile("x", day()).unwrap().mailbox, Mailbox::All);
-        assert!(compile("in:sent in:trash", day()).is_err());
-        assert!(compile("-label:x", day()).is_err());
-    }
-
-    #[test]
-    fn unsupported_and_unsafe_input_is_refused() {
-        assert!(compile("is:important", day()).is_err());
-        assert!(compile("from:\"unbalanced", day()).is_err());
-        // A backslash in a value, and a quote reaching the IMAP quoting, are both escaped.
-        assert_eq!(criteria("from:a\\b"), "FROM \"a\\\\b\"");
-        assert_eq!(quoted("a\"b").unwrap(), "\"a\\\"b\"");
-        assert!(criteria("café").starts_with("CHARSET UTF-8 "));
+    fn unsafe_message_ids_are_refused() {
         assert!(check_id("abc_DEF-123+/==xy").is_ok());
         assert!(check_id("x\" OR ALL\" OR ALL").is_err());
     }
@@ -2523,5 +1855,410 @@ mod tests {
             addresses(message.from(), &mut removed),
             ["Ann <ann@example.test>"]
         );
+    }
+
+    /// A message the fake Bridge holds: its flags, INTERNALDATE and text.
+    struct Stored {
+        flags: &'static str,
+        date: &'static str,
+        raw: String,
+    }
+
+    /// A mailbox the fake Bridge lists: its attributes, UIDVALIDITY, and
+    /// (UID, index into the messages) for each message it holds. With
+    /// `status` false it answers STATUS with "no such mailbox", as Bridge
+    /// does for the Labels parent.
+    struct FakeBox {
+        name: &'static str,
+        attrs: &'static str,
+        uidvalidity: u32,
+        status: bool,
+        held: Vec<(u32, usize)>,
+    }
+
+    /// A raw message whose `X-Pm-Internal-Id` repeats `id` to 88 characters.
+    fn stored(id: char, flags: &'static str, date: &'static str, head: &str, body: &str) -> Stored {
+        let raw = format!(
+            "X-Pm-Internal-Id: {}==\r\n{head}\r\n{body}",
+            id.to_string().repeat(86)
+        );
+        Stored { flags, date, raw }
+    }
+
+    /// Two messages of one thread, an import's second copy of the first, a
+    /// message with an attachment, and a message that is also in Trash.
+    fn bridge_messages() -> Vec<Stored> {
+        let m1 = "Message-Id: <m1@x.test>\r\nFrom: Ann <ann@x.test>\r\nTo: Me <me@x.test>\r\n\
+                  Subject: Plan\r\nContent-Type: text/plain\r\n";
+        let m2 = "Message-Id: <m2@x.test>\r\nIn-Reply-To: <m1@x.test>\r\nReferences: <m1@x.test>\r\n\
+                  From: Bob <bob@x.test>\r\nTo: Ann <ann@x.test>, Me <me@x.test>\r\nSubject: Re: Plan\r\n\
+                  Authentication-Results: mx.proton.test; dkim=pass header.d=x.test; spf=pass smtp.mailfrom=bob@x.test\r\n\
+                  Content-Type: text/plain\r\n";
+        let m3 = "Message-Id: <m3@x.test>\r\nFrom: Carl <carl@y.test>\r\nTo: me@x.test, odd\u{202E}@y.test\r\n\
+                  Subject: Report\r\nX-Attached: report.pdf\r\nContent-Type: multipart/mixed; boundary=\"b\"\r\n";
+        let m4 = "Message-Id: <m4@x.test>\r\nFrom: Dee <dee@z.test>\r\nTo: me@x.test\r\nSubject: Old news\r\n\
+                  Content-Type: text/plain\r\n";
+        let attached = "--b\r\nContent-Type: text/plain\r\n\r\nThe report is attached.\r\n--b\r\n\
+                        Content-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"report.pdf\"\r\n\r\n\
+                        %PDF-1.4\r\n--b--\r\n";
+        let reply = "Monday works.\r\n\r\nOn Thu, Ann wrote:\r\n> Shall we meet on Monday?\r\n";
+        let ask = "Shall we meet on Monday?\r\n";
+        vec![
+            stored('A', "", "01-Oct-2026 09:00:00 +0000", m1, ask),
+            stored('C', "\\Seen", "02-Oct-2026 08:00:00 +0000", m2, reply),
+            stored(
+                'B',
+                "\\Seen",
+                "01-Oct-2026 09:05:00 +0000",
+                &format!("{m1}X-Pm-Origin: import\r\n"),
+                ask,
+            ),
+            stored(
+                'D',
+                "\\Seen \\Flagged",
+                "02-Oct-2026 12:00:00 +0000",
+                m3,
+                attached,
+            ),
+            stored(
+                'T',
+                "\\Seen",
+                "03-Oct-2026 07:00:00 +0000",
+                m4,
+                "Out of date.\r\n",
+            ),
+        ]
+    }
+
+    fn bridge_boxes() -> Vec<FakeBox> {
+        let b = |name, attrs, uidvalidity, held: &[(u32, usize)]| FakeBox {
+            name,
+            attrs,
+            uidvalidity,
+            status: true,
+            held: held.to_vec(),
+        };
+        vec![
+            b("INBOX", "\\HasNoChildren", 1, &[(1, 0), (2, 3)]),
+            b("Sent", "\\HasNoChildren \\Sent", 2, &[]),
+            b("Drafts", "\\HasNoChildren \\Drafts", 3, &[]),
+            b("Archive", "\\HasNoChildren \\Archive", 4, &[]),
+            b("Starred", "\\HasNoChildren \\Flagged", 5, &[(1, 3)]),
+            b("Spam", "\\HasNoChildren \\Junk", 6, &[]),
+            b("Trash", "\\HasNoChildren \\Trash", 7, &[(3, 4)]),
+            b(
+                "All Mail",
+                "\\HasNoChildren \\All",
+                8,
+                &[(11, 0), (12, 1), (13, 2), (14, 3), (15, 4)],
+            ),
+            FakeBox {
+                status: false,
+                ..b("Folders", "\\HasChildren", 9, &[])
+            },
+            b("Folders/Receipts", "\\HasNoChildren", 10, &[]),
+            b("Labels", "\\HasChildren \\Noselect", 11, &[]),
+            b("Labels/Work", "\\HasNoChildren", 12, &[(1, 1)]),
+        ]
+    }
+
+    /// A raw message's header block, with the blank line that ends it, and its text.
+    fn split_message(raw: &str) -> (&str, &str) {
+        raw.split_at(raw.find("\r\n\r\n").map_or(raw.len(), |i| i + 4))
+    }
+
+    /// The fields of a header block named in `names`, as
+    /// `BODY[HEADER.FIELDS (...)]` returns them.
+    fn header_fields(block: &str, names: &str) -> String {
+        let names: Vec<String> = names
+            .split_whitespace()
+            .map(str::to_ascii_lowercase)
+            .collect();
+        let (mut out, mut keep) = (String::new(), false);
+        for line in block.split_inclusive("\r\n").take_while(|l| *l != "\r\n") {
+            if !line.starts_with([' ', '\t']) {
+                keep = line
+                    .split_once(':')
+                    .is_some_and(|(n, _)| names.contains(&n.to_ascii_lowercase()));
+            }
+            if keep {
+                out.push_str(line);
+            }
+        }
+        out + "\r\n"
+    }
+
+    /// FETCH items, split at spaces outside brackets and parentheses.
+    fn fetch_items(items: &str) -> Vec<&str> {
+        let items = items
+            .strip_prefix('(')
+            .and_then(|i| i.strip_suffix(')'))
+            .unwrap_or(items);
+        let (mut out, mut depth, mut start) = (Vec::new(), 0, 0);
+        for (i, c) in items.char_indices() {
+            match c {
+                '[' | '(' => depth += 1,
+                ']' | ')' => depth -= 1,
+                ' ' if depth == 0 => {
+                    out.push(&items[start..i]);
+                    start = i + 1;
+                }
+                _ => {}
+            }
+        }
+        out.push(&items[start..]);
+        out
+    }
+
+    /// The FETCH response for message `m`, number `seq` in its mailbox, at
+    /// `uid`: each requested item, and each `BODY.PEEK[...]` section echoed
+    /// as `BODY[...]`, cut to the requested range if there is one.
+    fn fetch_response(seq: usize, uid: u32, m: &Stored, items: &str) -> String {
+        let (head, text) = split_message(&m.raw);
+        let parts: Vec<String> = fetch_items(items)
+            .into_iter()
+            .map(|item| match item {
+                "UID" => format!("UID {uid}"),
+                "FLAGS" => format!("FLAGS ({})", m.flags),
+                "INTERNALDATE" => format!("INTERNALDATE \"{}\"", m.date),
+                _ => {
+                    let peek = item.strip_prefix("BODY.PEEK[").unwrap();
+                    let (section, range) = peek.split_once(']').unwrap();
+                    let data = match section {
+                        "" => m.raw.clone(),
+                        "TEXT" => text.to_string(),
+                        fields => {
+                            let names = fields.strip_prefix("HEADER.FIELDS (").unwrap();
+                            header_fields(head, names.strip_suffix(')').unwrap())
+                        }
+                    };
+                    let (data, origin) = match range.strip_prefix('<') {
+                        Some(r) => {
+                            let (from, len) = r.strip_suffix('>').unwrap().split_once('.').unwrap();
+                            let (from, len): (usize, usize) =
+                                (from.parse().unwrap(), len.parse().unwrap());
+                            let cut = &data[from.min(data.len())..(from + len).min(data.len())];
+                            (cut.to_string(), format!("<{from}>"))
+                        }
+                        None => (data, String::new()),
+                    };
+                    format!("BODY[{section}]{origin} {{{}}}\r\n{data}", data.len())
+                }
+            })
+            .collect();
+        format!("* {seq} FETCH ({})\r\n", parts.join(" "))
+    }
+
+    /// What UID SEARCH finds in `held`: the messages matching any
+    /// `HEADER name "value"` term of `criteria` (a case-insensitive
+    /// substring), or every message when it has none; `compile`'s own tests
+    /// cover the rest of the criteria.
+    fn search_hits(criteria: &str, held: &[(u32, usize)], messages: &[Stored]) -> Vec<u32> {
+        let term = regex::Regex::new(r#"HEADER (\S+) "([^"]*)""#).unwrap();
+        let terms: Vec<(String, String)> = term
+            .captures_iter(criteria)
+            .map(|c| (c[1].to_string(), c[2].to_ascii_lowercase()))
+            .collect();
+        let matches = |m: &Stored| {
+            let (block, _) = split_message(&m.raw);
+            terms.iter().any(|(name, value)| {
+                block.split("\r\n").any(|line| {
+                    line.split_once(':').is_some_and(|(n, v)| {
+                        n.eq_ignore_ascii_case(name) && v.to_ascii_lowercase().contains(value)
+                    })
+                })
+            })
+        };
+        held.iter()
+            .filter(|(_, i)| terms.is_empty() || matches(&messages[*i]))
+            .map(|(uid, _)| *uid)
+            .collect()
+    }
+
+    /// The fake Bridge's answer to one command: untagged lines, then the
+    /// tagged completion without its tag.
+    fn respond(
+        command: &str,
+        boxes: &[FakeBox],
+        messages: &[Stored],
+        examined: &mut Option<usize>,
+    ) -> (String, &'static str) {
+        let find = |name: &str| boxes.iter().position(|b| b.name == name.trim_matches('"'));
+        let (verb, args) = command.split_once(' ').unwrap_or((command, ""));
+        match verb {
+            "LOGIN" => (String::new(), "OK LOGIN completed"),
+            "LIST" => {
+                let mut untagged = String::new();
+                for b in boxes {
+                    write!(untagged, "* LIST ({}) \"/\" \"{}\"\r\n", b.attrs, b.name).unwrap();
+                }
+                (untagged, "OK LIST completed")
+            }
+            "EXAMINE" => match find(args) {
+                Some(i) => {
+                    *examined = Some(i);
+                    let b = &boxes[i];
+                    let untagged = format!(
+                        "* {} EXISTS\r\n* OK [UIDVALIDITY {}] UIDs valid\r\n",
+                        b.held.len(),
+                        b.uidvalidity
+                    );
+                    (untagged, "OK [READ-ONLY] EXAMINE completed")
+                }
+                None => (String::new(), "NO no such mailbox"),
+            },
+            "STATUS" => {
+                let (name, _) = args.rsplit_once(" (").unwrap();
+                match find(name).filter(|&i| boxes[i].status) {
+                    Some(i) => {
+                        let b = &boxes[i];
+                        let unseen = b
+                            .held
+                            .iter()
+                            .filter(|(_, m)| !messages[*m].flags.contains("\\Seen"))
+                            .count();
+                        let untagged = format!(
+                            "* STATUS \"{}\" (MESSAGES {} UNSEEN {unseen})\r\n",
+                            b.name,
+                            b.held.len()
+                        );
+                        (untagged, "OK STATUS completed")
+                    }
+                    None => (String::new(), "NO no such mailbox"),
+                }
+            }
+            "UID" => {
+                let b = &boxes[examined.unwrap()];
+                match args.split_once(' ').unwrap() {
+                    ("SEARCH", criteria) => {
+                        let mut untagged = String::from("* SEARCH");
+                        for uid in search_hits(criteria, &b.held, messages) {
+                            write!(untagged, " {uid}").unwrap();
+                        }
+                        (untagged + "\r\n", "OK SEARCH completed")
+                    }
+                    ("FETCH", rest) => {
+                        let (set, items) = rest.split_once(' ').unwrap();
+                        let wanted: Vec<u32> = set.split(',').map(|u| u.parse().unwrap()).collect();
+                        let untagged = b
+                            .held
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, (uid, _))| wanted.contains(uid))
+                            .map(|(seq, (uid, m))| {
+                                fetch_response(seq + 1, *uid, &messages[*m], items)
+                            })
+                            .collect();
+                        (untagged, "OK FETCH completed")
+                    }
+                    _ => (String::new(), "BAD unknown UID command"),
+                }
+            }
+            _ => (String::new(), "BAD unknown command"),
+        }
+    }
+
+    /// `command` with the UID set of a UID FETCH in ascending order: the
+    /// order of a set that comes from SEARCH (a `HashSet`) varies by run.
+    fn sorted_sets(command: &str) -> String {
+        let Some(rest) = command.strip_prefix("UID FETCH ") else {
+            return command.to_string();
+        };
+        let (set, items) = rest.split_once(' ').unwrap();
+        let mut uids: Vec<u32> = set.split(',').map(|u| u.parse().unwrap()).collect();
+        uids.sort_unstable();
+        format!("UID FETCH {} {items}", uid_set(&uids))
+    }
+
+    /// A scripted Bridge serving `boxes` over one TLS session, and the
+    /// commands it was sent, without their tags.
+    async fn fake_imap(
+        boxes: Vec<FakeBox>,
+        messages: Vec<Stored>,
+    ) -> (
+        u16,
+        super::super::Fingerprint,
+        Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let (listener, acceptor, port, fingerprint) = super::super::tests::tls_listener().await;
+        let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = sent.clone();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut io = BufReader::new(acceptor.accept(tcp).await.unwrap());
+            let greeting = b"* OK [CAPABILITY IMAP4rev1] Proton Mail Bridge ready\r\n";
+            io.get_mut().write_all(greeting).await.unwrap();
+            let (mut examined, mut line) = (None, String::new());
+            while io.read_line(&mut line).await.unwrap_or(0) > 0 {
+                let (tag, command) = line.trim_end().split_once(' ').unwrap();
+                log.lock().unwrap().push(sorted_sets(command));
+                let (untagged, done) = respond(command, &boxes, &messages, &mut examined);
+                let reply = format!("{untagged}{tag} {done}\r\n");
+                io.get_mut().write_all(reply.as_bytes()).await.unwrap();
+                line.clear();
+            }
+        });
+        (port, fingerprint, sent)
+    }
+
+    /// Every IMAP operation, on one `Mail`, against the scripted Bridge. The
+    /// snapshots pin each result and the exact commands sent.
+    #[tokio::test]
+    async fn every_operation_against_a_scripted_bridge() {
+        let (port, fingerprint, sent) = fake_imap(bridge_boxes(), bridge_messages()).await;
+        let (tls, _) = super::super::connect(port, Some(fingerprint))
+            .await
+            .unwrap();
+        let session = super::super::login(tls, "user@example.test", "password")
+            .await
+            .unwrap();
+        let mail = Mail::new(MailConfig {
+            address: "user@example.test".into(),
+            port,
+            cert_sha256: hex::encode(fingerprint),
+        });
+        *mail.conn.lock().await = Some(Conn::listing(session).await.unwrap());
+        let search = |query: &str| SearchThreadsReq {
+            query: query.into(),
+            ..Default::default()
+        };
+        let found = mail.search_threads(&search("")).await.unwrap();
+        insta::assert_json_snapshot!("search_default", found);
+        let attached = mail
+            .search_threads(&search("has:attachment"))
+            .await
+            .unwrap();
+        insta::assert_json_snapshot!("search_has_attachment", attached);
+        let everything = SearchThreadsReq {
+            include_trash: true,
+            snippets: true,
+            ..search("")
+        };
+        let everything = mail.search_threads(&everything).await.unwrap();
+        insta::assert_json_snapshot!("search_include_trash", everything);
+        let count = CountMessagesReq {
+            by: Some(GroupBy::From),
+            ..Default::default()
+        };
+        let counted = mail.count_messages(&count).await.unwrap();
+        insta::assert_json_snapshot!("count_by_from", counted);
+        // The thread's row; its UID comes from the search's cache.
+        let message_id = found["messages"][1]["messageId"].as_str().unwrap().into();
+        let message = mail
+            .get_message(&MessageReq {
+                message_id,
+                raw: false,
+            })
+            .await
+            .unwrap();
+        insta::assert_json_snapshot!("get_message", message);
+        let thread = ThreadReq {
+            thread_id: "m1@x.test".into(),
+            raw: false,
+        };
+        insta::assert_json_snapshot!("get_thread", mail.get_thread(&thread).await.unwrap());
+        insta::assert_json_snapshot!("list_labels", mail.list_labels().await.unwrap());
+        insta::assert_json_snapshot!("imap_commands", sent.lock().unwrap().clone());
     }
 }

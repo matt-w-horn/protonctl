@@ -59,8 +59,11 @@ pub struct MailConfig {
     pub cert_sha256: String,
 }
 
+/// Bridge's IMAP port unless set otherwise.
+pub const DEFAULT_IMAP_PORT: u16 = 1143;
+
 fn default_imap_port() -> u16 {
-    1143
+    DEFAULT_IMAP_PORT
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -84,6 +87,11 @@ pub struct CalendarConfig {
 
 pub fn home() -> PathBuf {
     std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
+}
+
+/// protonctl's cache folder, which holds the download folders and the CLI's lock file.
+pub fn cache_dir() -> PathBuf {
+    home().join("Library/Caches/protonctl")
 }
 
 pub fn path() -> PathBuf {

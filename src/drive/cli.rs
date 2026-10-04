@@ -15,7 +15,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use crate::config::{DriveConfig, home};
+use crate::config::{DriveConfig, cache_dir, home};
 
 /// Proton AG's Apple Developer team, shared by Proton Drive.app and the CLI.
 const PROTON_TEAM: &str = "2SB5Z68H26";
@@ -55,7 +55,7 @@ fn lock_path() -> PathBuf {
     if cfg!(test) {
         std::env::temp_dir().join("protonctl-test/cli.lock")
     } else {
-        home().join("Library/Caches/protonctl/cli.lock")
+        cache_dir().join("cli.lock")
     }
 }
 

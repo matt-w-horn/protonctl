@@ -2,8 +2,7 @@
 //! does all the decryption (RFC R3). Bridge's TLS certificate is self-signed,
 //! so `protonctl setup mail` pins its SHA-256 the first time it connects and
 //! every later connection refuses any other certificate (RFC R9): another
-//! process listening on the port cannot collect the Bridge password. Reading
-//! mail arrives in Phase 1a; this module is the connection and the login check.
+//! process listening on the port cannot collect the Bridge password.
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::process::Stdio;
@@ -20,6 +19,8 @@ use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 
+mod body;
+mod query;
 pub mod read;
 
 pub use read::Mail;
@@ -255,8 +256,9 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio_rustls::TlsAcceptor;
 
-    /// A fake Bridge: TLS with a fresh self-signed certificate, one IMAP session.
-    async fn fake_bridge(accept_login: bool) -> (u16, Fingerprint) {
+    /// A listener on 127.0.0.1 that speaks TLS with a fresh self-signed
+    /// certificate, as Bridge does, and that certificate's fingerprint.
+    pub(super) async fn tls_listener() -> (TcpListener, TlsAcceptor, u16, Fingerprint) {
         let issued = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
         let cert = issued.cert.der().clone();
         let key = PrivateKeyDer::Pkcs8(issued.signing_key.serialize_der().into());
@@ -270,7 +272,17 @@ mod tests {
             .unwrap();
         let listener = TcpListener::bind((LOOPBACK, 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let acceptor = TlsAcceptor::from(Arc::new(config));
+        (
+            listener,
+            TlsAcceptor::from(Arc::new(config)),
+            port,
+            fingerprint,
+        )
+    }
+
+    /// A fake Bridge: TLS with a fresh self-signed certificate, one IMAP session.
+    async fn fake_bridge(accept_login: bool) -> (u16, Fingerprint) {
+        let (listener, acceptor, port, fingerprint) = tls_listener().await;
         tokio::spawn(async move {
             let (tcp, _) = listener.accept().await.unwrap();
             let Ok(tls) = acceptor.accept(tcp).await else {

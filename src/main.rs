@@ -9,7 +9,6 @@ mod digest;
 mod drive;
 mod export;
 mod mail;
-mod policy;
 mod secret;
 mod serve;
 
@@ -48,10 +47,10 @@ impl App {
             .as_ref()
             .map(|e| export::Export::new(e, root).map_err(|e| format!("{e:#}")));
         Ok(Self {
-            calendars: Calendars::new(cfg.calendar.clone(), zone),
+            calendars: Calendars::new(cfg.calendar, zone),
             drive,
             drive_cli: drive::cli::Cli::new(drive::cli::path(cfg.drive.as_ref())),
-            mail: cfg.mail.clone().map(mail::Mail::new),
+            mail: cfg.mail.map(mail::Mail::new),
             export,
         })
     }
@@ -209,7 +208,7 @@ enum Setup {
         #[arg(long)]
         address: String,
         /// Bridge's IMAP port.
-        #[arg(long, default_value_t = 1143)]
+        #[arg(long, default_value_t = config::DEFAULT_IMAP_PORT)]
         port: u16,
     },
 }

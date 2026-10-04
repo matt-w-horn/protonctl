@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use crate::config::{ExportConfig, home};
+use crate::config::{ExportConfig, cache_dir};
 
 #[derive(Debug)]
 pub struct Export {
@@ -41,7 +41,7 @@ impl Export {
             bail!("[export] folder must be an absolute path");
         }
         let folder = folder.canonicalize().unwrap_or_else(|_| lexical(folder));
-        let cache = home().join("Library/Caches/protonctl");
+        let cache = cache_dir();
         let cache = cache.canonicalize().unwrap_or(cache);
         if drive_root.is_some_and(|root| folder.starts_with(root)) {
             bail!(
@@ -118,7 +118,7 @@ mod tests {
             .join(name)
             .join("Exports");
         assert!(Export::new(&cfg(around), Some(&root)).is_err());
-        let cache = home().join("Library/Caches/protonctl/exports");
+        let cache = cache_dir().join("exports");
         assert!(Export::new(&cfg(cache), Some(&root)).is_err());
         let outside = tempfile::tempdir().unwrap();
         let ok = Export::new(&cfg(outside.path().join("exports")), Some(&root)).unwrap();
