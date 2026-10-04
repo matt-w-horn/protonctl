@@ -9,7 +9,7 @@
 
 pub mod cli;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io::{Read, Write as _};
 use std::os::macos::fs::MetadataExt;
@@ -692,24 +692,28 @@ impl Drive {
 /// back a page token, inside the 150 s limit `reply()` enforces (R8).
 const MANIFEST_BUDGET: Duration = Duration::from_secs(120);
 
-/// A manifest page token: the manifest's file name, the index of the next
-/// folder to list, and `tree_print` of the folders the walk found.
-fn manifest_token(name: &str, next: usize, folders: &[&str]) -> String {
-    format!("{name}:{next}:{}", tree_print(folders))
+/// A manifest page token: the manifest's file name, `folder_print` of the
+/// folder it inventories, and the last folder listed, in hex so that no
+/// character of a name reaches the token. The next call goes on from the
+/// disk around that folder (`next_folder`), so the token holds across
+/// processes and while the tree changes, as mail's search cursor does.
+fn manifest_token(name: &str, top: &str, done: &str) -> String {
+    format!("{name}:{}:{}", folder_print(top), hex::encode(done))
 }
 
-/// 16 hex digits naming a list of folders, so a page token goes on only
-/// with the folder it began in, and only while the tree under it is unchanged.
-fn tree_print(folders: &[&str]) -> String {
-    let mut sums = digest::bytes(folders.join("\0").as_bytes()).sha256;
+/// 16 hex digits naming the folder a manifest inventories, so a page token
+/// goes on only with the folder it began in.
+fn folder_print(top: &str) -> String {
+    let mut sums = digest::bytes(top.as_bytes()).sha256;
     sums.truncate(16);
     sums
 }
 
-fn read_manifest_token(token: &str) -> Result<(String, usize, String)> {
+/// A manifest page token's file name, folder print and last folder listed.
+fn read_manifest_token(token: &str) -> Result<(String, String, String)> {
     let invalid = || anyhow!("invalid pageToken; pass the nextPageToken exactly as returned");
     let mut parts = token.split(':');
-    let (Some(name), Some(next), Some(print), None) =
+    let (Some(name), Some(print), Some(done), None) =
         (parts.next(), parts.next(), parts.next(), parts.next())
     else {
         return Err(invalid());
@@ -722,10 +726,81 @@ fn read_manifest_token(token: &str) -> Result<(String, usize, String)> {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.');
     let printed = print.len() == 16 && print.bytes().all(|b| b.is_ascii_hexdigit());
-    match (named && printed, next.parse()) {
-        (true, Ok(next)) => Ok((name.to_string(), next, print.to_string())),
+    let done = hex::decode(done)
+        .ok()
+        .and_then(|d| String::from_utf8(d).ok());
+    match (named && printed, done) {
+        (true, Some(done)) => Ok((name.to_string(), print.to_string(), done)),
         _ => Err(invalid()),
     }
+}
+
+/// Whether the Drive path `p` is `top` or lies under it, with no empty,
+/// `.` or `..` part: a page token's folder is checked before anything is read.
+fn within(top: &str, p: &str) -> bool {
+    let clean = p == "/"
+        || (p.starts_with('/')
+            && p.split('/')
+                .skip(1)
+                .all(|x| !x.is_empty() && x != "." && x != ".."));
+    clean && (top == "/" || p == top || p.starts_with(&format!("{top}/")))
+}
+
+/// The order folders are listed in: by name, case and normalization aside,
+/// then exactly, so the order is total.
+fn order(e: &Entry) -> (&str, &str) {
+    (&e.key, e.name())
+}
+
+/// The entries directly in the folder at the Drive path `folder`, in
+/// `order`, from the app's folder, left out as `walk_from` leaves them out.
+/// Empty when the folder is gone, excluded, or reached through a symlink,
+/// which a forged page token could name but no listing would.
+fn folder_entries(root: &Path, exclude: &[String], folder: &str) -> Vec<Entry> {
+    let Ok((disk, _, real)) = resolve(root, exclude, folder) else {
+        return Vec::new();
+    };
+    if fold(&real) != fold(folder) {
+        return Vec::new();
+    }
+    let base = if folder == "/" { "" } else { folder };
+    let mut entries: Vec<Entry> = entries_in(&disk, base, exclude)
+        .into_iter()
+        .map(|(_, e)| e)
+        .collect();
+    entries.sort_by(|a, b| order(a).cmp(&order(b)));
+    entries
+}
+
+/// The folder listed after `done` in a manifest of `top`: depth first, each
+/// folder's subfolders in `order`. `children` are `done`'s entries. Found
+/// from the disk around `done` alone, so a folder deleted since, `done`
+/// included, only changes what comes next, and one added after the point
+/// reached is listed.
+fn next_folder(
+    root: &Path,
+    exclude: &[String],
+    top: &str,
+    done: &str,
+    children: &[Entry],
+) -> Option<String> {
+    if let Some(first) = children.iter().find(|e| e.folder) {
+        return Some(first.path.clone());
+    }
+    let mut at = done;
+    while at != top {
+        let up = parent(at);
+        let name = at.rsplit('/').next().unwrap_or_default();
+        let key = fold(name);
+        let after = folder_entries(root, exclude, up)
+            .into_iter()
+            .find(|e| e.folder && order(e) > (key.as_str(), name));
+        if let Some(e) = after {
+            return Some(e.path);
+        }
+        at = up;
+    }
+    None
 }
 
 impl Drive {
@@ -757,16 +832,11 @@ impl Drive {
                  does: protonctl does not walk the remote tree (Proton's SDK rules)"
             );
         };
-        let (path, mut entries, walked) = self.walk_asked(root, req.path.as_deref()).await?;
-        entries.sort_by(|a, b| a.path.cmp(&b.path));
-        // The folders to list, in a fixed order: the one asked for, then every one under it.
-        let folders: Vec<&str> = std::iter::once(path.as_str())
-            .chain(entries.iter().filter(|e| e.folder).map(|e| e.path.as_str()))
-            .collect();
-        let (name, start) = match req.page_token.as_deref() {
+        let (disk, top) = self.manifest_folder(root, req.path.as_deref()).await?;
+        let (name, done) = match req.page_token.as_deref() {
             None => {
                 let at = Utc::now().format("%Y%m%dT%H%M%S%.6fZ");
-                (format!("drive-{at}.jsonl"), 0)
+                (format!("drive-{at}.jsonl"), None)
             }
             Some(token) => {
                 // Only withSha1 manifests take more than one call.
@@ -776,14 +846,14 @@ impl Drive {
                          a new manifest without pageToken"
                     );
                 }
-                let (name, next, print) = read_manifest_token(token)?;
-                if print != tree_print(&folders) || next > folders.len() {
+                let (name, print, done) = read_manifest_token(token)?;
+                if print != folder_print(&top) || !within(&top, &done) {
                     bail!(
-                        "this pageToken is for another folder, or the Drive changed since the \
-                         manifest began; start a new one without pageToken"
+                        "this pageToken is for another folder; pass the path the manifest began \
+                         with, or start a new one without pageToken"
                     );
                 }
-                (name, next)
+                (name, Some(done))
             }
         };
         let file = export.dir(&["manifests"])?.join(&name);
@@ -799,47 +869,36 @@ impl Drive {
         let mut write = |row: &Value| -> Result<()> {
             writeln!(out, "{row}").with_context(|| format!("cannot write {}", file.display()))
         };
-        let (mut rows, mut next) = (0, folders.len());
-        if req.with_sha1 {
-            let mut children: HashMap<&str, Vec<&Entry>> = HashMap::new();
-            for e in &entries {
-                children.entry(parent(&e.path)).or_default().push(e);
-            }
+        let mut result = json!({ "manifest": file, "provenance": PROVENANCE });
+        let resume = if req.with_sha1 {
+            let (rows, listed, resume) = self.list_folders(root, &top, done, cli, deadline).await?;
             // Written once this call's folders are all listed, so a call that
             // fails or is cut off adds no row its retry would repeat.
-            let mut listed = Vec::new();
-            next = start;
-            while next < folders.len() {
-                if next > start && Instant::now() >= deadline {
-                    break;
-                }
-                let folder = folders[next];
-                let mine = children.get(folder).map(Vec::as_slice).unwrap_or_default();
-                listed.extend(self.listed_rows(folder, mine, cli, root).await?);
-                next += 1;
-            }
-            for row in &listed {
+            for row in &rows {
                 write(row)?;
             }
-            rows = listed.len();
+            result["rows"] = json!(rows.len());
+            result["foldersListed"] = json!(listed);
+            resume
         } else {
+            let (base, exclude) = (
+                if top == "/" { "" } else { &top }.to_string(),
+                self.exclude.clone(),
+            );
+            let (mut entries, walked) =
+                tokio::task::spawn_blocking(move || walk_from(&disk, &base, &exclude)).await?;
+            entries.sort_by(|a, b| a.path.cmp(&b.path));
             for e in &entries {
                 write(&e.json())?;
-                rows += 1;
             }
-        }
+            result["rows"] = json!(entries.len());
+            result["walkComplete"] = json!(walked);
+            None
+        };
         drop(write);
-        let complete = next == folders.len();
-        let mut result = json!({
-            "manifest": file,
-            "rows": rows,
-            "foldersListed": if req.with_sha1 { next - start } else { 0 },
-            "foldersLeft": folders.len() - next,
-            "complete": complete,
-            "walkComplete": walked,
-            "nextPageToken": (!complete).then(|| manifest_token(&name, next, &folders)),
-            "provenance": PROVENANCE,
-        });
+        let complete = resume.is_none();
+        result["complete"] = json!(complete);
+        result["nextPageToken"] = json!(resume.map(|done| manifest_token(&name, &top, &done)));
         if complete {
             let at = file.clone();
             let sums = tokio::task::spawn_blocking(move || digest::file(&at)).await??;
@@ -848,15 +907,10 @@ impl Drive {
         Ok(result)
     }
 
-    /// The real Drive path of the folder `asked` names under `root`, and
-    /// everything under it from the app's folder, with whether the walk
-    /// finished within its limits. The walk names entries by the real path,
-    /// so exclusions hold through a symlink to the folder (R7).
-    async fn walk_asked(
-        &self,
-        root: &Path,
-        asked: Option<&str>,
-    ) -> Result<(String, Vec<Entry>, bool)> {
+    /// Where on disk the folder `asked` names under `root` is, and its real
+    /// Drive path. A manifest names entries by the real path, so exclusions
+    /// hold through a symlink to the folder (R7).
+    async fn manifest_folder(&self, root: &Path, asked: Option<&str>) -> Result<(PathBuf, String)> {
         let (root, exclude) = (root.to_path_buf(), self.exclude.clone());
         let asked = asked.unwrap_or("/").to_string();
         tokio::task::spawn_blocking(move || -> Result<_> {
@@ -867,15 +921,48 @@ impl Drive {
                     escape_hidden(&path)
                 );
             }
-            let base = if real == "/" {
-                String::new()
-            } else {
-                real.clone()
-            };
-            let (entries, complete) = walk_from(&disk, &base, &exclude);
-            Ok((real, entries, complete))
+            Ok((disk, real))
         })
         .await?
+    }
+
+    /// Manifest rows for the folders after `done` in a manifest of `top`, or
+    /// from `top` itself when `done` is `None`, one folder at a time until
+    /// the deadline; how many folders were listed; and the last one listed
+    /// when more remain, for the page token. No call walks the whole tree,
+    /// so a tree too large to walk within one call still completes.
+    async fn list_folders(
+        &self,
+        root: &Path,
+        top: &str,
+        done: Option<String>,
+        cli: &Cli,
+        deadline: Instant,
+    ) -> Result<(Vec<Value>, usize, Option<String>)> {
+        // The entries of `folder` and the folder after it, read off the async threads.
+        let step = |folder: String| {
+            let (r, x, t) = (root.to_path_buf(), self.exclude.clone(), top.to_string());
+            tokio::task::spawn_blocking(move || {
+                let entries = folder_entries(&r, &x, &folder);
+                let next = next_folder(&r, &x, &t, &folder, &entries);
+                (entries, next)
+            })
+        };
+        let mut todo = match done {
+            None => Some(top.to_string()),
+            Some(done) => step(done).await?.1,
+        };
+        let (mut rows, mut listed, mut last) = (Vec::new(), 0, None);
+        while let Some(folder) = todo {
+            if listed > 0 && Instant::now() >= deadline {
+                return Ok((rows, listed, last));
+            }
+            let (mine, next) = step(folder.clone()).await?;
+            rows.extend(self.listed_rows(&folder, &mine, cli, root).await?);
+            listed += 1;
+            (todo, last) = (next, Some(folder));
+        }
+        Ok((rows, listed, None))
     }
 
     /// The manifest rows for the entries directly in `folder`, each with what
@@ -884,7 +971,7 @@ impl Drive {
     async fn listed_rows(
         &self,
         folder: &str,
-        mine: &[&Entry],
+        mine: &[Entry],
         cli: &Cli,
         root: &Path,
     ) -> Result<Vec<Value>> {
@@ -1186,26 +1273,37 @@ fn walk_from(dir: &Path, base: &str, exclude: &[String]) -> (Vec<Entry>, bool) {
         if out.len() >= WALK_LIMIT || started.elapsed() > WALK_BUDGET {
             return (out, false);
         }
-        let Ok(items) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for item in items.flatten() {
-            let name = item.file_name().to_string_lossy().nfc().collect::<String>();
-            if name.starts_with('.') {
-                continue;
+        for (disk, e) in entries_in(&dir, &base, exclude) {
+            if e.folder {
+                stack.push((disk, e.path.clone()));
             }
-            let path = join(&base, &name);
-            if is_excluded(exclude, &fold(&path)) {
-                continue;
-            }
-            let Ok(meta) = item.metadata() else { continue };
-            if meta.is_dir() {
-                stack.push((item.path(), path.clone()));
-            }
-            out.push(entry(path, &meta));
+            out.push(e);
         }
     }
     (out, true)
+}
+
+/// The entries directly in the folder `dir`, whose Drive path is `base` (""
+/// for the root), each with its place on disk: hidden names and excluded
+/// paths left out, and nothing for a folder that cannot be read. A symlink
+/// is an entry, never a folder to enter.
+fn entries_in(dir: &Path, base: &str, exclude: &[String]) -> Vec<(PathBuf, Entry)> {
+    let Ok(items) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    items
+        .flatten()
+        .filter_map(|item| {
+            let name = item.file_name().to_string_lossy().nfc().collect::<String>();
+            let path = join(base, &name);
+            if name.starts_with('.') || is_excluded(exclude, &fold(&path)) {
+                return None;
+            }
+            // DirEntry's metadata does not follow a symlink.
+            let meta = item.metadata().ok()?;
+            Some((item.path(), entry(path, &meta)))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -2118,38 +2216,129 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
     }
 
     #[tokio::test]
-    async fn a_manifest_token_from_a_changed_tree_is_refused() {
+    async fn a_manifest_goes_on_after_the_tree_changes_and_in_a_new_process() {
+        let (t, out, bin) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        for f in ["A/a.txt", "B/b.txt", "C/c.txt"] {
+            std::fs::create_dir_all(t.path().join(f).parent().unwrap()).unwrap();
+            std::fs::write(t.path().join(f), "x").unwrap();
+        }
+        let cli = fake_cli(bin.path());
+        for folder in ["/", "/A", "/B", "/B2", "/C"] {
+            answer(bin.path(), "list", folder, &json!([]));
+        }
+        let export = export_into(out.path(), &drive(t.path(), &[]));
+        let mut req = ManifestReq {
+            with_sha1: true,
+            ..Default::default()
+        };
+        // Two calls list "/" and then "/A".
+        for _ in 0..2 {
+            let step = drive(t.path(), &[])
+                .manifest_until(&req, &cli, &export, Instant::now())
+                .await
+                .unwrap();
+            req.page_token = step["nextPageToken"].as_str().map(String::from);
+        }
+        // "/A", the folder the token names, goes, and "/B2" arrives after it.
+        std::fs::remove_dir_all(t.path().join("A")).unwrap();
+        std::fs::create_dir(t.path().join("B2")).unwrap();
+        std::fs::write(t.path().join("B2/b2.txt"), "x").unwrap();
+        // A new Drive, as in another process: nothing is carried but the
+        // token. "/B2" arrived after "/" was listed, so only what it holds
+        // shows.
+        let far = Instant::now() + Duration::from_secs(600);
+        let last = drive(t.path(), &[])
+            .manifest_until(&req, &cli, &export, far)
+            .await
+            .unwrap();
+        assert_eq!(
+            (last["complete"].clone(), last["foldersListed"].clone()),
+            (json!(true), json!(3)),
+            "{last}"
+        );
+        let paths: Vec<String> = manifest(Path::new(last["manifest"].as_str().unwrap()))
+            .iter()
+            .map(|r| r["path"].as_str().unwrap().into())
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "/A",
+                "/B",
+                "/C",
+                "/A/a.txt",
+                "/B/b.txt",
+                "/B2/b2.txt",
+                "/C/c.txt"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_page_token_cannot_reach_an_excluded_or_outside_folder() {
         let (t, out, bin) = (
             tree(),
             tempfile::tempdir().unwrap(),
             tempfile::tempdir().unwrap(),
         );
+        std::fs::create_dir_all(t.path().join("Private/Sub")).unwrap();
+        std::fs::write(t.path().join("Private/Sub/s.txt"), "s").unwrap();
+        std::os::unix::fs::symlink(t.path().join("Private"), t.path().join("Projects/link"))
+            .unwrap();
         let cli = fake_cli(bin.path());
-        answer(bin.path(), "list", "/", &json!([node("Projects", None)]));
+        for folder in ["/", "/Projects", "/Projects/Notes"] {
+            answer(bin.path(), "list", folder, &json!([]));
+        }
         let d = drive(t.path(), &["/Private"]);
         let export = export_into(out.path(), &d);
-        let mut req = ManifestReq {
+        let req = |path: &str, token: Option<String>| ManifestReq {
+            path: Some(path.into()),
             with_sha1: true,
-            ..Default::default()
+            page_token: token,
         };
         let first = d
-            .manifest_until(&req, &cli, &export, Instant::now())
+            .manifest_until(&req("/", None), &cli, &export, Instant::now())
             .await
             .unwrap();
-        req.page_token = first["nextPageToken"].as_str().map(String::from);
-        std::fs::create_dir(t.path().join("Projects/New")).unwrap();
-        let err = d
-            .manifest_until(&req, &cli, &export, Instant::now())
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("changed"), "{err}");
-        for bad in [
-            "x:1:2",
-            "drive-a.jsonl:1",
-            "drive-a/b.jsonl:1:2",
-            "drive-a.jsonl:x:2",
+        let file = PathBuf::from(first["manifest"].as_str().unwrap());
+        let name = file.file_name().unwrap().to_str().unwrap().to_string();
+        let far = Instant::now() + Duration::from_secs(600);
+        // Tokens naming the excluded folder, or a symlink into it: what
+        // follows is found from the folders around them, never their insides.
+        for done in ["/Private", "/Projects/link"] {
+            let token = Some(manifest_token(&name, "/", done));
+            let r = d
+                .manifest_until(&req("/", token), &cli, &export, far)
+                .await
+                .unwrap();
+            assert_eq!(r["complete"], true, "{r}");
+        }
+        let all = std::fs::read_to_string(&file).unwrap();
+        assert!(!all.contains("Sub") && !all.contains("s.txt"), "{all}");
+        // Refused: a folder outside the one the manifest began with, a '..'
+        // part, and a token from a manifest of another folder.
+        for (path, top, done) in [
+            ("/Projects", "/Projects", "/Private"),
+            ("/", "/", "/Projects/../Private"),
+            ("/", "/Projects", "/Projects"),
         ] {
-            assert!(read_manifest_token(bad).is_err(), "{bad}");
+            let forged = req(path, Some(manifest_token(&name, top, done)));
+            let r = d.manifest_until(&forged, &cli, &export, far).await;
+            assert!(r.is_err(), "{path} {top} {done}");
+        }
+        let hex16 = "0123456789abcdef";
+        for bad in [
+            format!("x:{hex16}:2f"),
+            format!("drive-a.jsonl:{hex16}"),
+            format!("drive-a/b.jsonl:{hex16}:2f"),
+            "drive-a.jsonl:xyz:2f".to_string(),
+            format!("drive-a.jsonl:{hex16}:zz"),
+        ] {
+            assert!(read_manifest_token(&bad).is_err(), "{bad}");
         }
     }
 
