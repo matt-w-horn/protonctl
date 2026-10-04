@@ -200,6 +200,11 @@ impl VEvent {
         }
     }
 
+    /// Whether the event repeats, by RRULE or RDATE.
+    pub fn is_recurring(&self) -> bool {
+        self.rrule.is_some() || !self.rdates.is_empty()
+    }
+
     fn cancelled(&self) -> bool {
         self.status
             .as_deref()
@@ -583,7 +588,7 @@ pub fn expand(
             }
             continue;
         }
-        let recurring = e.rrule.is_some() || !e.rdates.is_empty();
+        let recurring = e.is_recurring();
         let skip = overridden.get(e.uid.as_str());
         let lookback = from - e.length(zone) - DST_SLACK;
         for s in series_starts(e, zone, lookback, to) {
