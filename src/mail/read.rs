@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
-use async_imap::types::Fetch;
+use async_imap::types::{Fetch, NameAttribute};
 use chrono::{Duration, Local, NaiveDate};
 use futures::TryStreamExt;
 use mail_parser::{Address, Message, MessageParser, MimeHeaders};
@@ -189,8 +189,10 @@ pub struct AttachmentReq {
 pub enum Mailbox {
     /// All Mail, minus Trash and Spam unless includeTrash.
     All,
-    /// A mailbox found by its special-use attribute, or INBOX.
-    Role(&'static str),
+    /// INBOX, which has no special-use attribute.
+    Inbox,
+    /// The mailbox with this special-use attribute.
+    Role(NameAttribute<'static>),
     Label(String),
 }
 
@@ -251,13 +253,13 @@ fn day_before(today: NaiveDate, value: &str) -> Result<NaiveDate> {
 /// The mailbox an `in:` value names: a special-use role, INBOX, or All Mail.
 fn in_mailbox(value: &str) -> Result<Mailbox> {
     Ok(match value.to_ascii_lowercase().as_str() {
-        "inbox" => Mailbox::Role("inbox"),
-        "sent" => Mailbox::Role("\\sent"),
-        "drafts" => Mailbox::Role("\\drafts"),
-        "archive" => Mailbox::Role("\\archive"),
-        "starred" => Mailbox::Role("\\flagged"),
-        "spam" => Mailbox::Role("\\junk"),
-        "trash" => Mailbox::Role("\\trash"),
+        "inbox" => Mailbox::Inbox,
+        "sent" => Mailbox::Role(NameAttribute::Sent),
+        "drafts" => Mailbox::Role(NameAttribute::Drafts),
+        "archive" => Mailbox::Role(NameAttribute::Archive),
+        "starred" => Mailbox::Role(NameAttribute::Flagged),
+        "spam" => Mailbox::Role(NameAttribute::Junk),
+        "trash" => Mailbox::Role(NameAttribute::Trash),
         "anywhere" | "all" => Mailbox::All,
         _ => bail!(
             "in:{value} is not supported; use inbox, sent, drafts, archive, starred, spam or trash"
@@ -482,7 +484,7 @@ fn resume_at(
 /// The mailbox a `label:` value names: a label, or a folder written as
 /// `list_labels` shows it (`Parent/Child`). When a label and a folder share
 /// a name, `Labels/NAME` or `Folders/NAME` picks one.
-fn label_mailbox(boxes: &[(String, Vec<String>)], label: &str) -> Result<String> {
+fn label_mailbox(boxes: &[(String, Vec<NameAttribute<'static>>)], label: &str) -> Result<String> {
     let found: Vec<&String> = boxes
         .iter()
         .map(|(name, _)| name)
@@ -596,8 +598,8 @@ fn check_thread_id(id: &str) -> Result<()> {
 
 struct Conn {
     session: Session,
-    /// (name, lower-case attributes) for every mailbox.
-    boxes: Vec<(String, Vec<String>)>,
+    /// (name, attributes) for every mailbox.
+    boxes: Vec<(String, Vec<NameAttribute<'static>>)>,
 }
 
 impl Conn {
@@ -610,29 +612,26 @@ impl Conn {
                 let attrs = n
                     .attributes()
                     .iter()
-                    .map(|a| format!("{a:?}").to_ascii_lowercase());
-                let attrs =
-                    attrs.map(|a| format!("\\{}", a.trim_matches(|c: char| !c.is_alphanumeric())));
+                    .cloned()
+                    .map(NameAttribute::into_owned);
                 (n.name().to_string(), attrs.collect())
             })
             .collect();
         Ok(Self { session, boxes })
     }
 
-    fn by_role(&self, role: &str) -> Result<String> {
-        if role == "inbox" {
-            return Ok("INBOX".into());
-        }
+    fn by_role(&self, role: &NameAttribute) -> Result<String> {
         self.boxes
             .iter()
-            .find(|(_, attrs)| attrs.iter().any(|a| a == role))
+            .find(|(_, attrs)| attrs.contains(role))
             .map(|(name, _)| name.clone())
-            .with_context(|| format!("Bridge has no {role} mailbox; is Show All Mail on?"))
+            .with_context(|| format!("Bridge has no {role:?} mailbox; is Show All Mail on?"))
     }
 
     fn name(&self, mailbox: &Mailbox) -> Result<String> {
         match mailbox {
-            Mailbox::All => self.by_role("\\all"),
+            Mailbox::All => self.by_role(&NameAttribute::All),
+            Mailbox::Inbox => Ok("INBOX".into()),
             Mailbox::Role(role) => self.by_role(role),
             Mailbox::Label(label) => label_mailbox(&self.boxes, label),
         }
@@ -711,8 +710,8 @@ impl Conn {
         deadline: Instant,
     ) -> Result<HashSet<String>> {
         let mut ids = HashSet::new();
-        for role in ["\\trash", "\\junk"] {
-            let name = self.by_role(role)?;
+        for role in [NameAttribute::Trash, NameAttribute::Junk] {
+            let name = self.by_role(&role)?;
             ids.extend(self.ids_matching(&name, criteria, deadline).await?);
         }
         Ok(ids)
@@ -1074,7 +1073,7 @@ impl Mail {
         self.with_conn(async |conn| {
             let mut out = Vec::new();
             for (name, attrs) in &conn.boxes {
-                if attrs.iter().any(|a| a == "\\noselect") {
+                if attrs.contains(&NameAttribute::NoSelect) {
                     continue;
                 }
                 // Bridge lists the Labels parent without \\NoSelect but answers
@@ -1942,7 +1941,7 @@ mod tests {
 
     #[test]
     fn labels_and_folders_are_both_searchable() {
-        let boxes: Vec<(String, Vec<String>)> = [
+        let boxes: Vec<(String, Vec<NameAttribute>)> = [
             "INBOX",
             "Folders",
             "Folders/Work",
@@ -2465,7 +2464,7 @@ mod tests {
     fn mailboxes_come_from_in_and_label() {
         assert_eq!(
             compile("in:sent x", day()).unwrap().mailbox,
-            Mailbox::Role("\\sent")
+            Mailbox::Role(NameAttribute::Sent)
         );
         assert_eq!(
             compile("label:\"Project Notes\"", day()).unwrap().mailbox,
