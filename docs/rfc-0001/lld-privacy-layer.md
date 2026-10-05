@@ -9,8 +9,9 @@ parameter, result field, error, command and wire format. Where the RFC
 leaves a choice open, this draft names the choice it is written with and
 the question that can change it; each such choice stays inside one module.
 
-Code locations are `file:line` at that commit. Phase 2 is now built,
-except the Mac checks ([section 9](09-rollout.md)); the code is
+Code locations are `file:line` at that commit. Phase 2 is now built
+([section 9](09-rollout.md)), and its open checks are in
+[docs/todo.md](../todo.md); the code is
 the reference for how it behaves, and [As built](#as-built) lists where it
 differs from this draft. Phases 3 to 5 below are still a design.
 
@@ -784,7 +785,8 @@ sequenceDiagram
 - The pattern detectors and the dictionary are single passes over the
   text (`regex` and `aho-corasick` run in linear time); a 20,000-character
   page is one pass each. HMAC and AES-SIV cost microseconds per entity.
-  M2.4 measures the pipeline on the largest fixture and records it.
+  The pipeline's time on the largest fixture is not measured
+  ([docs/todo.md](../todo.md), T19).
 - GLiNER (Phase 5) is the one stage with a real cost; its runtime is Q23.
 
 ## Testing hooks

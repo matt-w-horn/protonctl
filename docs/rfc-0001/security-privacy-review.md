@@ -5,7 +5,11 @@
 A standing threat model of protonctl: off mode as built at commit 7786b3e,
 and aliases mode as [section 6](06-privacy.md), the
 [low-level design](lld-privacy-layer.md) and the
-[API specification](lld-api.md) describe it. It records the properties the
+[API specification](lld-api.md) describe it. The data flows and the
+invariants' states were checked again against the code at commit cac0a1f
+(2026-10-05), with Phase 2 and the Linux phases P2 to P4 built, and so
+were the threats that signing (Q12), the panic hook (M2.9) and the Linux
+readers' sandbox (Q34) changed. It records the properties the
 design must keep, what can break them, and the tradeoffs behind each
 choice. It is re-run at the end of each phase ([section 8](08-review-process.md)).
 
@@ -41,9 +45,11 @@ made, are in commit 7786b3e.
 
 ### Scope
 
-In scope: protonctl's process (server and CLI), its config and Keychain
-items, its children (the Drive CLI, curl, `osascript` and `textutil`),
-and what crosses from them to the Claude hosts. Out of scope, as non-goals
+In scope: protonctl's process (server and CLI), its config and its items
+in the Keychain or, on Linux, the Secret Service, its memory folder, its
+children (the Drive CLI, curl, `osascript` and `textutil`, and on Linux
+`protonctl convert` with poppler and pandoc), and what crosses from them
+to the Claude hosts. Out of scope, as non-goals
 of [section 1](01-goals.md): code running as root, anyone with access to
 the Proton account, Proton's own clients and servers, and the hosts'
 internals beyond what they store.
@@ -65,7 +71,7 @@ internals beyond what they store.
 | T1 | Authors of third-party content: senders, file authors, invitation senders | text that Claude reads (prompt injection) |
 | T2 | The model, acting on T1's text or its own mistake | every tool, and in Claude Code a shell |
 | T3 | The model provider, and whoever obtains transcripts (a breach, a legal demand) | A5 |
-| T4 | Other code running as the user | the Keychain after an approval, files, ports on 127.0.0.1 |
+| T4 | Other code running as the user | the Keychain after an approval, on Linux the Secret Service once unlocked, files, ports on 127.0.0.1 |
 | T5 | The supply chain: crates, the Drive CLI binary, Bridge | code inside the trust boundary |
 | T6 | The network between the Mac and Proton | the calendar GET; everything else is Proton's E2EE |
 
@@ -73,7 +79,7 @@ internals beyond what they store.
 
 ```mermaid
 flowchart TB
-    subgraph TB0["TB0: the user's Mac, user account"]
+    subgraph TB0["TB0: the user's Mac or Linux computer, user account"]
         subgraph host["Claude host"]
             H["Claude Code, Desktop, Cowork"]
             OT["other tools: shell,<br/>web fetch, connectors"]
@@ -84,15 +90,20 @@ flowchart TB
             PIPE["pipeline<br/>(aliases mode)"]
         end
         subgraph stores["local stores"]
-            KC[("Keychain")]
+            KC[("Keychain; on Linux,<br/>the Secret Service<br/>over D-Bus")]
             CFG[("config")]
             DF[("Drive folder")]
+            DL[("download and export<br/>folders (off mode)")]
+            MEM[("memory folder (aliases mode):<br/>a RAM disk; on Linux,<br/>$XDG_RUNTIME_DIR")]
         end
         subgraph kids["TB2: children and Bridge"]
             BR["Mail Bridge"]
             CLI["proton-drive"]
             CURL["curl"]
-            CONV["osascript, textutil"]
+            CONV["macOS: osascript, textutil"]
+        end
+        subgraph sbx["TB3: Linux sandbox: Landlock, seccomp"]
+            CVT["protonctl convert:<br/>poppler or pandoc"]
         end
     end
     PROTON[("Proton servers")]
@@ -104,7 +115,10 @@ flowchart TB
     P -->|F3| CLI
     P -->|F4| CURL
     P -->|F5| CONV
-    P -->|"F6, F7, F8"| stores
+    P -->|F5| CVT
+    P -->|"F6 to F8, F14, F15"| stores
+    CLI -->|F14| MEM
+    CLI -->|F15| DL
     H -->|F9| TR
     H -->|F10| ANTH
     OT -.->|F11| ANTH
@@ -117,9 +131,9 @@ flowchart TB
     classDef store fill:#FEF9C3,stroke:#CA8A04,color:#422006
     classDef ext fill:#E2E8F0,stroke:#475569,color:#0F172A
     classDef risk fill:#FEE2E2,stroke:#DC2626,color:#7F1D1D
-    class P,CLI,CURL,CONV,BR,H mine
+    class P,CLI,CURL,CONV,CVT,BR,H mine
     class PIPE priv
-    class KC,CFG,DF,TR store
+    class KC,CFG,DF,DL,MEM,TR store
     class PROTON,ANTH ext
     class OT risk
 ```
@@ -128,9 +142,11 @@ flowchart TB
 |---|---|---|---|
 | F1 | tool calls and results | names, IDs, digests, images as Proton shows them | aliases, handles, keyed digests, refs; raw text only after Touch ID |
 | F2 | IMAP commands and messages | EXAMINE and `BODY.PEEK` only | same |
-| F3, F4, F5 | to the Drive CLI: paths in argv, a cleared environment; to curl: the link on stdin; to the converters: file bytes on stdin | as built | same; F5 sandboxed from Phase 4 |
+| F3, F4, F5 | to the Drive CLI: paths in argv, a cleared environment; to curl: the link on stdin; to the converters: file bytes on stdin, on Linux to `protonctl convert`, which enters the sandbox and then runs poppler or pandoc | as built; F5 sandboxed on Linux (Q34) | same; F5 sandboxed on macOS from Phase 4 |
 | F6, F8 | reads of the Drive folder and the config | as built | same |
-| F7 | secrets | Bridge password, links | plus the privacy key |
+| F7 | secrets and the privacy setting, from the Keychain or, on Linux, the Secret Service over D-Bus | Bridge password, links, the setting | plus the privacy key |
+| F14 | a cloud-only Drive file: the CLI writes it into the memory folder, and protonctl reads it, then deletes it | none: F15 instead | a per-process RAM disk on macOS; on Linux a 0700 folder under `$XDG_RUNTIME_DIR`, used only on tmpfs with every swap encrypted or zram; gone at exit (I15) |
+| F15 | files the CLI downloads and attachments protonctl saves, in the download folder; exports and manifests, in the export folder | as built: downloads removed after an hour or at exit; exports kept | none (I15) |
 | F12 | Bridge's and the CLI's traffic | Proton's end-to-end encryption | same |
 | F9, F10 | whatever F1 returned | everything | tokenized, and approved raw items |
 | F11 | whatever the model sends on | not protonctl's | not protonctl's |
@@ -140,29 +156,29 @@ flowchart TB
 
 The properties the design must keep. Each names its requirement, the
 modes it holds in, what enforces it, what checks it, and whether that
-check exists. A property whose check is planned is a claim until the check
-runs.
+check exists. A property whose check is not built is a claim until the
+check runs.
 
 | ID | Invariant | Modes | Enforced by | Checked by | Status |
 |---|---|---|---|---|---|
-| I1 | protonctl never changes or sends from the account (R1) | both | no write paths; IMAP `EXAMINE` and `BODY.PEEK`; the Drive CLI called only for `list`, `info`, `download` and `--version` | forbidden-name test; IMAP command snapshots | built; an exact tool-set test, an IMAP verb allowlist and a stand-in CLI that refuses other calls are planned ([section 7](07-testing.md)) |
+| I1 | protonctl never changes or sends from the account (R1) | both | no write paths; IMAP `EXAMINE` and `BODY.PEEK`; the Drive CLI called only for `list`, `info`, `download` and `--version` | forbidden-name test; each mode's exact tool set; IMAP command snapshots | built; no test refuses an IMAP verb outside the allowed ones, and no stand-in CLI refuses other calls ([docs/todo.md](../todo.md), T10) |
 | I2 | protonctl never holds the Proton password or private keys (R2) | both | Bridge and the Drive CLI hold the session | by reading the code | built |
-| I3 | Secrets live only in the Keychain and never reach argv, the environment, logs or results (R2, R3, R20, R25) | both | `secrecy` types; curl reads the link on stdin; the CLI runs with a cleared environment | the redaction test; the environment test on the stand-in CLI | built for two secrets; the privacy key planned |
+| I3 | Secrets live only in the Keychain, or on Linux the Secret Service, and never reach argv, the environment, logs or results (R2, R3, R20, R25) | both | `secrecy` types, and `Zeroizing` for the privacy key and its subkeys; curl reads the link on stdin; the CLI runs with a cleared environment | the redaction tests; the environment test on the stand-in CLI | built |
 | I4 | protonctl's sockets go only to 127.0.0.1; one HTTPS GET goes to `proton.me` through `/usr/bin/curl` (R3) | both | no HTTP crate; host check | `cargo deny` bans; the host property test | built |
 | I5 | Bridge is pinned and the Drive CLI is Proton's (R9) | both | certificate pin; Team ID on macOS, pinned SHA-256 on Linux; version check | pin tests against a fake Bridge; the per-run pin test against a stand-in CLI | built; the CLI check runs before every run (Q24, Q33) |
-| I6 | An excluded item cannot be told from a missing one, in every tool (R7) | both | `resolve` checks the requested and the resolved path | exclusion and symlink tests; planned: through handles | built |
-| I7 | Third-party text is marked as data and has no hidden characters (R6) | both | `clean`, `escape_hidden`, `provenance` | content property tests | built, except three Drive errors: a path shown unescaped and the Drive CLI's own text passed on uncleaned (milestone M1.5) |
-| I8 | Every call ends within 150 s (R8) | both | `CALL_LIMIT` in `reply()` | by reading the code | built |
-| I9 | Every result and error leaves through `reply()` | both | one function for 18 tools | planned: a test that calls each tool through the server | built; untested |
-| I10 | In aliases mode nothing untokenized leaves because something failed (R13, R26) | aliases | the pipeline returns a fault on any error; no fallback to off | fail-closed test; leak test | planned |
-| I11 | A server serves only the mode it started in (R26) | both | `Privacy::check()` before every call | settings tests | planned |
-| I12 | In aliases mode no result holds a Proton ID, `Message-Id`, UID, raw digest or local path (R16, R17) | aliases | field policies; an unlisted string field is dropped and named in `dropped` | leak test with planted IDs; field coverage test | planned |
-| I13 | Identifiers are deterministic under one key, and nothing maps them back on disk (R14, principle 8) | aliases | HMAC and AES-SIV from HKDF subkeys | stability and round-trip tests | planned |
-| I14 | Raw content in aliases mode needs fresh user presence, for one item, with a prompt protonctl writes (R18, R19) | aliases | `Presence`, `Approvals`, the prompt's form | user-presence tests with an injectable checker | planned (Phase 3) |
-| I15 | In aliases mode protonctl writes no content to disk (R10) | aliases | no download or export folder; a RAM disk for cloud-only Drive files (Q14), on Linux `$XDG_RUNTIME_DIR` when it is tmpfs, private, and every swap is encrypted | the no-disk test; the memory disk test | built |
-| I16 | Logs and panics carry no content (R25) | both | WARN-level logs; a panic hook | the stderr test; a planted panic | logs built; the panic hook planned |
-| I18 | A feature on Linux meets the same requirement as on macOS, or is absent ([section 11](11-platforms.md)) | both | tools registered per platform; `get_status` names what is absent and why | a surface snapshot per platform and mode | planned (Phase P) |
-| I17 | Converters reach no network, Keychain or file writes (R21) | both | a sandbox profile; on Linux, Landlock and seccomp in `protonctl convert` (Q34) | the converter sandbox test | built on Linux; macOS planned (Phase 4, Q13) |
+| I6 | An excluded item cannot be told from a missing one, in every tool (R7) | both | `resolve` checks the requested and the resolved path | exclusion and symlink tests; the test of an excluded file reached through a handle | built |
+| I7 | Third-party text is marked as data and has no hidden characters (R6) | both | `clean`, `escape_hidden`, `provenance` | content property tests; the M1.5 tests with U+202E in Drive errors | built |
+| I8 | Every call ends within 150 s (R8) | both | `CALL_LIMIT` in `Server::call` | by reading the code | built |
+| I9 | Every result and error leaves through one function, `Server::call` | both | one function for every tool of both modes; `reply()` in off mode, the pipeline in aliases mode | a test that calls each tool through the server | built; that test is not built ([docs/todo.md](../todo.md), T2) |
+| I10 | In aliases mode nothing untokenized leaves because something failed (R13, R26) | aliases | the pipeline returns a fault on any error or panic; no fallback to off | fail-closed test; leak test | built; the leak tests cover a mail search, events and the Drive tools, not every tool ([docs/todo.md](../todo.md), T1), and the fail-closed test is not built (T3) |
+| I11 | A server serves only the mode it started in (R26) | both | `Privacy::check()` before every call | settings tests | built |
+| I12 | In aliases mode no result holds a Proton ID, `Message-Id`, UID, raw digest or local path (R16, R17) | aliases | field policies; an unlisted string field is dropped and named in `dropped` | leak test with planted IDs; field coverage test | built |
+| I13 | Identifiers are deterministic under one key, and nothing maps them back on disk (R14, principle 8) | aliases | HMAC and AES-SIV from HKDF subkeys | stability and round-trip tests | built; stability across two processes is not tested ([docs/todo.md](../todo.md), T4) |
+| I14 | Raw content in aliases mode needs fresh user presence, for one item, with a prompt protonctl writes (R18, R19) | aliases | `Presence`, `Approvals`, the prompt's form | user-presence tests with an injectable checker | not built (Phase 3) |
+| I15 | In aliases mode protonctl writes no content to disk (R10) | aliases | no download or export folder; a RAM disk for cloud-only Drive files (Q14), on Linux `$XDG_RUNTIME_DIR` when it is tmpfs, private, and every swap is encrypted | the no-disk test; the memory disk test | built; the test of every tool against the home folder is not built ([docs/todo.md](../todo.md), T7) |
+| I16 | Logs and panics carry no content (R25) | both | WARN-level logs; a panic hook | the stderr test; a planted panic | built |
+| I18 | A feature on Linux meets the same requirement as on macOS, or is absent ([section 11](11-platforms.md)) | both | tools registered per platform; `get_status` names what is absent and why | a surface snapshot per platform and mode | P1 to P4 built: no tool is absent on Linux, and each mode's one snapshot passes on Linux; whether `reveal_*` is absent there is P5 (Phase 3) |
+| I17 | Converters reach no network, Keychain or file writes (R21) | both | a sandbox profile; on Linux, Landlock and seccomp in `protonctl convert` (Q34) | the converter sandbox test | built on Linux; not built on macOS (Phase 4, Q13) |
 
 ## 3. Threats
 
@@ -174,14 +190,14 @@ runs.
 | Spoofing | A fake `proton-drive` earlier on PATH, or swapped in after the check | F3 | mitigate | absolute path; Team ID or pinned SHA-256 before every run, and the version (I5, Q24, Q33) | low; a swap between the check and the run remains |
 | Spoofing | A look-alike calendar host | F13 | mitigate | host check and its property test (I4) | low |
 | Spoofing | A subject or file name written to make the Touch ID prompt look harmless | Phase 3 prompt | mitigate | protonctl writes the prompt; the name comes last, cleaned, cut and quoted (R18) | low |
-| Spoofing | A replaced `protonctl` binary whose Keychain prompt looks like a rebuild's | F7 | mitigate | a self-signed signing identity from Phase 2, so a prompt after a rebuild stops being routine (Q12) | medium until Phase 2 |
+| Spoofing | A replaced `protonctl` binary whose Keychain prompt looks like a rebuild's | F7 | mitigate | a self-signed signing identity, made and used by `scripts/install.sh` since 2026-10-04, so a prompt after a rebuild is no longer routine (Q12) | low on macOS; on Linux, the Secret Service row below applies |
 | Tampering | The model edits the config: an exclusion removed, the mode set to off | F8 | transfer | Claude Code's sandbox can deny the write (Q17); the mode lives in the Keychain from Phase 2 (Q28), so the file cannot turn the layer off | medium in Claude Code for exclusions; none in Cowork |
 | Tampering | `PROTON_DRIVE_BASE_URL` in the host's environment | F3 | eliminate | the CLI runs with `HOME` and the log level only | low |
 | Tampering | A forged or altered handle, ref or page token | F1 | mitigate | AES-SIV authenticates every one; a failure is `invalid_*` (I13) | low |
 | Repudiation | protonctl keeps no record of calls | all | accept | read-only (I1); a call log was declined on 2026-10-03; the hosts' transcripts are the record | low |
 | Information disclosure | Injected text has Claude send what protonctl returned through another tool | F11 | transfer | session setup and Claude Code's sandbox (Q17); in aliases mode a result holds aliases, and raw text needs Touch ID | high in off mode; medium in aliases mode |
 | Information disclosure | Errors quote paths, labels or a client's output | F1 | mitigate | fixed fault codes in aliases mode; off mode quotes them by design | low |
-| Information disclosure | A panic prints part of a string to stderr, which hosts keep | F9 | mitigate | panic hook (I16) | medium until M2.9 |
+| Information disclosure | A panic prints part of a string to stderr, which hosts keep | F9 | mitigate | panic hook, built in M2.9: a fixed line with the code location only (I16) | low |
 | Information disclosure | Another program reads protonctl's Keychain items after an Always Allow | F7 | accept | user habit; Claude Code's sandbox can deny `security` (Q17); the data-protection keychain needs an entitlement that a self-signed identity cannot carry (Q12) | medium |
 | Information disclosure | Hosts keep results in transcripts and logs on disk, and Time Machine copies them | F9 | transfer | the hosts' retention settings; outside protonctl | medium |
 | Denial of service | Throttling or a CAPTCHA from Proton | F12 | mitigate | official clients; serialized CLI calls; no remote tree walks; a 15-minute calendar cache | low |
@@ -189,7 +205,7 @@ runs.
 | Denial of service | A crafted file stalls a converter | F5 | mitigate | 60 s limit, 32 MiB output cap, `kill_on_drop` | low |
 | Denial of service | Injected text runs `rotate-key`, `setup privacy --off` or `logout` through the CLI | CLI | mitigate | Phase 2: they refuse when stdin is not a terminal, which a faked terminal (`script`) defeats; Phase 3: user presence ([API specification](lld-api.md#command-line)) | medium in Claude Code until Phase 3 |
 | Elevation of privilege | The model uses the shell to run `proton-drive`, read the Drive folder or speak IMAP, around protonctl | TB0 | transfer | Claude Code's sandbox (Q17); R19 covers protonctl's own CLI only | high in Claude Code without a sandbox; none in Cowork |
-| Elevation of privilege | A crafted PDF or image exploits a converter | F5 | mitigate | sandbox profile (Phase 4), a VM helper for the riskiest formats (Phase 7) | medium until Phase 4 |
+| Elevation of privilege | A crafted PDF or image exploits a converter | F5 | mitigate | on Linux, Landlock and seccomp in `protonctl convert`, built 2026-10-05 (I17, Q34); on macOS, a sandbox profile (Phase 4); a VM helper for the riskiest formats (Phase 7) | low on Linux; medium on macOS until Phase 4 |
 | Information disclosure | On Linux, any process in the user's session reads protonctl's Secret Service items over D-Bus once the collection is unlocked, with no per-program prompt like the Keychain's | TB0 | accept | a collection unlocked only while needed; Q31 chose the Secret Service, which Bridge and the Drive CLI need on Linux anyway | medium on Linux |
 | Elevation of privilege | On Linux the model usually has a shell, in Claude Code or Claude Desktop's Code tab | TB0 | transfer | Claude Code's sandbox (Q17) | high on Linux without a sandbox |
 | Elevation of privilege | A dependency is compromised | TB1 | mitigate | a small set; `Cargo.lock`; `cargo deny` | low |
@@ -245,12 +261,12 @@ The cheat sheet's review questions, answered for this model:
 
 | Question | Answer |
 |---|---|
-| Does the data-flow diagram reflect the system? | For off mode, yes: drawn from the code at 7786b3e. For aliases mode it reflects a design; it is checked again when each phase closes. |
-| Have all threats been identified? | Not yet: the Cowork cloud path and where each host stores results (M1.1), and how LocalAuthentication is reached (Q15), are unmeasured. Each is a milestone. |
+| Does the data-flow diagram reflect the system? | Yes: drawn from the code at 7786b3e, and checked again at cac0a1f (2026-10-05). That check added the memory folder, the Secret Service and `protonctl convert`, and the off-mode download and export folders, which the first drawing left out. It is checked again when each phase closes. |
+| Have all threats been identified? | No: the Cowork cloud path and where each host stores results (M1.1), how LocalAuthentication is reached (Q15), and how Claude Desktop's Linux beta and Cowork's virtual machine reach a local server are not measured ([docs/todo.md](../todo.md), Not started, M5 and L3). |
 | Does each threat have a response? | Yes: every row in section 3 names one. The accepted risks are the linking, identifying and non-repudiation rows the design takes on for stability, the calendar link, Keychain readability, and repudiation. |
 | Do the mitigations reduce risk to an acceptable level? | Off mode: as the user chose it. Aliases mode: not until Phase 5 for names that appear only in free text, though the process-wide dictionary (Q22) narrows that gap to names that never appear in a header or invitation; the "high" rows say so. |
 | Is the model documented and accessible? | This file, with the RFC; it is versioned in the repository. |
-| Can the mitigations be tested? | Every invariant names its check. Built checks: I1, I3 to I7, I16 (logs). Planned: I9 to I15, I16 (panics), I17. The planned checks are listed in [section 7](07-testing.md) and tied to milestones in [section 9](09-rollout.md). |
+| Can the mitigations be tested? | Every invariant names its check. Built checks: I1, I3 to I7, I10 to I13, I15, I16, I17 on Linux and I18 for P1 to P4, some of them in part, as the table says; I2 and I8 are checked by reading the code. Not built: I9's test, I14 (Phase 3) and I17 on macOS (Phase 4). [Section 7](07-testing.md) says which planned tests exist, and [docs/todo.md](../todo.md) lists the missing ones (T1 to T19). |
 
 ---
 

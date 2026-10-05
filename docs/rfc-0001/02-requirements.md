@@ -28,12 +28,14 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
 - R2. protonctl MUST NOT read, store, or receive the Proton account password or
   private keys. Its only secrets are the Bridge password, the calendar
   link(s) and, in aliases mode, the privacy key (R20), kept in the macOS
-  Keychain and never logged or returned. In memory each is a `secrecy`
+  Keychain or, on Linux, the Secret Service (Q31), and never logged or
+  returned. In memory each is a `secrecy`
   secret type (`SecretString` for the password and the links): its `Debug`
   output is redacted (a test holds this), and its README says it is wiped
-  on drop (not tested). Copies
-  made inside the Security framework, async-imap, rustls and curl's stdin
-  pipe are beyond its reach.
+  on drop (not tested; [docs/todo.md](../todo.md), T14). Copies
+  made inside the Security framework, the `secret-service` crate and its
+  D-Bus session, async-imap, rustls and curl's stdin pipe are beyond its
+  reach.
 - R3. protonctl's own sockets MUST go only to 127.0.0.1 (Bridge). The one
   internet request, the calendar feed GET, MUST run through `/usr/bin/curl`
   with the URL on stdin (never in argv), and only for an `https` URL whose host
@@ -219,7 +221,8 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   in one second). The
   password calls protonctl makes today target the file-based login
   keychain, whose items iCloud does not sync, so "does not synchronize"
-  should hold without more (to confirm in M2.1); but any program running
+  should hold without more (not confirmed; [docs/todo.md](../todo.md),
+  M6); but any program running
   as the user can read such an item after one Always Allow,
   `/usr/bin/security` included ([section 5](05-security.md)). Binding the item to user
   presence would need the data-protection keychain, and so an entitlement

@@ -116,7 +116,8 @@ flowchart LR
   result into the session's transcript under `~/.claude/projects/` (deleted
   after `cleanupPeriodDays`, 30 by default); Claude Desktop keeps each
   server's stderr, and has been seen to log whole MCP messages, under
-  `~/Library/Logs/Claude/` (to confirm in M1.1). Typed names and approved
+  `~/Library/Logs/Claude/` (not confirmed; M1.1 in
+  [docs/todo.md](../todo.md), Not started). Typed names and approved
   raw text land there in plaintext, and Time Machine copies both. R10
   cannot reach these files.
 - Approving Touch ID can become a habit too. Each prompt names one item,
@@ -127,7 +128,9 @@ flowchart LR
 - A server killed with SIGKILL, or one that crashes, leaves its download
   folder under `~/Library/Caches/protonctl/downloads/` until someone deletes
   it. In aliases mode there is no download folder; a RAM disk left behind holds
-  at most the files of one process and is gone after a restart.
+  at most the files of one process and is gone after a restart. On Linux
+  the memory folder under `$XDG_RUNTIME_DIR` stays until logout
+  ([docs/todo.md](../todo.md), B1).
 
 ---
 
