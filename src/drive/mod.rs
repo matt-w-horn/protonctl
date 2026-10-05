@@ -762,15 +762,25 @@ impl Drive {
 
     /// The bytes of the file `locate` found, at most `MAX_SOURCE`: from this
     /// Mac when they are here, else through the CLI into the download folder,
-    /// whose copy goes as soon as it is read. Read off the async threads,
-    /// where a File Provider stall cannot stop the R8 time limit.
+    /// or in aliases mode the memory disk, whose copy goes as soon as it is
+    /// read. Read off the async threads, where a File Provider stall cannot
+    /// stop the R8 time limit.
     async fn bytes(&self, local: Option<PathBuf>, real: &str, cli: &Cli) -> Result<Vec<u8>> {
         // A file that is not on this Mac comes through the CLI, never the app's
         // File Provider, whose downloads on demand can stall (RFC principle 5).
         let (disk, fetched) = if let Some(disk) = local {
             (disk, None)
         } else {
-            let got = fetch(cli, real, None).await?;
+            let got = if crate::content::disk_allowed() {
+                fetch(cli, real, None).await?
+            } else {
+                let dir = crate::content::blocking(crate::content::memory_folder).await??;
+                let got = download(cli, real, &dir).await;
+                if got.is_err() {
+                    std::fs::remove_dir_all(&dir).ok();
+                }
+                got?
+            };
             let dir = got.parent().map(Path::to_path_buf);
             (got, dir)
         };
@@ -3342,6 +3352,45 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
             "{argv}"
         );
         assert!(!folder.exists(), "{} is still there", folder.display());
+    }
+
+    /// RFC M2.8: aliases mode reads a cloud-only file through the memory
+    /// disk, never the download folder. Makes a real RAM disk, which Claude
+    /// Code's sandbox refuses.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn an_aliases_mode_cloud_only_read_goes_through_the_memory_disk() {
+        use std::os::unix::fs::MetadataExt as _;
+        let bin = tempfile::tempdir().unwrap();
+        let cli = fake_cli(bin.path());
+        answer(
+            bin.path(),
+            "info",
+            "/notes.txt",
+            &node("notes.txt", Some(5)),
+        );
+        let req = ReadReq {
+            path: "/notes.txt".into(),
+            ..Default::default()
+        };
+        let d = cli_drive(&[]);
+        let read = crate::content::restricted(
+            crate::content::no_mentions(),
+            d.read_file_content(&req, &cli),
+        )
+        .await;
+        let argv = std::fs::read_to_string(bin.path().join("argv.txt")).unwrap();
+        let folder = PathBuf::from(argv.lines().last().unwrap());
+        let mount = folder.parent().unwrap().to_path_buf();
+        let mounted = std::fs::metadata(&mount).map(|m| m.dev()).ok()
+            != std::fs::metadata(mount.parent().unwrap())
+                .map(|m| m.dev())
+                .ok();
+        crate::platform::remove_memory_disk();
+        assert_eq!(read.unwrap().json["content"], "hello");
+        assert!(mounted, "{} was not a mounted disk", mount.display());
+        assert!(!folder.exists(), "{} is still there", folder.display());
+        assert!(!mount.exists(), "{} is still there", mount.display());
     }
 
     #[test]

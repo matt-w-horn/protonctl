@@ -215,6 +215,19 @@ if files:
     first = call("read_file_content", one, page)
     if first and first.get("nextOffset"):
         call("read_file_content", {**one, "offset": first["nextOffset"]}, page, label="next page")
+# Through the CLI: into the download folder, or in aliases mode the memory disk (M2.8).
+def fetched(d: dict) -> str:
+    """A cloud-only text file's content came back, so the fetch worked."""
+    if d.get("content") is None:
+        failures.append("cloud-only read: no content")
+    return page(d)
+
+
+cloud = [f for f in (texts or {}).get("files", []) if f.get("cloudOnly") and 0 < (f.get("size") or 0) <= 256 * 1024]
+if cloud:
+    call("read_file_content", target(cloud[0]), fetched, label="cloud-only")
+else:
+    print("skip  read_file_content (cloud-only)     no cloud-only file found")
 if files and not aliases:
     path = files[0]["path"]
     call("download_file", {"path": path}, lambda d: (

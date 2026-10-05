@@ -2665,10 +2665,12 @@ mod tests {
         insta::assert_json_snapshot!("imap_commands", sent.lock().unwrap().clone());
         // Aliases mode saves nothing (RFC R10): the reason alone, in fields
         // that each have a privacy policy.
-        let unsaved =
-            crate::content::restricted(mail.get_attachment(&attach(false), None, no_export()))
-                .await
-                .unwrap();
+        let unsaved = crate::content::restricted(
+            crate::content::no_mentions(),
+            mail.get_attachment(&attach(false), None, no_export()),
+        )
+        .await
+        .unwrap();
         assert!(
             unsaved.json["content"].is_null()
                 && unsaved.json["reason"].is_string()

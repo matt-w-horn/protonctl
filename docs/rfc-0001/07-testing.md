@@ -2,8 +2,9 @@
 
 # 7. Testing
 
-Built (132 tests, `cargo test`: 126 unit, 6 against the built binary; one
-more, ignored by default, lists Drive through the real CLI). Live,
+Built (203 tests on a Mac on 2026-10-04, `cargo test`: 197 unit, 6
+against the built binary; one more, ignored by default, lists Drive
+through the real CLI; the macOS-only tests do not run on Linux). Live,
 `scripts/live-check.py` runs every tool once over MCP, as the Claude app
 does, against the real calendar link, Bridge and Drive, and prints counts
 only. On 2026-10-03 all 15 tools then built passed; its provenance check
@@ -147,6 +148,11 @@ manifest with its SHA-256, each removed afterwards. The tests:
     the match flag always true, and with SHA-256 in place of SHA-1).
   - A cloud-only read deletes its fetched copy at once (shown to fail when
     it stayed until exit).
+  - In aliases mode a cloud-only read goes through the memory disk (M2.8):
+    the CLI writes into a folder on a mounted RAM disk, the content comes
+    back, and the folder and then the disk are gone (shown to fail with
+    the download folder used, as before, which aliases mode refuses).
+    macOS only; Claude Code's sandbox refuses the RAM disk.
   - Two handles on the CLI lock file exclude each other, and a CLI run
     waits while another holds it (shown to fail with no lock taken, and
     with the run not taking it).
@@ -418,6 +424,13 @@ before it is trusted:
   and a page token carries no name, path or UID in any encoding (R13, R16).
 - Fail closed: a pipeline stage made to fail returns an error with none of
   the planted values.
+- Page edges (built 2026-10-04, after the first live aliases-mode run): a
+  file holding an address and a phone number, read 16 characters at a
+  time in aliases mode, returns neither in part, and its last words
+  still come back (shown to fail with pages cut as before: the first page
+  ended `jane.do`, raw). `truncate` in aliases mode moves its cut off a
+  mention, back to its start or past its end (shown to fail with the old
+  `truncate`, which left `to ann`).
 - Rotation: a server running while `rotate-key` replaces the key gives new
   aliases on its next call, and refuses the old handles.
 - Names in queries: a typed name is plaintext in that call's result and an

@@ -4,7 +4,7 @@
 //! tests run here, but it serves nothing.
 
 use std::fs::Metadata;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 
@@ -66,3 +66,12 @@ pub fn cloud_storage() -> Option<PathBuf> {
 pub fn cloud_only(_meta: &Metadata) -> bool {
     false
 }
+
+/// Q14 chose `$XDG_RUNTIME_DIR`; it waits for Drive on Linux (Phase P3).
+pub fn memory_disk(_mount: &Path) -> Result<PathBuf> {
+    Err(anyhow!(
+        "protonctl has no memory disk on Linux yet (RFC-0001 section 11, Q14)"
+    ))
+}
+
+pub fn remove_memory_disk() {}

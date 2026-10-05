@@ -46,7 +46,7 @@ flowchart TB
 | 0 | Install Bridge, log in, enable All Mail, IMAP over SSL; measure the `--noninteractive` cold start; record `X-Pm-*` headers, UIDPLUS, label-removal semantics on a sandbox message, BODY search on encoded parts; record the CLI's path format, JSON shapes and `fs info` fields; create a dedicated calendar link and note its caching headers. Findings go in [Appendix A](appendix-a-phase-0.md). | Recorded ([Appendix A](appendix-a-phase-0.md)), except the label-removal semantics, which moved to Phase 1b because measuring them writes to the mailbox; withdrawn with Phase 1b |
 | 1a | `serve`, `setup`, `doctor`, `status`, `logout`; read tools for Mail, Drive and Calendar; registration in both hosts; Cowork local and cloud test | Calendar, Drive and Mail reads built, `download_file` included, 18 tools; the 17 built by then passed `scripts/live-check.py` (2026-10-03), and `list_drive_tree` and PDF page images came after; a full live run and the Claude Code and Cowork tests to do (M1.1, M1.2) |
 | 1b | The maintainer writes the policy table: a class for each write tool, and what the server does with each class; Mail and Drive write tools; sandbox write tests | withdrawn 2026-10-04: protonctl is read-only (Q5) |
-| 2 | The privacy setting (R26) and `setup drive`; then aliases mode: the privacy pipeline for all three services at once, at `reply()`, over results, errors and page tokens, failing closed: privacy key, aliases, references, handles, sealed page tokens, keyed digests, the `entities` table, `detectors` and `guidance`; regex with validators and the name dictionary; `download_file`, `export_drive_manifest`, the CLI's `drive manifest`, the `export` and `inline` options, the export and download folders, page images, image content and inline bytes absent in aliases mode and kept in off mode; a panic hook in both modes (R25); the leak test and the `live-check.py` checks. The CLI may be tokenized here too, ahead of Phase 3, since in Phase 2 it is the easy way around the pipeline in Claude Code | built and tested on Linux 2026-10-04, except M2.8 (cloud-only reads) and M2.10 (live checks); the Keychain code and every live check wait for a Mac; the CLI is not tokenized |
+| 2 | The privacy setting (R26) and `setup drive`; then aliases mode: the privacy pipeline for all three services at once, at `reply()`, over results, errors and page tokens, failing closed: privacy key, aliases, references, handles, sealed page tokens, keyed digests, the `entities` table, `detectors` and `guidance`; regex with validators and the name dictionary; `download_file`, `export_drive_manifest`, the CLI's `drive manifest`, the `export` and `inline` options, the export and download folders, page images, image content and inline bytes absent in aliases mode and kept in off mode; a panic hook in both modes (R25); the leak test and the `live-check.py` checks. The CLI may be tokenized here too, ahead of Phase 3, since in Phase 2 it is the easy way around the pipeline in Claude Code | built and tested on Linux 2026-10-04, and M2.8 (cloud-only reads) on a Mac the same day, except M2.10 (live checks); the Keychain code and every live check wait for a Mac; the CLI is not tokenized |
 | 3 | In aliases mode, the `reveal_*` tools, and the CLI tokenized with `--raw` and `--out` behind user presence; Claude Code sandbox settings documented (Q17) | to do; answer Q15 first |
 | 4 | PDFKit and `textutil` under a sandbox profile, directly or behind `protonctl convert`, in both modes; Vision OCR for images and scans in aliases mode | to do; answer Q13 first |
 | 5 | GLiNER (multilingual) through `gline-rs`; short forms within an item; `maybeSameAs`; recall measured on a labeled synthetic corpus | to do; answer Q23 first |
@@ -184,8 +184,12 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
   nothing, and a non-text attachment returns its `reason` alone.
 - M2.8 Cloud-only reads through a per-process RAM disk, since the CLI
   cannot write to stdout (Q14), with the checks Q14 lists.
-  Exit: the no-disk test for a cloud-only read. To do, on a Mac: until
-  then aliases mode refuses a cloud-only read with `invalid_argument`.
+  Exit: the no-disk test for a cloud-only read. Done 2026-10-04 on macOS
+  27: `platform::memory_disk` attaches and mounts the disk without admin
+  rights, and the test failed with the download folder in its place. The
+  checks are recorded in [Appendix A](appendix-a-phase-0.md#memory-disk-m28),
+  with a live read of a cloud-only file the same day.
+  Linux refuses, naming Q14, until Drive comes to Linux (MP3).
 - M2.9 Logs: a panic hook that prints a fixed line, in both modes; keyed
   identifiers in every log line in aliases mode. Exit: the logs and panic
   tests. Done 2026-10-04: the hook prints the code location and never the
@@ -205,6 +209,48 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
   without its key. Exit: the settings tests. Done 2026-10-04 on Linux,
   where the setting cannot be read, so every call gives
   `privacy_mode_unreadable`; the settings tests use a stand-in store.
+
+### Phase 2: defects found on real results, to fix
+
+Found on 2026-10-04 by the first aliases-mode reads of the maintainer's
+own Drive, Mail and Calendar ([Appendix C](appendix-c-roleplay.md#first-real-results-2026-10-04)).
+Examples here are synthetic. Each is open until a test or the evaluation
+(D1) shows it fixed.
+
+- D1 No evaluation of the privacy layer. Nothing measures what passes
+  raw: the leak test plants exact values, and Phase 5's recall
+  measurement (M5.2) comes after the gaps below. Build a harness that
+  runs aliases mode over a labeled synthetic corpus, with each name,
+  organization and project in every form below, and reports per form
+  and per entity type what came back raw, in part or whole, and what was
+  given two aliases. It measures D2 to D7, and each fix must move its
+  number.
+- D2 Short forms of a name pass raw. The dictionary holds correspondents'
+  full display names, so a surname alone ("Lee v. Acme", "Dr. Lee") and a
+  given name alone are not found. M5.2 planned short forms within an
+  item; this is the measured case.
+- D3 Initials pass raw ("JL", "J.L.", "call with JL"). Nothing detects them.
+- D4 Misspelled names pass raw, from typing and above all from OCR ("Jonh
+  Lee", "J0hn Lee", "John Lce"). The dictionary matches exact text after
+  case and accent folding only.
+- D5 Project names pass raw ("the Falcon rewrite", a paper's title, a
+  folder named for a project), in text and in Drive paths and names,
+  which run through the detectors only. Projects need an entity type and
+  a source of names.
+- D6 One entity gets several aliases: a person's full name and another
+  form of it in one result each got their own alias. Forms of one name,
+  one organization or one project should share an alias, or be linked
+  (`maybeSameAs`, M5.2).
+- D7 Organizations and products are typed `person`, or pass raw.
+  Correspondents' display names enter the dictionary as people, so an
+  employer, a storage service or an assistant that sends mail becomes a
+  person alias, and the model cannot tell what it is; a company that
+  never sent mail (an agency, a product's maker) is not found at all.
+- D8 A folder made online-only in the Drive app lists as empty, with no
+  note, in both modes: its listing is not on the Mac, and `entries_in` in
+  `src/drive/mod.rs` returns nothing when `read_dir` gives nothing. It
+  should be listed through the CLI, or say its contents are not on this
+  Mac ([Appendix A](appendix-a-phase-0.md#memory-disk-m28)).
 
 ### Phase 3: raw reads
 

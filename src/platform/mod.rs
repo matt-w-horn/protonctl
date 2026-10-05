@@ -3,7 +3,7 @@
 //! of protonctl is the same on both.
 
 use std::fs::Metadata;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -76,4 +76,17 @@ pub fn cloud_storage() -> Option<PathBuf> {
 /// Whether a file is a cloud-only placeholder whose content is not on this machine.
 pub fn cloud_only(meta: &Metadata) -> bool {
     imp::cloud_only(meta)
+}
+
+/// This process's memory disk, mounted at `mount` on first use and readable
+/// by this user only: where aliases mode lets the Drive CLI write a file it
+/// reads (RFC R10, Q14), since the CLI writes only into a folder. Fails
+/// rather than fall back to the disk.
+pub fn memory_disk(mount: &Path) -> Result<PathBuf> {
+    imp::memory_disk(mount)
+}
+
+/// Detach the memory disk, if this process made one, with everything on it.
+pub fn remove_memory_disk() {
+    imp::remove_memory_disk();
 }

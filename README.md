@@ -77,14 +77,30 @@ its bytes come back in the result, base64, which not every host accepts yet.
 ## Install
 
 ```sh
-cargo install --path . --locked --root ~/.cargo
+scripts/install.sh
 ```
 
+It builds protonctl, signs it, and puts it in `~/.cargo/bin`. The first run
+also makes the signing identity: a self-signed certificate named
+`protonctl` in the login keychain, whose key cannot be exported. Every run
+then asks to let `codesign` use that key. Choose **Allow**, never Always
+Allow: any program can run `codesign`, so Always Allow would let one sign
+a replaced protonctl without a prompt. If an install signs without asking,
+undo it: open
+`/System/Library/CoreServices/Applications/Keychain Access.app`, choose
+the login keychain and My Certificates, open the `protonctl` certificate's
+disclosure triangle, double-click its key, and in Access Control remove
+every application from the list of those always allowed, then Save Changes.
+
+The first time the signed protonctl reads each Keychain item (the calendar
+link, the Bridge password, the privacy key), macOS asks once; choose Always
+Allow. A later install signed with the same identity reads them with no
+prompt, so a Keychain prompt for protonctl after that means the binary was
+replaced by something else. On Linux, install with
+`cargo install --path . --locked`.
+
 The commands below use the full path, in case `~/.cargo/bin` is not on your
-PATH. Each rebuild changes the binary's ad-hoc signature, so macOS asks once
-more for each Keychain item (the calendar link, the Bridge password) the
-next time protonctl reads it. Enter the login keychain password and choose
-Always Allow; that lasts until the next rebuild.
+PATH.
 
 ## Choose the privacy setting
 
@@ -103,8 +119,9 @@ model. Choose one:
   opaque handles, and digests are keyed. Each result has an `entities`
   table that gives each alias's type, hints such as `external`, and a
   `ref`, which a query can use in place of the name (`from:ref:REF`).
-  Nothing is saved to disk, so a Drive file that is only in the cloud
-  cannot be read yet, and images come back as a type and a reason.
+  Nothing is saved to disk: a Drive file that is only in the cloud is
+  fetched into a RAM disk that protonctl makes for itself and removes when
+  it stops, and images come back as a type and a reason.
 - **Off** (`setup privacy --off`): results as they are, names included.
   It asks first, on a terminal.
 
@@ -274,3 +291,12 @@ Also expect `codesign` to report a valid Proton binary as "modified" there;
 judge the Drive CLI's signature with the `doctor` command above, run from a
 normal terminal. The mail tests start a fake Bridge on a local port, which the
 sandbox refuses unless `sandbox.network.allowLocalBinding` is true.
+
+## Credits
+
+The words in aliases come from the
+[EFF large word list](https://www.eff.org/deeplinks/2016/07/new-wordlists-random-passphrases)
+by Joseph Bonneau for the Electronic Frontier Foundation, used under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). protonctl drops
+644 of its 7,776 words; `src/privacy/words-dropped.txt` lists them with the
+reason for each.

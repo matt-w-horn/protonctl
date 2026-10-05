@@ -84,6 +84,17 @@ Limits of this test: one run per cell, synthetic data written for the
 test, and Phase 5 tokenization assumed. M2.10's live check repeats it on
 real results in aliases mode.
 
+## First real results (2026-10-04)
+
+Before that repeat, the maintainer read one real document from Drive in
+aliases mode and compared it with the original. Short forms of names,
+initials and a company that never sent mail came back raw; one person had
+two aliases; employers and services that send mail came back as person
+aliases, which hides what they are; and project names were not touched.
+OCR errors and misspellings are expected to pass too. These are defects
+D1 to D7 in [section 9](09-rollout.md#phase-2-defects-found-on-real-results-to-fix),
+with the evaluation (D1) to measure them.
+
 ---
 
 [← Appendix B: Proton's open-source code](appendix-b-proton-code.md) · [Contents](../rfc-0001.md#contents) · [Low-level design →](lld-privacy-layer.md)

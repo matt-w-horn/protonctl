@@ -10,7 +10,7 @@ leaves a choice open, this draft names the choice it is written with and
 the question that can change it; each such choice stays inside one module.
 
 Code locations are `file:line` at that commit. Phase 2 is now built,
-except M2.8 and the Mac checks ([section 9](09-rollout.md)); the code is
+except the Mac checks ([section 9](09-rollout.md)); the code is
 the reference for how it behaves, and [As built](#as-built) lists where it
 differs from this draft. Phases 3 to 5 below are still a design.
 
@@ -867,10 +867,22 @@ the reference.
   `drive::cli::NotFound` and `mail::NotListening` have their own codes.
   Any other error gives `unavailable` for the tool's service. Off mode's
   text is unchanged.
+- **Cuts.** Pages, snippets and calendar descriptions are cut from longer
+  text before the pipeline sees them, so a cut inside a name or an
+  address would leave each half to pass undetected; the first live
+  aliases-mode check found `read_file_content` returning half an address
+  raw. In aliases mode each cut (`Document::page`, `content::truncate`)
+  asks `content::cut_at`, which runs the regex and the process dictionary
+  within 4,096 bytes of the cut (`detect::around`) and moves the cut back
+  to the start of a mention it would split, or past its end when the
+  mention starts the piece, so a page always moves on. A snippet whose
+  32 KiB fetch ends inside its first 200 characters still ends at an
+  unchecked cut, since the text beyond it was never fetched.
 - **No disk in aliases mode.** The call runs inside a task-local scope in
-  which `content::downloads()` refuses, so no file is saved. Until M2.8's
-  RAM disk, a cloud-only Drive file cannot be read in aliases mode, and
-  without the Proton Drive app no Drive file can.
+  which `content::downloads()` refuses, so no file is saved. A cloud-only
+  Drive file is read through `content::memory_folder()` instead: a folder
+  on a per-process RAM disk (`platform::memory_disk`, M2.8), deleted once
+  read; the disk is detached at exit. Without one, the read fails.
 - **The process dictionary (Q22).** Correspondents' display names come
   from the From, To and Cc headers of All Mail, and attendees' and
   organizers' names from the calendars that can be read. Both sources are

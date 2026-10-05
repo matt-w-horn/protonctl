@@ -93,7 +93,7 @@ not a setting.
 
 ```mermaid
 flowchart TB
-    I["cargo install"] --> SV["setup mail, setup calendar, setup drive"]
+    I["scripts/install.sh"] --> SV["setup mail, setup calendar, setup drive"]
     SV --> PR{"setup privacy"}
     PR -->|"setup privacy"| AL["aliases"]
     PR -->|"setup privacy --off"| OF["off"]
