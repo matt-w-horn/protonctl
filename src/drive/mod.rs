@@ -230,7 +230,9 @@ impl Entry {
             "name": escape_hidden(self.name()),
             "kind": self.kind,
             "size": file.then_some(self.size),
-            "cloudOnly": file.then_some(self.cloud_only),
+            // A folder made online-only in the app is cloud-only too: its
+            // listing is not on this computer (D8).
+            "cloudOnly": (file || self.cloud_only).then_some(self.cloud_only),
         });
         match &self.proton {
             Some(p) => {
@@ -533,7 +535,10 @@ impl Drive {
     pub async fn list_folder(&self, req: &ListFolderReq, cli: &Cli) -> Result<Value> {
         let asked = req.path.as_deref().unwrap_or("/");
         let (path, mut entries, left_out) = match &self.root {
-            Some(root) => self.list_local(root, asked).await?,
+            Some(root) => match self.list_local(root, asked).await? {
+                Local::Listed(listed) => listed,
+                Local::CloudOnly(path) => self.list_cloud_only(cli, asked, path).await,
+            },
             None => self.list_remote(cli, asked).await?,
         };
         entries.sort_by(|a, b| {
@@ -561,39 +566,65 @@ impl Drive {
         Ok(out)
     }
 
+    /// A folder made online-only in the app (D8): it is dataless, its
+    /// listing is not on this computer, and an empty `read_dir` would show
+    /// it as empty. It is listed through the CLI, as without the app's
+    /// folder; when the CLI cannot list it, the result says where its
+    /// contents are rather than show nothing.
+    async fn list_cloud_only(&self, cli: &Cli, asked: &str, path: String) -> Listing {
+        if let Ok((path, entries, mut left_out)) = self.list_remote(cli, asked).await {
+            left_out.insert(
+                "note".into(),
+                "This folder is only in the cloud, so it was listed through the Proton Drive CLI."
+                    .into(),
+            );
+            return (path, entries, left_out);
+        }
+        let mut left_out = serde_json::Map::new();
+        left_out.insert(
+            "note".into(),
+            "This folder is only in the cloud, and its contents are not on this computer; the \
+             Proton Drive CLI could not list it. Make it available offline in the Proton Drive \
+             app, or open it in Proton Drive."
+                .into(),
+        );
+        (path, Vec::new(), left_out)
+    }
+
     /// The folder `asked` names in the app's folder: its path, its entries,
     /// and what the listing leaves out beside excluded entries (`hiddenNames`),
-    /// so no hole is silent.
-    async fn list_local(
-        &self,
-        root: &Path,
-        asked: &str,
-    ) -> Result<(String, Vec<Entry>, serde_json::Map<String, Value>)> {
+    /// so no hole is silent; or, for a folder made online-only, only its path.
+    async fn list_local(&self, root: &Path, asked: &str) -> Result<Local> {
         let (root, exclude, asked) = (root.to_path_buf(), self.exclude.clone(), asked.to_string());
-        let (path, real, mut entries, hidden) = crate::content::blocking(
-            move || -> Result<(String, String, Vec<Entry>, Vec<String>)> {
-                let (disk, path, real) = resolve(&root, &exclude, &asked)?;
-                let (mut out, mut hidden) = (Vec::new(), Vec::new());
-                for item in std::fs::read_dir(&disk).map_err(|e| {
-                    Invalid::quoting(
-                        "This folder cannot be listed; it may be a file.",
-                        format!("not a folder: {}: {e}", escape_hidden(&path)),
-                    )
-                })? {
-                    let item = item?;
-                    let name = item.file_name().to_string_lossy().nfc().collect::<String>();
-                    if name.starts_with('.') {
-                        hidden.push(name);
-                        continue;
-                    }
-                    // Gone or unreadable since the listing started: skip it, as the index does.
-                    let Ok(meta) = item.metadata() else { continue };
-                    out.push(entry(join(&path, &name), &meta));
+        let found = crate::content::blocking(move || -> Result<Found> {
+            let (disk, path, real) = resolve(&root, &exclude, &asked)?;
+            if folder_cloud_only(&disk) {
+                return Ok(Found::CloudOnly(path));
+            }
+            let (mut out, mut hidden) = (Vec::new(), Vec::new());
+            for item in std::fs::read_dir(&disk).map_err(|e| {
+                Invalid::quoting(
+                    "This folder cannot be listed; it may be a file.",
+                    format!("not a folder: {}: {e}", escape_hidden(&path)),
+                )
+            })? {
+                let item = item?;
+                let name = item.file_name().to_string_lossy().nfc().collect::<String>();
+                if name.starts_with('.') {
+                    hidden.push(name);
+                    continue;
                 }
-                Ok((path, real, out, hidden))
-            },
-        )
+                // Gone or unreadable since the listing started: skip it, as the index does.
+                let Ok(meta) = item.metadata() else { continue };
+                out.push(entry(join(&path, &name), &meta));
+            }
+            Ok(Found::Here(path, real, out, hidden))
+        })
         .await??;
+        let (path, real, mut entries, hidden) = match found {
+            Found::CloudOnly(path) => return Ok(Local::CloudOnly(path)),
+            Found::Here(path, real, entries, hidden) => (path, real, entries, hidden),
+        };
         // Checked under the folder's real location too, so a symlinked folder
         // cannot show an excluded child (RFC R7).
         let excluded =
@@ -603,17 +634,13 @@ impl Drive {
         let hidden = hidden.iter().filter(|n| !excluded(n)).count();
         let mut left_out = serde_json::Map::new();
         left_out.insert("hiddenNames".into(), hidden.into());
-        Ok((path, entries, left_out))
+        Ok(Local::Listed((path, entries, left_out)))
     }
 
     /// The folder `asked` names, listed through the CLI: its path, its
     /// entries, and what the listing leaves out beside excluded entries
     /// (`unlisted`, `unlistedHidden`), so no hole is silent.
-    async fn list_remote(
-        &self,
-        cli: &Cli,
-        asked: &str,
-    ) -> Result<(String, Vec<Entry>, serde_json::Map<String, Value>)> {
+    async fn list_remote(&self, cli: &Cli, asked: &str) -> Result<Listing> {
         let path = self.remote(asked)?;
         let nodes: Vec<Node> = query(cli, "list", &path).await?;
         // An entry whose name does not decrypt could be an excluded child
@@ -1625,6 +1652,37 @@ fn walk_from(dir: &Path, base: &str, exclude: &[String]) -> (Vec<Entry>, bool) {
         }
     }
     (out, true)
+}
+
+/// A folder's path, entries and what its listing leaves out.
+type Listing = (String, Vec<Entry>, serde_json::Map<String, Value>);
+
+/// A folder in the app's folder: listed, or only in the cloud.
+enum Local {
+    Listed(Listing),
+    CloudOnly(String),
+}
+
+/// What reading a folder in the app's folder found: its path, real path,
+/// entries and hidden names, or that it is only in the cloud.
+enum Found {
+    Here(String, String, Vec<Entry>, Vec<String>),
+    CloudOnly(String),
+}
+
+/// Folders a test makes stand for ones made online-only, a flag only the
+/// system can set.
+#[cfg(test)]
+static DATALESS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// Whether the folder at `disk` is only in the cloud: made online-only in
+/// the Drive app, it is dataless, and its listing is not on this computer.
+fn folder_cloud_only(disk: &Path) -> bool {
+    #[cfg(test)]
+    if DATALESS.lock().is_ok_and(|d| d.iter().any(|p| p == disk)) {
+        return true;
+    }
+    std::fs::metadata(disk).is_ok_and(|m| crate::platform::cloud_only(&m))
 }
 
 /// The entries directly in the folder `dir`, whose Drive path is `base` (""
@@ -3106,6 +3164,63 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
             .unwrap();
         assert_eq!(r["hiddenNames"], 2, "{r}");
         assert_eq!(r["items"].as_array().unwrap().len(), 2, "{r}");
+    }
+
+    /// B21 (D8): a folder made online-only in the app is dataless, and its
+    /// listing is not on this computer. It is listed through the CLI, with
+    /// a note; when the CLI cannot list it, the note says its contents are
+    /// not here rather than show it as empty. In a tree, its row says it is
+    /// only in the cloud.
+    #[tokio::test]
+    async fn a_folder_only_in_the_cloud_is_listed_through_the_cli_or_said_to_be() {
+        let t = tree();
+        let notes = t.path().join("Projects/Notes").canonicalize().unwrap();
+        std::fs::remove_file(notes.join("Café.txt")).unwrap();
+        DATALESS.lock().unwrap().push(notes.clone());
+        let bin = tempfile::tempdir().unwrap();
+        let cli = fake_cli(bin.path());
+        let d = drive(t.path(), &[]);
+        let asked = ListFolderReq {
+            path: Some("/Projects/Notes".into()),
+            ..Default::default()
+        };
+        // The CLI cannot list it yet: "Node not found".
+        let r = d.list_folder(&asked, &cli).await.unwrap();
+        assert_eq!(r["items"], json!([]), "{r}");
+        assert!(
+            r["note"].as_str().unwrap().contains("not on this computer"),
+            "{r}"
+        );
+        answer(
+            bin.path(),
+            "list",
+            "/Projects/Notes",
+            &json!([node("draft.txt", Some(5))]),
+        );
+        let r = d.list_folder(&asked, &cli).await.unwrap();
+        assert_eq!(r["items"][0]["path"], "/Projects/Notes/draft.txt", "{r}");
+        assert!(
+            r["note"].as_str().unwrap().contains("Proton Drive CLI"),
+            "{r}"
+        );
+        assert_eq!(
+            calls(bin.path()),
+            ["filesystem list -j /my-files/Projects/Notes"; 2]
+        );
+        let folder = Entry {
+            cloud_only: true,
+            ..entry(
+                "/Projects/Notes".into(),
+                &std::fs::metadata(&notes).unwrap(),
+            )
+        };
+        assert_eq!(folder.json()["cloudOnly"], true);
+        let here = entry(
+            "/Projects".into(),
+            &std::fs::metadata(t.path().join("Projects")).unwrap(),
+        );
+        assert_eq!(here.json()["cloudOnly"], Value::Null);
+        DATALESS.lock().unwrap().retain(|p| *p != notes);
     }
 
     #[tokio::test]
