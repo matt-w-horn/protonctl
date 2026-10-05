@@ -96,13 +96,29 @@ const CALL_LIMIT: Duration = Duration::from_secs(150);
 
 /// A call's result as MCP content: its JSON as text, then the file it
 /// carries, base64, as image content or an embedded resource.
+/// `call`, or an error when it panics: a panic would otherwise end the
+/// task that answers, and leave the call with no answer at all (R8). The
+/// panic hook has printed where; the message is withheld, as it can quote
+/// data.
+async fn answered<R>(call: impl Future<Output = Result<R>>) -> Result<R> {
+    use futures::FutureExt as _;
+    AssertUnwindSafe(call)
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|_| {
+            Err(anyhow!(
+                "internal error: the call failed inside protonctl; its message is withheld"
+            ))
+        })
+}
+
 async fn reply<R: Into<Reply>>(
     deadline: tokio::time::Instant,
     call: impl Future<Output = Result<R>>,
 ) -> Result<CallToolResult, ErrorData> {
     // Before the call runs, so `get_status` counts what is left (RFC R10).
     content::sweep_downloads();
-    let result = tokio::time::timeout_at(deadline, call)
+    let result = tokio::time::timeout_at(deadline, answered(call))
         .await
         .unwrap_or_else(|_| Err(anyhow!("timed out after 150 s (RFC R8)")));
     let reply = match result {
@@ -1042,6 +1058,24 @@ mod tests {
             .map(|t| t.text.as_str())
             .collect();
         texts.join("\n")
+    }
+
+    /// R8: a call whose operation panics is still answered, with an error
+    /// that withholds the panic's message, which can quote data.
+    #[tokio::test]
+    async fn a_call_that_panics_is_still_answered() {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let call = async {
+            if deadline > tokio::time::Instant::now() {
+                panic!("planted: jane.doe@example.com");
+            }
+            Ok(serde_json::json!({}))
+        };
+        let out = reply::<Value>(deadline, call).await.unwrap();
+        assert_eq!(out.is_error, Some(true));
+        let said = format!("{:?}", out.content);
+        assert!(said.contains("internal error"), "{said}");
+        assert!(!said.contains("jane"), "{said}");
     }
 
     fn json_of(r: &CallToolResult) -> Value {
