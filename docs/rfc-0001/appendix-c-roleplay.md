@@ -83,7 +83,7 @@ How each run referred to people:
 Limits of this test: one run per cell, synthetic data written for the
 test, and Phase 5 tokenization assumed. M2.10's live check repeats it on
 real results in aliases mode; that repeat has not run
-([docs/todo.md](../todo.md), M3).
+([#18](https://github.com/matt-w-horn/protonctl/issues/18)).
 
 ## First real results (2026-10-04)
 

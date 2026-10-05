@@ -9,7 +9,7 @@ Q35, decided the same day, adopt the choices this section recommends
 to P4 are built (2026-10-05): the Secret Service holds its secrets, the
 Drive CLI is pinned by its SHA-256, and poppler and pandoc read documents
 in a sandbox. The live checks of P2 and P3, on a Linux desktop signed in
-to Proton, have not run ([docs/todo.md](../todo.md), L1, L2).
+to Proton, have not run ([#27](https://github.com/matt-w-horn/protonctl/issues/27) and [#28](https://github.com/matt-w-horn/protonctl/issues/28)).
 
 ## Why
 
@@ -47,7 +47,7 @@ What these facts meant for Q31 to Q33 and the hosts:
   CLI-only mode stays the default until a Linux Drive app ships.
 - Hosts: Claude Desktop and Cowork reach Linux. Whether they start a local
   MCP server there, and how Cowork's VM reaches it, is not checked
-  ([docs/todo.md](../todo.md), L3).
+  ([#29](https://github.com/matt-w-horn/protonctl/issues/29)).
 
 ## What is macOS-specific
 
@@ -228,8 +228,8 @@ flowchart TB
 | Host | macOS | Linux |
 |---|---|---|
 | Claude Code | yes | yes |
-| Claude Desktop | yes | beta, Ubuntu and Debian (MP0); whether it loads local MCP servers is not checked ([docs/todo.md](../todo.md), L3) |
-| Cowork | yes, through Claude Desktop | through Claude Desktop's beta, in a QEMU/KVM virtual machine; not checked ([docs/todo.md](../todo.md), L3) |
+| Claude Desktop | yes | beta, Ubuntu and Debian (MP0); whether it loads local MCP servers is not checked ([#29](https://github.com/matt-w-horn/protonctl/issues/29)) |
+| Cowork | yes, through Claude Desktop | through Claude Desktop's beta, in a QEMU/KVM virtual machine; not checked ([#29](https://github.com/matt-w-horn/protonctl/issues/29)) |
 
 On Linux the model usually has a shell, in Claude Code or Claude
 Desktop's Code tab: the residual risk that it runs `proton-drive`, reads
@@ -269,8 +269,8 @@ more.
 |---|---|---|
 | P0 | Answer Q30 to Q35; confirm the Linux availability of Claude Desktop, Bridge's core and the Drive CLI. Done 2026-10-04 | P1 |
 | P1 | Builds and tests on Linux: `src/platform/`; target-specific dependencies; Linux implementations that report "not available on Linux"; the macOS-only tests behind `cfg`; download expiry by the time in the folder name; `deny.toml` targets; `scripts/check.sh` on Linux, with the macOS build checked from there. Done 2026-10-04 | Phase 2, so the privacy layer is built and tested in Linux containers |
-| P2 | Mail and Calendar on Linux: the secret store (Q31), Bridge started by the user (Q32), `setup`, `doctor` and `status`. Built 2026-10-05; the live check, on a Linux desktop, has not run ([docs/todo.md](../todo.md), L1) | alongside Phase 2 |
-| P3 | Drive on Linux, as Q33 decides. Built 2026-10-05; the live check, on a Linux machine signed in to Proton, has not run ([docs/todo.md](../todo.md), L2) | after P2 |
+| P2 | Mail and Calendar on Linux: the secret store (Q31), Bridge started by the user (Q32), `setup`, `doctor` and `status`. Built 2026-10-05; the live check, on a Linux desktop, has not run ([#27](https://github.com/matt-w-horn/protonctl/issues/27)) | alongside Phase 2 |
+| P3 | Drive on Linux, as Q33 decides. Built 2026-10-05; the live check, on a Linux machine signed in to Proton, has not run ([#28](https://github.com/matt-w-horn/protonctl/issues/28)) | after P2 |
 | P4 | Converters and their sandbox on Linux (Q34). Built 2026-10-05, before Phase 4; OCR waits for it | with Phase 4 |
 | P5 | User presence on Linux (Q35), or no `reveal_*` there | with Phase 3 |
 

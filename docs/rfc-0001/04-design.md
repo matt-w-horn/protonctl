@@ -229,12 +229,12 @@ someone deletes them), so they stay on ask, and since M1.6 all three are
 marked `readOnlyHint: false`. The `reveal_*` tools match none of these, so they
 stay on ask; Touch ID gates them either way. Whether Claude Code matches a
 glob inside a tool name, rather than only a whole server or one tool, is
-not checked (M1.1 in [docs/todo.md](../todo.md), Not started); if it
+not checked ([#18](https://github.com/matt-w-horn/protonctl/issues/18)); if it
 does not, the rules list each tool by name. A rule for the whole server (`mcp__proton`) would
 also allow `reveal_*`. Setting `_meta["anthropic/requiresUserInteraction"]`
 on `reveal_*` as well would add Claude Code's own prompt on every call;
 whether that second prompt is worth it is not decided
-([docs/todo.md](../todo.md), Decisions).
+([#25](https://github.com/matt-w-horn/protonctl/issues/25)).
 
 ## Results and untrusted content
 
