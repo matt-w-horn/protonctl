@@ -266,7 +266,7 @@ The cheat sheet's review questions, answered for this model:
 | Does each threat have a response? | Yes: every row in section 3 names one. The accepted risks are the linking, identifying and non-repudiation rows the design takes on for stability, the calendar link, Keychain readability, and repudiation. |
 | Do the mitigations reduce risk to an acceptable level? | Off mode: as the user chose it. Aliases mode: not until Phase 5 for names that appear only in free text, though the process-wide dictionary (Q22) narrows that gap to names that never appear in a header or invitation; the "high" rows say so. |
 | Is the model documented and accessible? | This file, with the RFC; it is versioned in the repository. |
-| Can the mitigations be tested? | Every invariant names its check. Built checks: I1, I3 to I7, I10 to I13, I15, I16, I17 on Linux and I18 for P1 to P4, some of them in part, as the table says; I2 and I8 are checked by reading the code. Not built: I9's test, I14 (Phase 3) and I17 on macOS (Phase 4). [Section 7](07-testing.md) says which planned tests exist, and [docs/todo.md](../todo.md) lists the missing ones (T1 to T19). |
+| Can the mitigations be tested? | Every invariant names its check. Built checks: I1, I3 to I7, I10 to I13, I15, I16, I17 on Linux and I18 for P1 to P4, some of them in part, as the table says; I2 and I8 are checked by reading the code. Not built: I9's test, I14 (Phase 3) and I17 on macOS (Phase 4). [Section 7](07-testing.md) says which planned tests exist, and [docs/todo.md](../todo.md) lists the missing ones. |
 
 ---
 

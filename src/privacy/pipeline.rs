@@ -1490,6 +1490,101 @@ mod tests {
         );
     }
 
+    /// The pipeline's time on the largest page a tool returns: 40,000
+    /// characters (`maxChars`' limit) dense with names, addresses and phone
+    /// numbers, against a dictionary of 5,000 correspondents. A measurement,
+    /// not a gate:
+    /// `cargo test --release time_on_a_full_page -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement; run it with --release"]
+    fn time_on_a_full_page() {
+        use std::fmt::Write as _;
+        const FIRST: [&str; 50] = [
+            "Dana", "Sam", "Ana", "Jon", "Mia", "Leo", "Ivy", "Max", "Zoe", "Eli", "Ada", "Kai",
+            "Noa", "Ren", "Uma", "Ola", "Tess", "Hugo", "Lena", "Omar", "Ines", "Yuki", "Ravi",
+            "Sofia", "Pablo", "Grace", "Felix", "Clara", "Mateo", "Hana", "Luca", "Nora", "Aria",
+            "Emil", "Iris", "Theo", "Vera", "Wade", "Xena", "Yara", "Zane", "Bea", "Cyrus",
+            "Dora", "Ezra", "Fay", "Gus", "Hope", "Ian", "Jade",
+        ];
+        const LAST: [&str; 100] = [
+            "Ruiz", "Okafor", "Chen", "Patel", "Novak", "Silva", "Kim", "Haddad", "Larsen",
+            "Moreau", "Rossi", "Tanaka", "Weber", "Costa", "Ivanova", "Nguyen", "Kowalski",
+            "Dubois", "Schmidt", "Fischer", "Romero", "Bauer", "Sato", "Ito", "Ahmed", "Ali",
+            "Khan", "Singh", "Mehta", "Rao", "Bose", "Das", "Gupta", "Iyer", "Joshi", "Kapoor",
+            "Lal", "Malik", "Nair", "Pillai", "Reddy", "Sharma", "Verma", "Yadav", "Abbott",
+            "Baker", "Carter", "Dawson", "Ellis", "Foster", "Gibson", "Hayes", "Irwin",
+            "Jensen", "Keller", "Lowe", "Mason", "Nolan", "Owens", "Price", "Quinn", "Reyes",
+            "Shaw", "Tate", "Underwood", "Vance", "Walsh", "Young", "Zimmer", "Adler", "Brandt",
+            "Cohen", "Dahl", "Eder", "Frey", "Graf", "Hahn", "Imhof", "Jung", "Kraus", "Lang",
+            "Mayer", "Nagel", "Otto", "Pohl", "Roth", "Stein", "Thiel", "Ulrich", "Vogel",
+            "Wolf", "Ziegler", "Arnaud", "Blanc", "Caron", "Dumas", "Fabre", "Girard", "Henry",
+            "Leroy",
+        ];
+        let people: Vec<String> = FIRST
+            .iter()
+            .flat_map(|f| LAST.iter().map(move |l| format!("{f} {l}")))
+            .collect();
+        assert_eq!(people.len(), 5_000);
+        let names = Names::people(people.clone());
+        let ctx = Context {
+            tool: Tool::ReadFileContent,
+            query: None,
+            you: None,
+            names: &names,
+            incomplete: &[],
+        };
+        let keys = keys();
+        let mut said = String::new();
+        // 50 or 200 people, each with an address and a number, on pages of
+        // `maxChars`' default and its limit.
+        for (distinct, size) in [(50, 20_000), (50, 40_000), (200, 20_000), (200, 40_000)] {
+            let mut text = String::new();
+            let step = people.len() / distinct;
+            for (i, name) in people.iter().step_by(step).enumerate().cycle() {
+                let mail = name.to_lowercase().replace(' ', ".");
+                let line = format!(
+                    "On Monday {name} wrote to {mail}@example.com about the lease; call +1 415 555 {:04}.\n",
+                    100 + i
+                );
+                if text.len() + line.len() > size {
+                    break;
+                }
+                text.push_str(&line);
+            }
+            let page = json!({ "content": text, "offset": 0, "nextOffset": size });
+            let mut took = Vec::new();
+            let mut out = Err(PipelineError::Failed);
+            for _ in 0..5 {
+                let started = std::time::Instant::now();
+                out = run(page.clone(), &keys, &ctx);
+                took.push(started.elapsed());
+            }
+            took.sort();
+            let outcome = match &out {
+                Ok(v) => format!(
+                    "{} characters out, {} entities",
+                    v.to_string().chars().count(),
+                    v["entities"].as_object().unwrap().len()
+                ),
+                Err(e) => format!("{e:?}"),
+            };
+            writeln!(
+                said,
+                "{distinct} people, {size} characters in: {outcome}; 5 runs, median {} ms, slowest {} ms",
+                took[2].as_millis(),
+                took[4].as_millis()
+            )
+            .unwrap();
+            // The work measured is the whole pipeline's: with 50 people the
+            // page passes, with every name, address and number found.
+            if distinct == 50 {
+                let found = out.as_ref().map(|v| v["entities"].as_object().unwrap().len());
+                assert!(found.is_ok_and(|n| n == 3 * 50), "{said}");
+            }
+        }
+        eprint!("{said}");
+    }
+
     #[test]
     fn a_result_over_the_cap_is_refused() {
         let big = json!({ "content": "word ".repeat(CAP / 4) });

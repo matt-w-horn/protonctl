@@ -786,8 +786,14 @@ sequenceDiagram
 - The pattern detectors and the dictionary are single passes over the
   text (`regex` and `aho-corasick` run in linear time); a 20,000-character
   page is one pass each. HMAC and AES-SIV cost microseconds per entity.
-  The pipeline's time on the largest fixture is not measured
-  ([docs/todo.md](../todo.md), T19).
+  Measured on 2026-10-05 in a release build in the Linux container, with
+  a dictionary of 5,000 names (`time_on_a_full_page` in
+  `src/privacy/pipeline.rs`, ignored by default): a 20,000-character page
+  holding 150 entities took a median 20 ms, and a 40,000-character one
+  28 ms; a process's first run took about 90 ms more. With 600 entities,
+  both pages were refused as `too_large`: in that text each entity added
+  about 185 characters to the result, so the cap of 90,000 holds roughly
+  380 entities on a 20,000-character page.
 - GLiNER (Phase 5) is the one stage with a real cost; its runtime is Q23.
 
 ## Testing hooks

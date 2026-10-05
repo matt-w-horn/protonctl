@@ -80,9 +80,6 @@ maintainer.
   numbers, that every `entities` entry has a `ref`, or that a second
   server run gives the same aliases for the same search, as section 7
   plans.
-- T19 (here) The pipeline's time on the largest fixture, which the
-  low-level design says M2.4 measures and records. No measurement is
-  recorded.
 
 ## Reviews
 
