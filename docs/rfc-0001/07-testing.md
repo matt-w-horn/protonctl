@@ -2,7 +2,8 @@
 
 # 7. Testing
 
-Built (217 tests on Linux on 2026-10-05, `cargo test`: 208 unit, 9
+Built (on macOS on 2026-10-04, `cargo test` ran 239 tests: 230 unit, 9
+against the built binary, and 3 ignored. On Linux on 2026-10-05 it ran 217: 208 unit, 9
 against the built binary; 4 more are ignored by default: one lists Drive
 through the real CLI, two reach a Secret Service and run in
 `scripts/check.sh`, and one is the sandbox probe, which another test
@@ -599,6 +600,17 @@ missing ones:
   `each_reader_runs_in_its_sandbox` and
   `a_damaged_pdf_fails_in_the_reader_not_the_sandbox` in
   `tests/convert.rs`. macOS and Vision: not built (Phase 4).
+- Evaluation (Phase 2, defect D1 in [section 9](09-rollout.md#phase-2-defects-found-on-real-results)):
+  aliases mode over a labeled synthetic corpus that plants each person,
+  organization and project in every form D2 to D7 name (surname, given
+  name, initials, middle initial, typing and OCR misspellings, run-in
+  CJK text, organizations that send mail and that never do, projects),
+  reporting per form and entity type how many came back whole, with a
+  word of the name left, with a second alias, linked by `maybeSameAs`, or
+  typed wrong. The report is a snapshot, so each fix shows as the change
+  in its row. Built: `what_passes_raw_per_form` in `src/privacy/eval.rs`,
+  shown to fail when the process dictionary was emptied (the
+  process-only full name came back raw).
 - Recall (Phase 5): per entity type, on a labeled synthetic corpus in
   English, German, French and one non-Latin script. Results are recorded,
   with no pass mark until there is a measured baseline. Not built
