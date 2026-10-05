@@ -680,7 +680,7 @@ fn event_json(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[tokio::test]
@@ -756,7 +756,7 @@ mod tests {
 
     /// One calendar, "c", whose feed is already cached, so no test reaches
     /// the Keychain or the network.
-    async fn one_calendar(feed: Feed) -> Calendars {
+    pub(crate) async fn one_calendar(feed: Feed) -> Calendars {
         let one = CalendarConfig {
             id: "c".into(),
             name: "C".into(),
@@ -771,11 +771,11 @@ mod tests {
         cals
     }
 
-    fn event(uid: &str, start: &str, lines: &str) -> String {
+    pub(crate) fn event(uid: &str, start: &str, lines: &str) -> String {
         format!("BEGIN:VEVENT\r\nUID:{uid}\r\nDTSTART:{start}\r\n{lines}END:VEVENT\r\n")
     }
 
-    fn feed(events: &[String]) -> Feed {
+    pub(crate) fn feed(events: &[String]) -> Feed {
         ics::parse(&format!(
             "BEGIN:VCALENDAR\r\n{}END:VCALENDAR\r\n",
             events.concat()

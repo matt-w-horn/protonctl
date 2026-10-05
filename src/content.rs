@@ -261,6 +261,17 @@ pub fn cut_at(text: &str, at: usize, floor: usize) -> usize {
     }
 }
 
+/// Where a page of `text` asked to start at byte `at` starts: at `at`, or
+/// in aliases mode at the start of a mention `at` falls inside, so the
+/// page shows the whole mention, which the pipeline replaces, rather than
+/// its tail, which no detector finds (R13).
+pub fn start_at(text: &str, at: usize) -> usize {
+    match RESTRICTED.try_with(|cut| cut(text, at)).ok().flatten() {
+        Some((start, _)) => start,
+        None => at,
+    }
+}
+
 /// False inside `restricted`, so a reader can answer without the file
 /// rather than fail.
 pub fn disk_allowed() -> bool {
