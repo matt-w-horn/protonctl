@@ -26,26 +26,11 @@ if [ "$(uname -s)" = Linux ]; then
     fi
     # The Secret Service store (RFC Q31), against a throwaway GNOME Keyring in
     # a private D-Bus session, so the user's own keyring is never touched.
-    # XDG_DATA_HOME covers the whole session, so a keyring the bus starts on
-    # its own uses the throwaway folder too; and the tests wait until the
-    # keyring owns its name, which it does a moment after the daemon returns.
     if command -v dbus-run-session >/dev/null && command -v gnome-keyring-daemon >/dev/null; then
         keyring=$(mktemp -d)
         trap 'rm -rf "$keyring"' EXIT
-        XDG_DATA_HOME="$keyring" dbus-run-session -- sh -c '
-            printf test | gnome-keyring-daemon --unlock --components=secrets >/dev/null || exit 1
-            tries=0
-            until dbus-send --session --print-reply --dest=org.freedesktop.DBus / \
-                org.freedesktop.DBus.NameHasOwner string:org.freedesktop.secrets |
-                grep -q "boolean true"; do
-                tries=$((tries + 1))
-                if [ "$tries" -gt 50 ]; then
-                    echo "check.sh: the throwaway keyring did not start" >&2
-                    exit 1
-                fi
-                sleep 0.1
-            done
-            cargo test --locked --bin protonctl platform::linux -- --ignored'
+        XDG_DATA_HOME="$keyring" XDG_RUNTIME_DIR="$keyring" dbus-run-session -- \
+            scripts/with-keyring.sh cargo test --locked --bin protonctl platform::linux -- --ignored
     else
         echo "check.sh: skipped the Secret Service tests (needs dbus-run-session and gnome-keyring-daemon)" >&2
     fi

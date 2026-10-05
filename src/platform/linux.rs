@@ -643,9 +643,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut child = std::process::Command::new("dbus-run-session");
         child
-            .args(["--", "sh", "-c"])
-            .arg("printf test | gnome-keyring-daemon --unlock --components=secrets >/dev/null && exec \"$@\"")
-            .arg("sh")
+            .arg("--")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/scripts/with-keyring.sh"
+            ))
             .arg(std::env::current_exe().unwrap())
             .args(["platform::linux::tests::locked_probe", "--exact"])
             .args(["--include-ignored", "--nocapture", "--test-threads=1"])
