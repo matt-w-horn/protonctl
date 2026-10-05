@@ -250,8 +250,13 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
 - D2 Short forms of a name pass raw. The dictionary holds correspondents'
   full display names, so a surname alone ("Lee v. Acme", "Dr. Lee") and a
   given name alone are not found. M5.2 planned short forms within an
-  item; this is the measured case.
+  item; this is the measured case. Fixed 2026-10-04 for known names: the
+  dictionary holds each person's given name, surname and name without
+  middle names, joined or linked as [section 6](06-privacy.md) says
+  ([#1](https://github.com/matt-w-horn/protonctl/issues/1)).
 - D3 Initials pass raw ("JL", "J.L.", "call with JL"). Nothing detects them.
+  Fixed 2026-10-04 for the people in a result's own headers
+  ([#2](https://github.com/matt-w-horn/protonctl/issues/2)).
 - D4 Misspelled names pass raw, from typing and above all from OCR ("Jonh
   Lee", "J0hn Lee", "John Lce"). The dictionary matches exact text after
   case and accent folding only.
@@ -296,8 +301,9 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
 
 - M5.1 Answer Q23: model runtime, weights shipped and pinned by SHA-256,
   licences. Exit: a build with no network fetch.
-- M5.2 GLiNER detector, short forms, `maybeSameAs`. Exit: recall recorded
-  per entity type and language.
+- M5.2 GLiNER detector, for names in no header; short forms and
+  `maybeSameAs` of known names were built in Phase 2 (D2, D3). Exit:
+  recall recorded per entity type and language.
 
 ### Phases 6 and 7
 

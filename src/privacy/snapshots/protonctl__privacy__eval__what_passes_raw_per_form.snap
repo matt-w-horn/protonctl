@@ -7,14 +7,14 @@ organization never in mail | organization | 2 | 2 | 0 | 0 | 0 | 0
 organization that sends mail | organization | 2 | 0 | 0 | 0 | 0 | 2
 person full, in headers | person | 2 | 0 | 0 | 0 | 0 | 0
 person full, process only | person | 1 | 0 | 0 | 0 | 0 | 0
-person given name | person | 2 | 2 | 0 | 0 | 0 | 0
+person given name | person | 2 | 0 | 0 | 0 | 0 | 0
 person in run-in CJK text | person | 1 | 0 | 0 | 0 | 0 | 0
-person initials | person | 2 | 2 | 0 | 0 | 0 | 0
-person initials, dotted | person | 1 | 1 | 0 | 0 | 0 | 0
-person middle initial | person | 1 | 1 | 0 | 0 | 0 | 0
-person misspelled, OCR | person | 3 | 3 | 0 | 0 | 0 | 0
-person misspelled, typing | person | 2 | 2 | 0 | 0 | 0 | 0
-person surname | person | 3 | 3 | 0 | 0 | 0 | 0
-person surname, honorific | person | 1 | 1 | 0 | 0 | 0 | 0
-person surname, shared | person | 1 | 1 | 0 | 0 | 0 | 0
+person initials | person | 2 | 0 | 0 | 0 | 0 | 0
+person initials, dotted | person | 1 | 0 | 0 | 0 | 0 | 0
+person middle initial | person | 1 | 0 | 0 | 0 | 0 | 0
+person misspelled, OCR | person | 3 | 0 | 3 | 0 | 0 | 0
+person misspelled, typing | person | 2 | 0 | 2 | 0 | 0 | 0
+person surname | person | 3 | 0 | 0 | 0 | 0 | 0
+person surname, honorific | person | 1 | 0 | 0 | 0 | 0 | 0
+person surname, shared | person | 1 | 0 | 0 | 1 | 1 | 0
 project in text | project | 2 | 2 | 0 | 0 | 0 | 0
