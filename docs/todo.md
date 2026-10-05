@@ -18,6 +18,49 @@ maintainer.
   `$XDG_RUNTIME_DIR` the same way, possibly with a file in it, until
   logout.
 
+- B2 (here) The readers' sandbox lets a reader change the metadata of
+  any file the user owns: Landlock does not cover chmod, chown, utimes or
+  extended attributes, and seccomp refuses only sockets and io_uring
+  (probed: chmod 0644 of a 0600 file succeeded inside `sandbox()`). R21
+  says the reader writes nothing.
+- B3 (here) A `page` past 2^64 - 4 overflows in `poppler_pages`
+  (`first + PAGE_IMAGES - 1`) and panics; the off-mode call is never
+  answered (R8), and `drive cat --page` exits 101.
+- B4 (here) A PDF's own Title can set the page count: `page_count` takes
+  the first `Pages:` line of `pdfinfo`, which prints the metadata, unescaped,
+  before it. A 6-page scan with "\nPages: 1" in its Title showed 1 page.
+- B5 (here) A running server keeps the CLI pin it loaded: after
+  `setup drive` re-pins, it still refuses, and neither message says to
+  restart the hosts.
+- B6 (here) Creating a Secret Service item never unlocks a locked
+  collection, so a first `setup` fails with IsLocked instead of showing
+  the unlock prompt.
+- B7 (here) `with_cli_pin` edits the config line by line: a calendar name
+  with a newline (from a feed's X-WR-CALNAME, which a third party writes)
+  is a multi-line TOML string, a `[drive]` line inside it is taken for the
+  table, and the pin is written into the name; the check after the edit
+  compares only the calendar count. The rewrite is not atomic either.
+- B8 (here) The swap check: `CRYPT-INTEGRITY-` and `CRYPT-VERITY-` devices
+  pass as encrypted; zram passes even with a writeback `backing_dev`; a
+  swap file on btrfs (an anonymous device) is always refused.
+- B9 (here) Sandbox failures read as the wrong cause: `doctor` runs only
+  `convert check`, never a reader, so a reader that cannot start under
+  the sandbox fails calls while `doctor` says the sandbox holds; in aliases
+  mode the failure reads as "Proton Drive cannot be reached".
+- B10 (here) A panic in any tool's operation leaves the call unanswered
+  (R8); only the aliases-mode pipeline runs under `catch_unwind`.
+- B11 (here) The unit tests for the memory folder check the host's real
+  /proc/swaps, so they fail on a machine with plain swap.
+- B12 (here) scripts/check.sh's Secret Service step races: the throwaway
+  keyring's name is not yet on the bus when the tests start, so the first
+  call can activate a second daemon, which uses the user's real keyring
+  folder.
+- B13 (here) Nothing tests that a reader runs confined: with `sandbox()`
+  removed from `convert::run`, tests/convert.rs still passes.
+- B14 (Mac or Linux desktop) Whether the Drive CLI writes a download to
+  `os.tmpdir()` (on disk) before moving it into the folder protonctl
+  names; if it does, aliases mode needs a TMPDIR in memory (R10).
+
 ## Documentation that states something wrong
 
 - D1 (here) `09-rollout.md`: the phase table says P2 to P4 are to do and
@@ -72,9 +115,7 @@ maintainer.
 
 ## Reviews
 
-- R1 (here) The correctness review of the Linux work (MP2 to MP4) is
-  running; its findings are added here.
-- R2 (decision) Q25: `/security-review` on the Phase 2 changes has no
+- R1 (decision) Q25: `/security-review` on the Phase 2 changes has no
   record of a run. The security review of the Linux work was by reading
   only, since probing the sandbox was stopped by the model's safeguards.
 
