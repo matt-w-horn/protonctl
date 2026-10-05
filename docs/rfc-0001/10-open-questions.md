@@ -237,9 +237,9 @@
   skills.
   - The name: the plugin's `name` is `protonctl`.
   - The licence: Apache-2.0.
-  - The files: the directory stops validating a plugin folder that holds
-    any file of 5 MiB or more, and holds for a reviewer any file other
-    than an image or a font of 256 KiB or more. So the demo GIF is
+  - The files: the directory does not take a plugin folder that holds any
+    file of 5 MiB or more, or any file other than an image or a font of
+    256 KiB or more. So the demo GIF is
     rendered at 8 frames per second and 720 pixels wide (4.1 MiB), and
     the MP4 stays out of the tree. `scripts/plugin-check.sh`, which
     `scripts/check.sh` runs, checks those limits on the index, that the
