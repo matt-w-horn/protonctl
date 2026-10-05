@@ -10,9 +10,9 @@ and requirements: [docs/rfc-0001.md](docs/rfc-0001.md).
 
 *Illustration with synthetic data, not a recording, about two minutes long.
 Chapter 1 (what it does) shows what is built. Chapter 2 explains where your
-data goes once Claude reads it. Chapter 3 (aliases mode, `setup privacy`
-and `reveal_message`) is planned ([RFC-0001](docs/rfc-0001.md), Phases 2
-and 3).
+data goes once Claude reads it. Chapter 3 shows aliases mode and
+`setup privacy`, built in Phase 2, and `reveal_message`, which is planned
+for Phase 3 ([RFC-0001](docs/rfc-0001.md)).
 [Full-resolution video (MP4)](docs/demo/protonctl-demo.mp4), rendered from
 [`docs/demo/storyboard.html`](docs/demo/storyboard.html) by
 [`docs/demo/render.mjs`](docs/demo/render.mjs).*
@@ -52,7 +52,14 @@ flowchart LR
 | Drive (read-only) | the Proton Drive app's local folder, and the official Proton Drive CLI for content; without the app, listing goes through the CLI and search is off | `search_files`, `list_folder`, `get_file_metadata` (with `digests: true`, Proton's node IDs, the SHA-1 Proton stored at upload, and local digests), `read_file_content` (the text of text files, PDFs and Word, RTF and OpenDocument documents, a page at a time, and images), `download_file` (any file, with its SHA-256 and SHA-1, saved or returned inline), `list_drive_tree` (everything under a folder, a page at a time), `export_drive_manifest` (the same inventory written to the export folder) |
 | Mail (read-only) | Proton Mail Bridge, over local IMAP with its certificate pinned | `search_threads` (Gmail-style queries, one row per thread, optional snippets), `count_messages` (totals, or groups by sender, domain or recipient, in one call), `get_thread` (quoted replies removed), `get_message`, `list_labels`, `get_attachment` (text, PDF and document text, or images, with its SHA-256 and SHA-1) |
 
-`get_status` lists what protonctl can reach and every secret it holds.
+`get_status` lists what protonctl can reach, every secret it holds, and the
+privacy mode.
+
+In aliases mode (see [Choose the privacy setting](#choose-the-privacy-setting))
+the same tools answer with aliases in place of names, except
+`download_file` and `export_drive_manifest`, which it does not offer. Drive
+tools take a `fileId` or `folderId` from a result instead of a path, and
+`get_attachment` returns text only.
 
 Content comes back in the tool result wherever it can, so no folder is
 needed to read it. Text pages by `offset` and `maxChars` (20,000 characters
@@ -78,6 +85,35 @@ PATH. Each rebuild changes the binary's ad-hoc signature, so macOS asks once
 more for each Keychain item (the calendar link, the Bridge password) the
 next time protonctl reads it. Enter the login keychain password and choose
 Always Allow; that lasts until the next rebuild.
+
+## Choose the privacy setting
+
+protonctl answers no call until you choose how its results reach the
+model. Choose one:
+
+```sh
+~/.cargo/bin/protonctl setup privacy
+~/.cargo/bin/protonctl setup privacy --off
+```
+
+- **Aliases mode** (`setup privacy`): names, addresses, phone and account
+  numbers, codes and passwords appear as aliases such as
+  `amber-falcon-river`, and links as "link 1" with their domain's alias.
+  Message, thread, event and file IDs, Drive paths and page tokens become
+  opaque handles, and digests are keyed. Each result has an `entities`
+  table that gives each alias's type, hints such as `external`, and a
+  `ref`, which a query can use in place of the name (`from:ref:REF`).
+  Nothing is saved to disk, so a Drive file that is only in the cloud
+  cannot be read yet, and images come back as a type and a reason.
+- **Off** (`setup privacy --off`): results as they are, names included.
+  It asks first, on a terminal.
+
+The setting is one Keychain item, `protonctl/privacy-mode`, for every host
+on the Mac. `setup privacy` also makes the privacy key,
+`protonctl/privacy-key`, if there is none; `protonctl rotate-key` replaces
+it, which changes every alias and stops old refs and handles from working.
+After a change, restart Claude Code and Claude Desktop: a server that is
+running refuses every call once the setting changes.
 
 ## Add a calendar
 
@@ -110,6 +146,22 @@ The first connection pins Bridge's TLS certificate, and later connections
 refuse any other. If you reinstall Bridge, its certificate changes: delete
 `[mail]` from the config and run setup again.
 
+## Add Drive
+
+Install the official Proton Drive CLI at `~/bin/proton-drive` (or pass
+`--cli` with its path) and sign it in; signing in is the CLI's own step, so
+protonctl never sees your Proton password:
+
+```sh
+~/bin/proton-drive auth login
+~/.cargo/bin/protonctl setup drive
+```
+
+`setup drive` checks that the CLI is signed by Proton and signed in, finds
+the Proton Drive app's folder if the app is installed (or takes
+`--folder`), and writes `[drive]` to the config. Drive is off until it
+runs. Without the app, listing goes through the CLI and search is off.
+
 ## Connect Claude
 
 Claude Code:
@@ -130,8 +182,8 @@ python3 -c 'import json, os, shutil; p = os.path.expanduser("~/Library/Applicati
 Then open the app again.
 
 In Claude Code, these rules allow the tools that only read without a
-prompt, and leave the three that can save files (`get_attachment`,
-`download_file` and `export_drive_manifest`) on ask:
+prompt, and leave the three that can save files in off mode
+(`get_attachment`, `download_file` and `export_drive_manifest`) on ask:
 `mcp__proton__get_status`, `mcp__proton__get_event`,
 `mcp__proton__get_file_metadata`, `mcp__proton__get_message`,
 `mcp__proton__get_thread`, `mcp__proton__list_*`, `mcp__proton__search_*`,
@@ -147,7 +199,8 @@ prompt, and leave the three that can save files (`get_attachment`,
 ~/.cargo/bin/protonctl logout
 ```
 
-`logout` deletes protonctl's Keychain items. A calendar link keeps working for
+`logout` asks first, then deletes protonctl's Keychain items, the privacy
+key and setting among them. A calendar link keeps working for
 anyone who has it until you delete it in the calendar's sharing settings in
 the Proton web app. The Proton Drive CLI has its own session, which this ends:
 
@@ -192,6 +245,15 @@ the tests, `cargo deny check`, and a line-coverage floor through
 `cargo-llvm-cov` and Homebrew's `llvm` (`brew install cargo-llvm-cov llvm`),
 which prints coverage per file. Unused dependencies are checked by hand, now
 and then, with `cargo machete` (`cargo install cargo-machete --locked`).
+
+The gates also run on Linux, as in a cloud container, where protonctl builds
+but serves nothing yet: it has no secret store there
+([RFC section 11](docs/rfc-0001/11-platforms.md)). Install the tools with
+`cargo install cargo-deny cargo-llvm-cov --locked` and
+`rustup component add llvm-tools-preview`. The tests of macOS's PDF and Word
+readers run only on a Mac. With `clang` installed and
+`rustup target add aarch64-apple-darwin`, `check.sh` on Linux also lints the
+macOS build, so changes to macOS-only code are checked there too.
 Inside Claude Code's Bash sandbox `~/.cargo` is not writable, so point Cargo
 elsewhere first:
 

@@ -26,6 +26,7 @@ fn start(
     let mut child = Command::new(env!("CARGO_BIN_EXE_protonctl"))
         .arg("serve")
         .env("HOME", home)
+        .env_remove("XDG_CACHE_HOME")
         .env("PROTONCTL_CONFIG", &config)
         .envs(env.iter().copied())
         .stdin(Stdio::piped())
@@ -53,9 +54,15 @@ fn start(
 fn stop_and_check(signal: Option<&str>) {
     let home = tempfile::tempdir().unwrap();
     let (mut child, stdin, _stdout) = start(home.path(), &[]);
+    // protonctl's cache folder under this home, on each system.
+    let cache = if cfg!(target_os = "macos") {
+        "Library/Caches/protonctl"
+    } else {
+        ".cache/protonctl"
+    };
     let downloads = home
         .path()
-        .join(format!("Library/Caches/protonctl/downloads/{}", child.id()));
+        .join(format!("{cache}/downloads/{}", child.id()));
     std::fs::create_dir_all(&downloads).unwrap();
     std::fs::write(downloads.join("0-a.txt"), "a").unwrap();
     match signal {
@@ -140,8 +147,12 @@ fn results_stay_out_of_stderr_even_with_rust_log_set() {
     .unwrap();
     let mut line = String::new();
     stdout.read_line(&mut line).unwrap();
-    // A phrase from get_status's result, to look for in stderr.
-    assert!(line.contains("share files"), "{line}");
+    // A phrase from get_status's result, to look for in stderr: its status,
+    // or, with no privacy mode chosen on this machine (RFC Q27), the refusal.
+    let phrase = ["protonctl is read-only", "privacy_mode_"]
+        .into_iter()
+        .find(|p| line.contains(p))
+        .unwrap_or_else(|| panic!("{line}"));
     drop(stdin);
     child.wait().unwrap();
     let mut stderr = String::new();
@@ -151,5 +162,5 @@ fn results_stay_out_of_stderr_even_with_rust_log_set() {
         .unwrap()
         .read_to_string(&mut stderr)
         .unwrap();
-    assert!(!stderr.contains("share files"), "{stderr}");
+    assert!(!stderr.contains(phrase), "{stderr}");
 }

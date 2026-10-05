@@ -368,11 +368,12 @@ and the coverage floor failed when set to 99%.
 Planned for the privacy layer, each shown to fail on a constructed bad input
 before it is trusted:
 
-- Settings (Phase 2): an unknown mode is a config error; aliases mode with
+- Settings (Phase 2): a `privacy-mode` item holding neither `off` nor
+  `aliases` refuses every call; aliases mode with
   no privacy key refuses every call and makes no key; a server refuses
   every call once the configured mode changes, in either direction, and
-  keeps refusing when it changes back; with no mode set and Q27's option
-  (a), every call gives `privacy_mode_unset`;
+  keeps refusing when it changes back; with no mode set (Q27), every call
+  gives `privacy_mode_unset`;
   `status`, `doctor`, `get_status` and the `instructions` name the mode;
   off mode passes the 2026-10-03 tests unchanged; Drive is off without a
   `[drive]` table and on with one. Each shown to fail with its check

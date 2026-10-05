@@ -59,7 +59,11 @@ impl Export {
     /// The configured folder, refused when it is relative, inside the Proton
     /// Drive app's folder (writing there uploads to Proton, which R11 keeps
     /// off), or inside protonctl's cache, which holds the download folders.
-    pub fn new(cfg: &ExportConfig, drive_root: Option<&Path>) -> Result<Self> {
+    /// `drive_folders` are the Proton Drive app's folders, resolved.
+    pub fn new<'a>(
+        cfg: &ExportConfig,
+        drive_folders: impl IntoIterator<Item = &'a Path>,
+    ) -> Result<Self> {
         let folder = &cfg.folder;
         if !folder.is_absolute() {
             bail!("[export] folder must be an absolute path");
@@ -68,7 +72,10 @@ impl Export {
         // folder not made yet cannot lead inside either one unseen.
         let folder = resolved(folder);
         let cache = resolved(&cache_dir());
-        if drive_root.is_some_and(|root| folder.starts_with(root)) {
+        if drive_folders
+            .into_iter()
+            .any(|root| folder.starts_with(root))
+        {
             bail!(
                 "[export] folder must be outside the Proton Drive app's folder, where writing uploads to Proton"
             );
@@ -126,8 +133,8 @@ mod tests {
         let drive = tempfile::tempdir().unwrap();
         let root = drive.path().canonicalize().unwrap();
         let cfg = |p: PathBuf| ExportConfig { folder: p };
-        assert!(Export::new(&cfg("exports".into()), Some(&root)).is_err());
-        let inside = Export::new(&cfg(root.join("Exports")), Some(&root));
+        assert!(Export::new(&cfg("exports".into()), [root.as_path()]).is_err());
+        let inside = Export::new(&cfg(root.join("Exports")), [root.as_path()]);
         assert!(
             inside
                 .unwrap_err()
@@ -142,11 +149,11 @@ mod tests {
             .join("x/..")
             .join(name)
             .join("Exports");
-        assert!(Export::new(&cfg(around), Some(&root)).is_err());
+        assert!(Export::new(&cfg(around), [root.as_path()]).is_err());
         let cache = cache_dir().join("exports");
-        assert!(Export::new(&cfg(cache), Some(&root)).is_err());
+        assert!(Export::new(&cfg(cache), [root.as_path()]).is_err());
         let outside = tempfile::tempdir().unwrap();
-        let ok = Export::new(&cfg(outside.path().join("exports")), Some(&root)).unwrap();
+        let ok = Export::new(&cfg(outside.path().join("exports")), [root.as_path()]).unwrap();
         let dir = ok.dir(&["mail", "abc"]).unwrap();
         let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
@@ -171,12 +178,12 @@ mod tests {
         let elsewhere = tempfile::tempdir().unwrap();
         let link = elsewhere.path().join("Drive");
         std::os::unix::fs::symlink(&root, &link).unwrap();
-        let err = Export::new(&cfg(link.join("exports/new")), Some(&root)).unwrap_err();
+        let err = Export::new(&cfg(link.join("exports/new")), [root.as_path()]).unwrap_err();
         assert!(err.to_string().contains("uploads to Proton"), "{err}");
         // Spelled in another case, which a case-insensitive disk ignores.
         let shouted = PathBuf::from(root.to_string_lossy().to_uppercase());
         if shouted.exists() {
-            assert!(Export::new(&cfg(shouted.join("exports")), Some(&root)).is_err());
+            assert!(Export::new(&cfg(shouted.join("exports")), [root.as_path()]).is_err());
         }
     }
 }

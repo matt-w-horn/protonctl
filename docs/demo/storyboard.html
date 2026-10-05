@@ -6,7 +6,8 @@
 <!--
   An illustration, not a recording. Every name, address and message is
   synthetic (domains under .example). Chapter 1 shows protonctl as built;
-  chapter 3 shows aliases mode, which is planned (RFC-0001, Phases 2 and 3).
+  chapter 3 shows aliases mode, built in Phase 2, and reveal_message (Touch
+  ID), which is planned for Phase 3 (RFC-0001).
   render.mjs draws each frame with window.__render(t) and encodes the video.
   Open this file in a browser to play it in real time.
 -->
@@ -142,7 +143,7 @@
 </div>
 <div id="status" class="abs"></div>
 <div id="caption" class="abs"></div>
-<div id="footer" class="abs"><span><b>Illustration</b> with synthetic data, not a recording.</span><span>Chapter 1 is built. Aliases mode and <b>setup privacy</b> are planned (RFC-0001).</span></div>
+<div id="footer" class="abs"><span><b>Illustration</b> with synthetic data, not a recording.</span><span>Aliases mode and <b>setup privacy</b> are built. Reading one email after Touch ID is planned (RFC-0001).</span></div>
 
 <script>
 // Every element has a time it appears (tIn) and leaves (tOut), and a way it
@@ -325,7 +326,7 @@ function resultLines(t0) {
   const L = layer(64.2, 68.6);
   L.classList.add("full");
   L.innerHTML = `<div class="kicker">The privacy layer</div><div class="big">privacy = <span style="color:var(--alias)">aliases</span></div>
-    <div class="cmd">protonctl setup privacy<span class="pl">planned</span></div>
+    <div class="cmd">protonctl setup privacy<span class="pl">built</span></div>
     <div class="sub2">Claude still answers. The transcript holds aliases instead of the names.</div>`;
 }
 {
@@ -337,7 +338,7 @@ function resultLines(t0) {
     `   ${k("hints")}: ["sender", "external"], ${k("ref")}: "GwZIvo_D…"}, …},`,
     ` ${k("detectors")}: ["regex", "dictionary"]${p("}")}`,
   ], 74.2, { cls: "card", lines: 0.2 });
-  note(L, `Names, email addresses, phone and card numbers, and links become <b class="o">aliases</b>. Organizations and places follow in Phase 5.`, 70.2, 1200, 210, 620);
+  note(L, `Names, email addresses, phone and card numbers become <b class="o">aliases</b>, and links “link 1”. Organizations and places follow in Phase 5.`, 70.2, 1200, 210, 620);
   note(L, `Each comes with coarse hints, and a <b>ref</b> to search by without naming anyone.`, 74.4, 1200, 390, 620);
   note(L, `IDs become handles. Dates and amounts stay.`, 76.8, 1200, 570, 620);
 }
@@ -400,7 +401,7 @@ function resultLines(t0) {
     <div class="cmd">
       <div>pbpaste | protonctl setup mail --address you@proton.me</div>
       <div>pbpaste | protonctl setup calendar --id personal</div>
-      <div>protonctl setup privacy<span class="pl">planned: aliases</span></div>
+      <div>protonctl setup privacy<span class="pl">aliases mode</span></div>
       <div>claude mcp add --scope user proton -- protonctl serve</div>
     </div>`;
 }
@@ -416,7 +417,9 @@ const captions = [
   [90.2, 92.3, "One person, one alias, across mail and calendar."],
   [107.6, 110.3, "Original text needs <em>Touch ID</em>, one item at a time, in a prompt protonctl writes."],
 ];
-const status = t => (t >= 5 && t < 31 ? ["built", "as built"] : t >= 64 && t < 117.2 ? ["planned", "planned"] : null);
+// Aliases mode is built; reading one email after Touch ID (98.4 s on) is planned.
+const status = t =>
+  (t >= 5 && t < 31) || (t >= 64 && t < 98.4) ? ["built", "as built"] : t >= 98.4 && t < 110.4 ? ["planned", "planned"] : null;
 const packetPath = [[480, 382], [700, 382], [1080, 382], [1560, 382]];
 
 window.__duration = DURATION;

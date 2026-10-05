@@ -70,16 +70,16 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   `2SB5Z68H26`) and its version range before first use in a process, and MUST
   pin Bridge's TLS certificate. Later runs start the binary by path, and
   the default path, `~/bin/proton-drive`, is one the user can write, so a
-  binary swapped in after the check is not seen; checking before every run,
-  or keeping the CLI where the user cannot write, is open (Q24).
+  binary swapped in after the check is not seen. From Phase 2 the check
+  runs before every run of the CLI (Q24).
 - R10. In aliases mode, from Phase 2, protonctl MUST NOT write message or
   file content, or text derived from it, to disk. Content goes from Bridge, the Drive app's
-  folder or the CLI into memory, and leaves in a tool result. When
-  `proton-drive` cannot stream a file to stdout (Q14), it downloads into a
-  RAM disk that protonctl creates per process, readable only by the user,
-  and detaches at exit; Q14 also checks that the disk honours ownership,
+  folder or the CLI into memory, and leaves in a tool result.
+  `proton-drive` cannot stream a file to stdout (Q14), so it downloads into
+  a RAM disk that protonctl creates per process, readable only by the
+  user, and detaches at exit; M2.8 checks that the disk honours ownership,
   stays out of Finder and Spotlight, and that its pages reach only
-  encrypted swap. The export folder, the download folder,
+  encrypted swap, and a read that cannot get such a disk fails. The export folder, the download folder,
   `download_file`, `export_drive_manifest`, the CLI's `drive manifest`,
   and the `export` and `inline` options of `get_attachment` and `drive
   get` are absent in aliases mode. The CLI writes a file only where its
@@ -113,8 +113,9 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   groups, file and folder names, labels, calendar titles, descriptions,
   attendees, organizers and locations, and local paths such as the Drive
   app's folder, whose name holds the account's address. Which of these
-  each phase detects is listed in [section 6](06-privacy.md); Q22 weighs further types
-  (government ID numbers, credentials and one-time codes, account names).
+  each phase detects is listed in [section 6](06-privacy.md); from Phase 2 that includes
+  US Social Security numbers, labelled one-time codes and passwords, and
+  local account names (Q22).
   Dates, times and amounts stay plaintext. Two exceptions: a name typed in
   the current call's query
   appears as typed in that call's result, whose `queryEntities` maps it to
@@ -131,9 +132,11 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   the privacy key, the word list and the canonical form are unchanged, in
   every process and on every host, except where one result holds two
   entities that share an alias ([section 6](06-privacy.md)). protonctl MUST NOT store a map
-  from aliases to values. Whether names enter the HMAC with their type, the
-  word count, and how a change to the canonical form or to a detector's
-  typing is announced are open (Q19).
+  from aliases to values. Names enter the HMAC with one shared tag rather
+  than their type; a fourth word is added only inside one result; and a
+  change to the canonical form, the word list or a detector's typing
+  raises the format version that `get_status` reports (Q19). URLs get no
+  alias: each is `link N` within its result, beside its domain's alias.
 - R15. From Phase 2, every result that contains an alias MUST carry an
   `entities` table with one entry per alias: its type, at most three hints,
   the aliases of any email addresses seen with it, and a `ref`. A `ref` is
@@ -143,8 +146,8 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   `ref` that does not decrypt MUST be refused with an error that points to
   the `entities` table. A search by `ref` searches for the value it holds,
   and Bridge matches raw bytes, so a canonical value ("alice chen") misses
-  "Chen, Alice" and "Zoë"; whether a `ref` also holds the forms seen, or
-  the person's addresses, is open (Q19). The `entities` table counts toward
+  "Chen, Alice" and "Zoë"; a `ref` holds the canonical value only, and a
+  person's addresses carry their own `ref`s (Q19). The `entities` table counts toward
   the result's size, which Claude Code caps at 25,000 tokens ([section 6](06-privacy.md)).
 - R16. In aliases mode, from Phase 2, results MUST NOT contain Proton's IDs
   (message, thread, node, revision, share), iCalendar UIDs, or RFC 5322 `Message-Id`,
@@ -154,8 +157,8 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   base64url. A Drive handle carries the path as stored, not the node UID,
   so exclusions (R7) still apply by path; it SHOULD be padded as a `ref` is,
   since its length otherwise gives the path's length, and it goes stale
-  when the file or any folder above it is renamed or moved. Node-UID
-  handles that resolve to a path at each use are the alternative (Q20).
+  when the file or any folder above it is renamed or moved; the error
+  then says to search again (Q20).
   Tools take handles and decrypt them, and check exclusions on the
   decrypted path; a handle that does not decrypt MUST be refused. Page
   tokens MUST be sealed the same way: today a Drive tree token carries
@@ -183,7 +186,7 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   refusal or a timeout returns `declined_by_user`; a prompt still open
   when the call's time limit (R8) ends is cancelled, and an answer after
   that approves nothing. The result carries an `entities` table that
-  pairs each name in it with its alias, unless Q21 decides otherwise. How
+  pairs each name in it with its alias (Q21). How
   protonctl reaches LocalAuthentication is open (Q15): the crate forbids
   unsafe code, so the options are a JavaScript for Automation script
   through `/usr/bin/osascript`, as PDFKit runs today, a signed Swift
@@ -244,14 +247,18 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   from Phase 5), so a reader can see when names in free text may have been
   missed.
 - R25. From Phase 2, in either mode, logs on stderr MUST NOT carry
-  content, names, queries, raw IDs or digests; in aliases mode the
-  identifiers they carry are keyed under the log key. A panic MUST print a
-  fixed line and nothing of its message: Rust's own messages quote data (a
-  slice off a character boundary prints up to 256 bytes of the string), and
-  hosts keep stderr in log files. Children's stderr is never passed on.
+  content, names, queries, raw IDs or digests; protonctl's own log lines
+  carry no identifiers at all, so none needs a key. A panic MUST print a
+  fixed line, with at most the code location, and nothing of its message:
+  Rust's own messages quote data (a slice off a character boundary prints
+  up to 256 bytes of the string), and hosts keep stderr in log files.
+  Children's stderr is never passed on.
 - R26. From Phase 2, the privacy mode MUST be one setting, `off` or
-  `aliases`, for every service and every host on the Mac ([section 4,
-  Settings](04-design.md#settings)). A server MUST refuse every call once the
+  `aliases`, for every service and every host on the machine ([section 4,
+  Settings](04-design.md#settings)), kept in the secret store as item
+  `privacy-mode`, not in the config (Q28). Until the user sets it, there
+  is no mode: every call MUST be refused with the two `setup privacy`
+  commands, and `doctor` MUST fail (Q27). A server MUST refuse every call once the
   configured mode differs from the one it started in, and keep refusing
   even if the setting changes back, until the host restarts it. In
   aliases mode it MUST also refuse every call while the privacy key is

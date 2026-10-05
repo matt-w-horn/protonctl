@@ -16,6 +16,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::config::{DriveConfig, cache_dir, home};
+use crate::content::clean;
 
 /// Proton AG's Apple Developer team, shared by Proton Drive.app and the CLI.
 const PROTON_TEAM: &str = "2SB5Z68H26";
@@ -81,6 +82,11 @@ fn lock(path: &Path) -> Result<File> {
 /// Check the signature and version; returns the version string. `--version`
 /// also asks proton.me whether a newer CLI exists (RFC Appendix A).
 pub fn verify(cli: &Path) -> Result<String> {
+    if !cfg!(target_os = "macos") {
+        bail!(
+            "the Drive CLI is checked with macOS's codesign, and Linux has no check yet (RFC-0001 Q33)"
+        );
+    }
     let requirement =
         format!("=anchor apple generic and certificate leaf[subject.OU] = \"{PROTON_TEAM}\"");
     let sig = Command::new("/usr/bin/codesign")
@@ -151,16 +157,26 @@ impl Cli {
         &self.path
     }
 
+    /// Check the signature and version now, as the first call would, and
+    /// return the version; later calls in this process need no check.
+    pub async fn check(&self) -> Result<String> {
+        let mut verified = self.verified.lock().await;
+        let path = self.path.clone();
+        let version = crate::content::blocking(move || verify(&path)).await??;
+        *verified = true;
+        Ok(version)
+    }
+
     /// Run one command and parse the JSON it prints, with only `environment()`.
     /// Stdin is empty, so a prompt fails instead of waiting.
     pub async fn json(&self, args: &[&OsStr]) -> Result<Value> {
         let mut verified = self.verified.lock().await;
         if !*verified {
             let path = self.path.clone();
-            tokio::task::spawn_blocking(move || verify(&path)).await??;
+            crate::content::blocking(move || verify(&path)).await??;
             *verified = true;
         }
-        let _held = tokio::task::spawn_blocking(|| lock(&lock_path())).await??;
+        let _held = crate::content::blocking(|| lock(&lock_path())).await??;
         let out = tokio::process::Command::new(&self.path)
             .args(args)
             .env_clear()
@@ -180,7 +196,8 @@ impl Cli {
             } else {
                 &out.stderr
             };
-            let said: String = String::from_utf8_lossy(said)
+            // The CLI's words can repeat a node's name, which a third party wrote (R6).
+            let said: String = clean(&String::from_utf8_lossy(said), &mut 0)
                 .trim()
                 .chars()
                 .take(500)
@@ -227,6 +244,29 @@ mod tests {
         let before = beats();
         std::thread::sleep(Duration::from_millis(400));
         assert_eq!(beats(), before, "the CLI outlived the runtime");
+    }
+
+    /// The CLI's own words can repeat a node's name, which whoever named the
+    /// file wrote, so they reach the error cleaned (R6).
+    #[tokio::test]
+    async fn the_cli_s_failure_text_is_cleaned() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("proton-drive");
+        // \342\200\256 is U+202E, RIGHT-TO-LEFT OVERRIDE, in UTF-8.
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nprintf 'cannot read plan\\342\\200\\256dm.exe\\n' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = Cli::trusted(script)
+            .json(&[])
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains('\u{202E}'), "{err:?}");
+        assert!(err.contains("cannot read plandm.exe"), "{err}");
     }
 
     /// Two handles on the lock file exclude each other. flock(2) locks belong

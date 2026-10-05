@@ -4,7 +4,7 @@
 
 pub mod ics;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration as StdDuration, Instant};
@@ -19,7 +19,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
 use crate::config::CalendarConfig;
-use crate::content::{tokens, truncate, unquote};
+use crate::content::{Invalid, Missing, tokens, truncate, unquote};
+use crate::privacy::error::Param;
 use crate::secret;
 use ics::{Feed, Occurrence, Zone};
 
@@ -215,7 +216,7 @@ impl Terms {
             }
         }
         if terms.want.is_empty() && terms.avoid.is_empty() {
-            bail!("query is empty");
+            bail!(Invalid::rule("query is empty"));
         }
         Ok(terms)
     }
@@ -252,11 +253,32 @@ impl Calendars {
             None => Ok(self.configs.iter().collect()),
             Some(id) => match self.configs.iter().find(|c| c.id == id) {
                 Some(c) => Ok(vec![c]),
-                None => {
-                    bail!("no calendar with id {id:?}; list_calendars shows the configured ids")
-                }
+                None => bail!(Missing::of(
+                    Param::CalendarId,
+                    format!("no calendar with id {id:?}; list_calendars shows the configured ids")
+                )),
             },
         }
+    }
+
+    /// Every organizer's and attendee's name in the calendars that can be
+    /// read, for aliases mode's name dictionary (RFC Q22), and whether every
+    /// calendar could be.
+    pub async fn people(&self) -> (Vec<String>, bool) {
+        let mut names = HashSet::new();
+        let mut complete = true;
+        for cal in &self.configs {
+            match self.feed(&cal.id).await {
+                Ok((feed, _)) => names.extend(feed.events.iter().flat_map(|e| {
+                    e.organizer
+                        .iter()
+                        .chain(&e.attendees)
+                        .filter_map(|p| p.name.clone())
+                })),
+                Err(_) => complete = false,
+            }
+        }
+        (names.into_iter().collect(), complete)
     }
 
     async fn feed(&self, id: &str) -> Result<(Arc<Feed>, DateTime<Utc>)> {
@@ -267,8 +289,8 @@ impl Calendars {
         }
         // Off the async threads: the read can wait on a Keychain approval dialog,
         // and a blocked thread would stop the R8 time limit from firing.
-        let account = secret::calendar_account(id);
-        let url = tokio::task::spawn_blocking(move || secret::get(&account))
+        let account = secret::Account::Calendar(id.to_string());
+        let url = crate::content::blocking(move || secret::get(&account))
             .await??
             .with_context(|| {
                 format!(
@@ -329,7 +351,7 @@ impl Calendars {
                 json!({
                     "calendarId": c.id,
                     "name": c.name,
-                    "linkStored": held.contains(&secret::calendar_account(&c.id)),
+                    "linkStored": held.contains(&secret::Account::Calendar(c.id.clone())),
                     "fetchedAt": cached.map(|x| x.fetched_at.to_rfc3339()),
                     "events": cached.map(|x| x.feed.events.len()),
                 })
@@ -426,16 +448,22 @@ impl Calendars {
             }
         }
         if unread.is_empty() {
-            bail!(
-                "no event {:?} in the selected calendars (the feed was fetched within the last 15 minutes)",
-                req.event_id
-            )
+            bail!(Missing::of(
+                Param::EventId,
+                format!(
+                    "no event {:?} in the selected calendars (the feed was fetched within the last 15 minutes)",
+                    req.event_id
+                )
+            ))
         }
-        bail!(
-            "no event {:?} in the calendars that could be read; {}",
-            req.event_id,
-            unread.join("; ")
-        )
+        bail!(Missing::of(
+            Param::EventId,
+            format!(
+                "no event {:?} in the calendars that could be read; {}",
+                req.event_id,
+                unread.join("; ")
+            )
+        ))
     }
 
     fn zone_for(&self, name: Option<&str>) -> Result<Zone> {
@@ -470,7 +498,9 @@ impl Calendars {
             None => (0, from, to),
         };
         if to <= from || to - from > Duration::days(366) {
-            bail!("the window must end after it starts and span at most 366 days");
+            bail!(Invalid::rule(
+                "the window must end after it starts and span at most 366 days"
+            ));
         }
         let page_size = req.page_size.unwrap_or(50).clamp(1, 250);
         let mut sources = Vec::new();
@@ -535,8 +565,11 @@ type Bounds = (Zone, Option<DateTime<Utc>>, Option<DateTime<Utc>>);
 
 /// A calendar page token: `<offset>.<window start>.<window end>`, in Unix seconds.
 fn read_page_token(token: &str) -> Result<(usize, DateTime<Utc>, DateTime<Utc>)> {
-    let invalid =
-        || anyhow::anyhow!("invalid pageToken; pass the nextPageToken exactly as returned");
+    let invalid = || {
+        anyhow::anyhow!(Invalid::page_token(
+            "invalid pageToken; pass the nextPageToken exactly as returned"
+        ))
+    };
     let mut parts = token.split('.');
     let offset = parts
         .next()
@@ -567,11 +600,14 @@ pub fn parse_time(s: &str, zone: Zone) -> Result<DateTime<Utc>> {
         if YEARS.contains(&year) {
             Ok(())
         } else {
-            Err(anyhow::anyhow!(
-                "{s:?} is outside the years {} to {} that protonctl reads",
-                YEARS.start(),
-                YEARS.end()
-            ))
+            Err(anyhow::anyhow!(Invalid::quoting(
+                "A time is outside the years 1900 to 2200 that protonctl reads.",
+                format!(
+                    "{s:?} is outside the years {} to {} that protonctl reads",
+                    YEARS.start(),
+                    YEARS.end()
+                )
+            )))
         }
     };
     if let Ok(t) = DateTime::parse_from_rfc3339(s) {
@@ -586,7 +622,10 @@ pub fn parse_time(s: &str, zone: Zone) -> Result<DateTime<Utc>> {
         bounded(d.year())?;
         return Ok(zone.to_utc(d.and_time(chrono::NaiveTime::MIN)));
     }
-    bail!("cannot read time {s:?}; use RFC 3339, YYYY-MM-DDTHH:MM:SS, or YYYY-MM-DD")
+    bail!(Invalid::quoting(
+        "A time cannot be read; use RFC 3339, YYYY-MM-DDTHH:MM:SS, or YYYY-MM-DD.",
+        format!("cannot read time {s:?}; use RFC 3339, YYYY-MM-DDTHH:MM:SS, or YYYY-MM-DD")
+    ))
 }
 
 fn event_json(
@@ -619,7 +658,7 @@ fn event_json(
         "end": end,
         "allDay": e.start.is_date(),
         "recurring": o.recurring,
-        "status": e.status.as_deref().unwrap_or("confirmed"),
+        "status": e.status.unwrap_or(ics::EventStatus::Confirmed),
         "showsAs": if e.transparent { "free" } else { "busy" },
     });
     let obj = v.as_object_mut().expect("json object");
@@ -839,6 +878,58 @@ mod tests {
             let found = cals.get_event(&req).await.unwrap();
             insta::assert_json_snapshot!(name, found["event"]);
         }
+    }
+
+    /// RFC section 6: every string field a calendar result holds has an
+    /// aliases-mode policy, so none is dropped or passed on unread.
+    #[tokio::test]
+    async fn every_calendar_field_has_a_privacy_policy() {
+        use crate::privacy::pipeline::unlisted;
+        use crate::tool::Tool;
+        let people = "ORGANIZER;CN=Dana Ruiz:mailto:dana@x.test\r\n\
+            ATTENDEE;CN=Ann Lee;PARTSTAT=ACCEPTED:mailto:ann@x.test\r\n";
+        let cals = one_calendar(feed(&[event(
+            "1@x.test",
+            "20261005T170000Z",
+            &format!("DTEND:20261005T180000Z\r\nSUMMARY:Review\r\nDESCRIPTION:Notes\r\nLOCATION:Main St\r\nRRULE:FREQ=WEEKLY;COUNT=3\r\n{people}"),
+        )]))
+        .await;
+        let window = || ListEventsReq {
+            start_time: Some("2026-10-01".into()),
+            end_time: Some("2026-11-01".into()),
+            page_size: Some(1),
+            ..Default::default()
+        };
+        let search = SearchEventsReq {
+            query: "review".into(),
+            window: window(),
+        };
+        let one = GetEventReq {
+            event_id: "1@x.test|20261012T170000Z".into(),
+            ..Default::default()
+        };
+        // list_calendars reads the secret store, so it is not run here.
+        let results = [
+            (Tool::ListEvents, cals.list_events(&window()).await.unwrap()),
+            (
+                Tool::SearchEvents,
+                cals.search_events(&search).await.unwrap(),
+            ),
+            (Tool::GetEvent, cals.get_event(&one).await.unwrap()),
+        ];
+        for (tool, result) in &results {
+            assert_eq!(
+                unlisted(*tool, result),
+                Vec::<String>::new(),
+                "{tool:?}: {result}"
+            );
+        }
+        assert!(
+            results[0].1["nextPageToken"].is_string(),
+            "{}",
+            results[0].1
+        );
+        assert_eq!(results[2].1["event"]["attendees"][0]["name"], "Ann Lee");
     }
 
     #[tokio::test]

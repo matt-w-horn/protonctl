@@ -19,6 +19,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use base64::Engine as _;
 
 use crate::content::{Attached, clean};
+use crate::platform;
 
 /// Largest file read for its text or shown as an image.
 pub const MAX_SOURCE: u64 = 64 << 20;
@@ -42,6 +43,11 @@ const PAGE_IMAGES: usize = 4;
 /// models scale down to and the 2576 that current ones read.
 const PAGE_EDGE: u32 = 2000;
 
+/// Why a PDF, Word, RTF or OpenDocument file is not read on a system without
+/// the readers above.
+const NO_READERS: &str =
+    "this system has no reader for PDF, Word, RTF or OpenDocument files yet (RFC-0001 Q34)";
+
 /// What a file's bytes hold, as far as the tools can return it inline.
 pub enum Content {
     Text(Document),
@@ -52,13 +58,30 @@ pub enum Content {
     Other(&'static str),
 }
 
+/// How a document's text was read, as `textFrom` names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum TextFrom {
+    #[serde(rename = "utf-8")]
+    Utf8,
+    #[serde(rename = "utf-16")]
+    Utf16,
+    #[serde(rename = "windows-1252 (guessed: the file is not UTF-8)")]
+    Windows1252Guessed,
+    #[serde(rename = "pdf")]
+    Pdf,
+    #[serde(rename = "textutil")]
+    Textutil,
+    /// A mail body, already decoded by the mail parser.
+    #[serde(rename = "message")]
+    Message,
+}
+
 /// A document's text, ready to page: hidden characters removed (R6), and
 /// for a PDF its pages joined by form feeds, with where each one starts.
 pub struct Document {
     text: String,
     chars: usize,
-    /// How the text was read: "utf-8", "pdf", "windows-1252 (guessed)", ...
-    from: &'static str,
+    from: TextFrom,
     /// The character offset of each PDF page; empty for other files.
     page_starts: Vec<usize>,
     hidden: usize,
@@ -68,7 +91,7 @@ pub struct Document {
 
 impl Document {
     /// `pages` of text, each cleaned of hidden characters, joined by '\f'.
-    pub fn new(pages: &[String], from: &'static str) -> Self {
+    pub fn new(pages: &[String], from: TextFrom) -> Self {
         let (mut text, mut page_starts, mut hidden) = (String::new(), Vec::new(), 0);
         let mut chars = 0;
         for (i, page) in pages.iter().enumerate() {
@@ -105,6 +128,12 @@ impl Document {
     ) -> Result<(Value, Vec<Attached>)> {
         let blank = self.text.trim().is_empty();
         match &self.pdf {
+            // Aliases mode returns no images (R22), so none is made.
+            Some(_) if blank && !crate::content::images_allowed() => Ok((
+                json!({ "content": null, "textLayer": false,
+                    "reason": "the PDF has no text layer (a scan); aliases mode returns no page images until Phase 4 reads their text" }),
+                Vec::new(),
+            )),
             Some(pdf) if page.is_some() || blank => {
                 let (mut v, images) = page_images(pdf, page.unwrap_or(1)).await?;
                 if blank {
@@ -176,6 +205,9 @@ pub async fn content(bytes: &[u8], name: &str) -> Result<Content> {
         return Ok(Content::Image { mime });
     }
     if bytes.starts_with(b"%PDF-") {
+        if !platform::DOCUMENT_READERS {
+            return Ok(Content::Other(NO_READERS));
+        }
         return pdf(bytes).await;
     }
     let ext = name.rsplit_once('.').map(|(_, x)| x.to_ascii_lowercase());
@@ -183,6 +215,9 @@ pub async fn content(bytes: &[u8], name: &str) -> Result<Content> {
         .as_deref()
         .filter(|x| ["docx", "doc", "rtf", "odt"].contains(x))
     {
+        if !platform::DOCUMENT_READERS {
+            return Ok(Content::Other(NO_READERS));
+        }
         let out = helper(
             "/usr/bin/textutil",
             &[
@@ -199,7 +234,7 @@ pub async fn content(bytes: &[u8], name: &str) -> Result<Content> {
         )
         .await?;
         let text = String::from_utf8(out).context("textutil did not return UTF-8")?;
-        return Ok(Content::Text(Document::new(&[text], "textutil")));
+        return Ok(Content::Text(Document::new(&[text], TextFrom::Textutil)));
     }
     Ok(match decode(bytes) {
         Some((text, from)) => Content::Text(Document::new(&[text], from)),
@@ -255,7 +290,7 @@ async fn pdf(bytes: &[u8]) -> Result<Content> {
         .iter()
         .map(|p| p.as_str().unwrap_or_default().to_string())
         .collect();
-    let mut doc = Document::new(&pages, "pdf");
+    let mut doc = Document::new(&pages, TextFrom::Pdf);
     doc.pdf = Some(bytes.to_vec());
     Ok(Content::Text(doc))
 }
@@ -380,7 +415,7 @@ async fn helper(program: &str, args: &[&str], input: &[u8]) -> Result<Vec<u8>> {
 /// Text from bytes: UTF-8, with or without a byte-order mark; UTF-16 with
 /// one; else, when no byte is NUL and few are control codes, Windows-1252,
 /// which maps every byte and is what most legacy text on a Mac or PC is.
-fn decode(bytes: &[u8]) -> Option<(String, &'static str)> {
+fn decode(bytes: &[u8]) -> Option<(String, TextFrom)> {
     // A UTF-8 mark over bytes that are not UTF-8 is read on without it.
     let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
     for (bom, big) in [(b"\xFF\xFE", false), (b"\xFE\xFF", true)] {
@@ -403,7 +438,7 @@ fn decode(bytes: &[u8]) -> Option<(String, &'static str)> {
                 .ok()
                 .filter(|t| rest.len() % 2 == 0 && !t.contains('\0'));
             if let Some(text) = text {
-                return Some((text, "utf-16"));
+                return Some((text, TextFrom::Utf16));
             }
         }
     }
@@ -411,7 +446,7 @@ fn decode(bytes: &[u8]) -> Option<(String, &'static str)> {
         return None;
     }
     if let Ok(text) = std::str::from_utf8(bytes) {
-        return Some((text.to_string(), "utf-8"));
+        return Some((text.to_string(), TextFrom::Utf8));
     }
     let controls = bytes
         .iter()
@@ -420,7 +455,7 @@ fn decode(bytes: &[u8]) -> Option<(String, &'static str)> {
     (controls * 100 <= bytes.len()).then(|| {
         (
             bytes.iter().map(|&b| windows_1252(b)).collect(),
-            "windows-1252 (guessed: the file is not UTF-8)",
+            TextFrom::Windows1252Guessed,
         )
     })
 }
@@ -492,11 +527,11 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn text_is_read_in_its_encoding() {
         let utf8 = text(content("Café".as_bytes(), "a.txt").await.unwrap());
-        assert_eq!((utf8.text.as_str(), utf8.from), ("Café", "utf-8"));
+        assert_eq!((utf8.text.as_str(), utf8.from), ("Café", TextFrom::Utf8));
         // A Latin-1 file is not lost: é is 0xE9, and 0x93/0x94 are curly quotes.
         let latin = text(content(b"Caf\xE9 \x93hi\x94", "a.txt").await.unwrap());
         assert_eq!(latin.text, "Café \u{201C}hi\u{201D}");
-        assert!(latin.from.starts_with("windows-1252"), "{}", latin.from);
+        assert_eq!(latin.from, TextFrom::Windows1252Guessed);
         let utf16: Vec<u8> = [0xFF, 0xFE]
             .into_iter()
             .chain("hé".encode_utf16().flat_map(u16::to_le_bytes))
@@ -525,9 +560,29 @@ pub(crate) mod tests {
         ));
     }
 
+    /// RFC R22: in aliases mode a scan gives a reason, and no page image is
+    /// made, since none would be returned.
+    #[tokio::test]
+    async fn a_scan_in_aliases_mode_gives_a_reason_and_no_images() {
+        let mut scan = Document::new(&[String::new()], TextFrom::Pdf);
+        scan.pdf = Some(b"%PDF-1.4 not rendered".to_vec());
+        let (v, images) = crate::content::restricted(scan.read(None, None, None))
+            .await
+            .unwrap();
+        assert!(images.is_empty());
+        assert_eq!(
+            (v["content"].clone(), v["textLayer"].clone()),
+            (Value::Null, json!(false))
+        );
+        assert!(
+            v["reason"].as_str().unwrap().contains("no text layer"),
+            "{v}"
+        );
+    }
+
     #[test]
     fn pages_of_text_follow_on_to_the_end() {
-        let d = Document::new(&["héllo wörld".to_string()], "utf-8");
+        let d = Document::new(&["héllo wörld".to_string()], TextFrom::Utf8);
         let first = d.page(None, Some(5)).unwrap();
         assert_eq!(first["content"], "héllo");
         assert_eq!(
@@ -543,14 +598,14 @@ pub(crate) mod tests {
         );
         assert_eq!(d.page(Some(11), None).unwrap()["content"], "");
         // Pages with no text say so.
-        let blank = Document::new(&[String::new(), " ".to_string()], "utf-8");
+        let blank = Document::new(&[String::new(), " ".to_string()], TextFrom::Utf8);
         assert_eq!(
             blank.page(None, None).unwrap()["note"],
             "the file holds no text"
         );
         assert!(d.page(Some(12), None).is_err());
         // Hidden characters go before offsets are counted, so pages line up.
-        let hidden = Document::new(&["a\u{200B}b".to_string(), "c".to_string()], "pdf");
+        let hidden = Document::new(&["a\u{200B}b".to_string(), "c".to_string()], TextFrom::Pdf);
         let all = hidden.page(None, None).unwrap();
         assert_eq!(all["content"], "ab\u{C}c");
         assert_eq!(
@@ -563,11 +618,13 @@ pub(crate) mod tests {
     }
 
     /// A one-page PDF made by macOS's own text-to-PDF filter.
+    #[cfg(target_os = "macos")]
     pub(crate) fn sample_pdf() -> Vec<u8> {
         pdf_of("Hello from page one.\nCafé — accents.\n")
     }
 
     /// A PDF of `text`, a new page at each form feed.
+    #[cfg(target_os = "macos")]
     fn pdf_of(text: &str) -> Vec<u8> {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("t.txt");
@@ -582,6 +639,7 @@ pub(crate) mod tests {
         out.stdout
     }
 
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn pdf_pages_come_as_images_and_a_scan_s_without_asking() {
         let six = text(
@@ -633,7 +691,7 @@ pub(crate) mod tests {
         );
         assert!(images.is_empty());
         // page is for PDFs.
-        let plain = Document::new(&["x".to_string()], "utf-8");
+        let plain = Document::new(&["x".to_string()], TextFrom::Utf8);
         assert!(plain.read(None, None, Some(1)).await.is_err());
 
         // A scan: a page rendered to JPEG, made back into a PDF by sips,
@@ -672,11 +730,33 @@ pub(crate) mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn without_the_readers_documents_say_why_they_are_not_read() {
+        for (bytes, name) in [
+            (&b"%PDF-1.4 a page"[..], "a.pdf"),
+            (b"PK\x03\x04 a document", "t.docx"),
+            (b"{\\rtf1 text}", "t.rtf"),
+        ] {
+            let read = content(bytes, name).await.unwrap();
+            assert!(
+                matches!(read, Content::Other(why) if why == NO_READERS),
+                "{name}"
+            );
+        }
+        // Text and images do not need them.
+        assert!(matches!(
+            content(b"plain", "t.txt").await.unwrap(),
+            Content::Text(_)
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn pdf_and_word_text_come_from_the_system_s_readers() {
         let pdf = text(content(&sample_pdf(), "a.pdf").await.unwrap());
         assert!(pdf.text.contains("Café — accents."), "{:?}", pdf.text);
-        assert_eq!(pdf.from, "pdf");
+        assert_eq!(pdf.from, TextFrom::Pdf);
         // A file that only claims to be a PDF.
         let fake = content(b"%PDF-1.4 nothing else", "a.pdf").await.unwrap();
         assert!(matches!(fake, Content::Other(_)));

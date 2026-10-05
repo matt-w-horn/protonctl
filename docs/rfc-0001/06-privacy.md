@@ -79,23 +79,27 @@ any step returns an error that names no content (R13).
    character removed, its offsets mapped back to the original, so that
    neither a hidden character nor its `\u{...}` escape in a Drive name (R6)
    can split a name the detectors would otherwise find.
-2. Build this call's name dictionary: display names and addresses from the
+2. Build the name dictionary: display names and addresses from the
    result's headers (From, To, Cc, Reply-To, Sender), calendar organizers
-   and attendees, Drive owners and authors, and the names in the query.
+   and attendees, Drive owners and authors, and the names in the query;
+   and, for the whole process (Q22), every correspondent's display name
+   from All Mail's ENVELOPE (1.9 s for about 20,000 messages,
+   [Appendix A](appendix-a-phase-0.md)) and every calendar attendee, built
+   on the first aliases-mode call and held in memory only, so that a
+   correspondent's name is found in Drive names, subjects and titles too.
    Until Phase 5 the server knows a query term is a name only when an
    operator holds it (`from:`, `to:`, `cc:`, `bcc:`), a regex finds it, or
    the dictionary already has it; a bare name among topic words ("Alice
    Chen contract") is not recognized, so `queryEntities` and R23's
-   guidance miss it.
-   Q22 weighs a dictionary for the whole process, held in memory only:
-   every correspondent's display name from All Mail's ENVELOPE (1.9 s for
-   about 20,000 messages, [Appendix A](appendix-a-phase-0.md)) and every calendar attendee, so that
-   a correspondent's name is found in Drive names, subjects and titles too.
+   guidance miss it, unless the process dictionary holds the name.
 3. Detect: regex with validators (an email address; a phone number checked
    as assigned with `phonenumber`; a card number by the Luhn check; an IBAN
-   by mod-97; a URL; a domain name; an IP address), the dictionary over all
-   text with `aho-corasick`, and from Phase 5 GLiNER for people,
-   organizations and locations. Street addresses have no Phase 2 detector.
+   by mod-97; a URL; a domain name; an IP address; a US Social Security
+   number by its format rules; a one-time code or password after a label
+   such as "code", "password" or "PIN" on the same line; the local
+   account name in a path), the dictionary over all text with
+   `aho-corasick`, and from Phase 5 GLiNER for people, organizations and
+   locations. Street addresses have no Phase 2 detector.
 4. Resolve each mention to an entity (below).
 5. Replace each mention with its alias and build the `entities` table;
    replace IDs with handles, digests with keyed digests, and page tokens
@@ -107,9 +111,10 @@ any step returns an error that names no content (R13).
 The `entities` table counts toward the result's size: a page holds 20,000
 characters of text by default because 100,000 measured 110,496 characters
 of JSON, over Claude Code's 25,000-token limit (`src/extract.rs`), and a
-newsletter can name hundreds of URLs, each with a `ref` of 64 characters
-or more. Pages shrink to fit the table, and whether URLs carry a `ref`,
-or a word alias at all, is open (Q19).
+newsletter can name hundreds of URLs. Pages shrink to fit the table. URLs
+are kept out of it (Q19): each becomes `link N` with its domain's alias in
+parentheses, numbered within the result, with no word alias and no
+`ref`.
 
 ### Canonical values and entity resolution
 
@@ -138,15 +143,13 @@ or a word alias at all, is open (Q19).
   one person): before a surname alone it is the only thing that tells
   "Mr Chen" from "Mme Chen", and `M.` and `Sr.` also stand for an initial
   and for Senior. Case folding is Unicode's, without Turkish rules.
-- Whether the alias depends on the type a detector gives a value is open
-  (Q19). With each type in the HMAC, a display name typed `person` in
-  Phase 2 and `organization` by GLiNER in Phase 5 changes alias. With one
-  shared tag for names (person, organization, location), which the
-  [low-level design](lld-privacy-layer.md#constructions) drafts, it keeps
-  its alias, at the cost that a person and an organization with the same
-  canonical name share one. Changes to the canonical rules or the word
-  list change aliases either way; the `v1` in the key labels versions
-  them.
+- Names (person, organization, location) share one tag in the alias
+  HMAC (Q19, [low-level design](lld-privacy-layer.md#constructions)), so
+  a display name typed `person` in Phase 2 and `organization` by GLiNER
+  in Phase 5 keeps its alias, at the cost that a person and an
+  organization with the same canonical name share one. Changes to the
+  canonical rules or the word list change aliases; the `v1` in the key
+  labels versions them, and `get_status` reports it.
 
 ### Identifiers
 
@@ -160,15 +163,14 @@ flowchart LR
     H --> KR["reference key"] --> R["AES-SIV:<br/>ref"]
     H --> KH["handle key"] --> HD["AES-SIV:<br/>handle,<br/>sealed page token"]
     H --> KD["digest key"] --> D["HMAC-SHA-256:<br/>keyed digest, five words"]
-    H --> KL["log key"] --> L["HMAC-SHA-256:<br/>log identifiers"]
     A ~~~ N1(["one-way"])
     R ~~~ N2(["protonctl can reverse"])
 
     classDef key fill:#FEF9C3,stroke:#CA8A04,color:#422006
     classDef oneway fill:#D1FAE5,stroke:#059669,color:#064E3B
     classDef rev fill:#EDE9FE,stroke:#7C3AED,color:#2E1065
-    class K,H,KA,KR,KH,KD,KL key
-    class A,D,L,N1 oneway
+    class K,H,KA,KR,KH,KD key
+    class A,D,N1 oneway
     class R,HD,N2 rev
 ```
 
@@ -190,8 +192,8 @@ words that read as loaded, or as names and brands such as "jordan" and
 "apple", or as a kind of place, organization, role or relation ("clinic",
 "school", "legal", "mother"), which Claude could take as facts about an
 entity ([Appendix C](appendix-c-roleplay.md)). The curated list keeps at least 7,132 words, so five words hold 64
-bits (Q18). Whether words cost fewer tokens than base64url is measured
-before Phase 2 fixes the format (Q16). Field names stay as they are:
+bits (Q18). Aliases and keyed digests stay words whatever they cost in
+tokens, since people read them in prose (Q16). Field names stay as they are:
 `messageId`, `threadId` and `eventId` hold handles, and Drive tools take
 `fileId` in place of `path`, since a path carries names.
 
@@ -215,15 +217,16 @@ A title from a signature, such as "counsel", also waits for Phase 6.
 
 A name typed in the current call's query appears as
 typed in that call's result, and `queryEntities` maps it to its alias.
-Claude carries the pair from then on; the server keeps no list of known
-names. When a query matches by similarity rather than exactly (Phase 5), the
+Claude carries the pair from then on; the server keeps no record of the
+names Claude typed. When a query matches by similarity rather than exactly (Phase 5), the
 result keeps the alias and adds `matchedQuery`, so it never discloses a
 spelling the user did not type. The pair also outlives the chat: the alias
 is the same in every transcript under the key, so whoever reads this
-transcript can read that alias as the name in all of them. Q21 weighs
-returning `queryEntities` only when the name matches, leaving the pair out
-of `reveal_*` results, and key epochs (a scheduled `rotate-key`) that
-bound how far one pair reaches, at the cost of Q8's stability.
+transcript can read that alias as the name in all of them. Q21 limits
+`queryEntities` to names that match an entity in the result, keeps the
+pair in `reveal_*` results, where Claude needs it, and leaves
+`rotate-key` to the user rather than to a schedule, since epochs would end
+Q8's stability.
 
 ### Raw reads (Phase 3)
 
@@ -286,7 +289,7 @@ Each line is under 200 characters:
 |---|---|
 | Mail and attachments | Bridge's IMAP into memory |
 | Drive files the app has synced | read from the app's folder, which adds no copy |
-| Drive files not on this Mac | `proton-drive` to stdout if it can (Q14), else a per-process RAM disk |
+| Drive files not on this Mac | a per-process RAM disk, since `proton-drive` writes downloads only into a folder (Q14); on Linux, `$XDG_RUNTIME_DIR` |
 | Conversion | bytes to `osascript` (PDFKit) or `textutil` on stdin today, text back on stdout; under a sandbox profile from Phase 4 (R21) |
 
 The helpers run with an empty environment, so they find the real home and

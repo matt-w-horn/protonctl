@@ -29,7 +29,7 @@
 |---|---|---|
 | Where privacy levels live | one config switch; tokenized tools plus raw single-item tools; tokenized only | both: one setting, `off` or `aliases` (Q26); in aliases mode, tokenized tools plus `reveal_*` tools behind user presence |
 | How fine the setting is | per service; per host; per part (aliases, handles, keyed digests apart); one mode | one mode: a name shown plainly in one result and as an alias in another pairs them, and the parts protect only together ([section 4, Settings](04-design.md#settings)) |
-| Mode of a new install | off; aliases; none, so setup asks | open (Q27) |
+| Mode of a new install | off; aliases; none, so setup asks | none, so setup asks: a wrong `off` cannot be recalled, a wrong `aliases` costs one command (Q27) |
 | Gate for raw content | host permission prompt; MCP elicitation; Touch ID | Touch ID: users approve about 93% of permission prompts, hosts offer "Always allow", and Cowork does not render elicitation |
 | Showing real names | a `decode` command; an MCP Apps panel; aliases kept in a Proton Pass vault; a `reveal_entity` tool | none: Claude pairs a name with its alias when a result shows both |
 | Pseudonym form | per-process counters; short HMAC tokens; AES-SIV tokens in the prose; an alias plus an encrypted `ref` | three-word alias in the prose, `ref` in the `entities` table |
@@ -39,7 +39,7 @@
 | Isolating converters | in process; a sandboxed helper; a helper in a Linux VM | sandboxed helper (Phase 4), VM later (Phase 7) |
 | Detectors | regex; a name dictionary; GLiNER; Privacy Filter | regex and a dictionary (Phase 2), GLiNER (Phase 5), Privacy Filter as a second check (Phase 7) |
 | Digests | withhold; keyed; raw | keyed on both ends, as five words |
-| Files on disk | export folder; crypto-shredded cache; RAM disk; none | in aliases mode none, and a RAM disk only where `proton-drive` cannot stream; in off mode the download and export folders as built (Q26) |
+| Files on disk | export folder; crypto-shredded cache; RAM disk; none | in aliases mode none but a RAM disk for cloud-only Drive files, since `proton-drive` cannot stream (Q14); in off mode the download and export folders as built (Q26) |
 | Local summaries | keep; drop; questions only | keep (Phase 6) |
 | Calendar | keep, tokenized; off by default; remove | keep, tokenized; the link's risk is accepted |
 
@@ -70,7 +70,8 @@ Each rebuild changes the ad-hoc signature, so the Keychain asks again for
 every item, and approving that from habit would also approve a replaced
 binary. Only a stable signing identity stops the prompt after a rebuild,
 since an ad-hoc signature's requirement is the binary's own hash; an
-install path the user cannot write stops a swap but not the prompt (Q12).
+install path the user cannot write stops a swap but not the prompt. From
+Phase 2 protonctl is signed with a self-signed certificate (Q12).
 
 **Gates.** `scripts/check.sh` runs `cargo fmt --check`, clippy with
 `-D warnings`, the tests, `cargo deny check` (advisories, licences, sources,

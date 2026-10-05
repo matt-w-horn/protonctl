@@ -10,11 +10,14 @@ mod drive;
 mod export;
 mod extract;
 mod mail;
+mod platform;
+mod privacy;
 mod secret;
 mod serve;
+mod tool;
 
 use std::io::{BufRead, IsTerminal};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,6 +29,9 @@ use tokio::signal::unix::{SignalKind, signal};
 
 use calendar::{Calendars, GetEventReq, ListEventsReq, SearchEventsReq, ics::Zone};
 use drive::{Drive, FileMetadataReq, ListFolderReq, ReadReq, SearchFilesReq};
+use secret::Account;
+
+const DRIVE_NOT_SET_UP: &str = "not set up; run `protonctl setup drive`";
 
 /// Operations shared by the CLI and the MCP server.
 pub(crate) struct App {
@@ -35,25 +41,54 @@ pub(crate) struct App {
     mail: Option<mail::Mail>,
     /// `[export] folder`, checked at load: `None` when it is not set.
     export: Option<Result<export::Export, String>>,
+    /// The privacy setting and key (RFC R26).
+    pub privacy: privacy::Privacy,
 }
 
 impl App {
     fn load() -> Result<Self> {
-        let cfg = config::load()?;
+        Self::from_config(config::load()?)
+    }
+
+    /// Drive is on only once `setup drive` has written `[drive]` (RFC Q26),
+    /// as mail and each calendar are on only once set up.
+    fn from_config(cfg: config::Config) -> Result<Self> {
+        Self::from_config_beside(cfg, &drive::app_folders())
+    }
+
+    /// `from_config`, given the Proton Drive app's folders on this machine,
+    /// which the export folder must stay out of even when Drive is not set
+    /// up, since the app uploads whatever is written there (R11).
+    fn from_config_beside(cfg: config::Config, app_folders: &[PathBuf]) -> Result<Self> {
         let zone = Zone::parse(cfg.time_zone.as_deref())?;
-        let drive = Drive::new(cfg.drive.as_ref()).map_err(|e| format!("{e:#}"));
+        let drive = match &cfg.drive {
+            Some(d) => Drive::new(Some(d)).map_err(|e| format!("{e:#}")),
+            None => Err(DRIVE_NOT_SET_UP.to_string()),
+        };
         let root = drive.as_ref().ok().and_then(Drive::root);
+        let folders = app_folders.iter().map(PathBuf::as_path).chain(root);
         let export = cfg
             .export
             .as_ref()
-            .map(|e| export::Export::new(e, root).map_err(|e| format!("{e:#}")));
+            .map(|e| export::Export::new(e, folders).map_err(|e| format!("{e:#}")));
         Ok(Self {
             calendars: Calendars::new(cfg.calendar, zone),
             drive,
             drive_cli: drive::cli::Cli::new(drive::cli::path(cfg.drive.as_ref())),
             mail: cfg.mail.map(mail::Mail::new),
             export,
+            privacy: privacy::Privacy::stored(),
         })
+    }
+
+    /// The user's own address, for the `you` hint (RFC section 6, Hints).
+    pub fn you(&self) -> Option<&str> {
+        self.mail.as_ref().map(|m| m.cfg().address.as_str())
+    }
+
+    /// The mode this process started in, for `status` and `get_status`.
+    fn privacy_status(&self) -> Value {
+        json!({ "mode": self.privacy.setting(), "aliasFormat": privacy::FORMAT })
     }
 
     pub fn mail(&self) -> Result<&mail::Mail> {
@@ -80,31 +115,39 @@ impl App {
     }
 
     /// Principle 4 of the RFC: one place lists every grant protonctl holds.
-    pub fn status(&self) -> Result<Value> {
-        Ok(self.status_with(&secret::accounts()?))
+    /// A secret store that cannot be read is reported in the result, with
+    /// everything else, rather than failing it.
+    pub fn status(&self) -> Value {
+        let held = secret::accounts().map_err(|e| format!("{e:#}"));
+        self.status_with(held.as_deref().map_err(String::as_str))
     }
 
-    /// `status` given the Keychain accounts held, so tests need no Keychain.
-    fn status_with(&self, held: &[String]) -> Value {
+    /// `status` given the secret store's accounts, or why they could not be
+    /// read, so tests need no secret store.
+    fn status_with(&self, held: Result<&[Account], &str>) -> Value {
+        let store = platform::SECRET_STORE;
         let calendars: Vec<Value> = self
             .calendars
             .configs
             .iter()
             .map(|c| {
-                let stored = held.contains(&secret::calendar_account(&c.id));
+                // null when the store could not be read: not known, not "no".
+                let stored = held
+                    .ok()
+                    .map(|h| h.contains(&Account::Calendar(c.id.clone())));
                 json!({ "calendarId": c.id, "name": c.name, "linkStored": stored })
             })
             .collect();
-        let secrets: Vec<String> = held
-            .iter()
-            .map(|a| format!("Keychain protonctl/{a}"))
-            .collect();
+        let secrets = match held {
+            Ok(held) => json!(held.iter().map(secret::shown).collect::<Vec<_>>()),
+            Err(e) => json!({ "error": e }),
+        };
         json!({
             "version": env!("CARGO_PKG_VERSION"),
             "config": config::path(),
             "mail": match self.mail.as_ref().map(mail::Mail::cfg) {
                 Some(m) => json!({ "address": m.address, "port": m.port, "certificatePinned": true,
-                    "access": "read-only in this version" }),
+                    "access": "read-only" }),
                 None => json!("not set up; run `protonctl setup mail --address <Bridge username>` with the Bridge password on stdin"),
             },
             "drive": match &self.drive {
@@ -113,7 +156,7 @@ impl App {
                         Some(root) => json!(root),
                         None => json!("none; list_folder goes through the Proton Drive CLI, and search_files is off"),
                     },
-                    "access": "read-only in this version",
+                    "access": "read-only",
                     "cli": self.drive_cli.path(),
                 }),
                 Err(e) => json!({ "error": e }),
@@ -126,9 +169,10 @@ impl App {
                 None => json!("not set; export tools refuse until [export] folder is in the config"),
             },
             "secretsHeld": secrets,
-            "cannot": "send email, share files, create links or invitations, or delete anything permanently",
-            "revoke": "`protonctl logout` deletes protonctl's Keychain items; to revoke a calendar link on Proton's \
-                side, delete it in the calendar's sharing settings in the Proton web app",
+            "privacy": self.privacy_status(),
+            "cannot": format!("{} (protonctl is read-only)", serve::CANNOT),
+            "revoke": format!("`protonctl logout` deletes protonctl's {store} items; to revoke a calendar link on \
+                Proton's side, delete it in the calendar's sharing settings in the Proton web app"),
         })
     }
 }
@@ -157,8 +201,10 @@ enum Cmd {
     Doctor,
     /// Show what protonctl can reach and every secret it holds.
     Status,
-    /// Delete protonctl's Keychain items, then print how to revoke Proton-side access.
+    /// Delete protonctl's Keychain items, then print how to revoke Proton-side access. Asks to confirm on a terminal.
     Logout,
+    /// Replace the privacy key: every alias changes, and old refs and handles stop working. Asks to confirm on a terminal.
+    RotateKey,
     /// Read Proton Calendar.
     #[command(subcommand)]
     Calendar(CalendarCmd),
@@ -202,6 +248,21 @@ enum Setup {
         /// Display name. Default: the name in the feed.
         #[arg(long)]
         name: Option<String>,
+    },
+    /// Choose what Claude sees: aliases for names, IDs and numbers (the default of this command), or with --off results as they are.
+    Privacy {
+        /// Turn the privacy layer off: results carry names, IDs and digests as they are. Asks to confirm on a terminal.
+        #[arg(long)]
+        off: bool,
+    },
+    /// Add Proton Drive: check the Proton Drive CLI's signature and sign-in, then write [drive].
+    Drive {
+        /// The Proton Drive app's folder. Default: found under ~/Library/CloudStorage.
+        #[arg(long)]
+        folder: Option<PathBuf>,
+        /// The Proton Drive CLI. Default: ~/bin/proton-drive.
+        #[arg(long)]
+        cli: Option<PathBuf>,
     },
     /// Add Proton Mail Bridge. Pipe the Bridge password on stdin, e.g.: pbpaste | protonctl setup mail --address you@proton.me
     Mail {
@@ -281,12 +342,114 @@ async fn setup_calendar(id: &str, name: Option<String>) -> Result<Value> {
     let feed = calendar::ics::parse(&calendar::fetch(link.expose_secret()).await?)
         .context("the link did not return a calendar")?;
     let name = name.or(feed.name.clone()).unwrap_or_else(|| id.to_string());
-    secret::set(&secret::calendar_account(id), &link)?;
+    secret::set(&Account::Calendar(id.to_string()), &link)?;
     // An id already set up keeps its name; the link is replaced.
     let name = config::add_calendar(id, &name)?;
     Ok(
         json!({ "calendarId": id, "name": name, "events": feed.events.len(), "skipped": feed.skipped, "linkStored": true }),
     )
+}
+
+/// Ask on a terminal before a command that changes what every later call
+/// does (RFC Q28): a plain call through Claude Code's Bash tool, which has
+/// no terminal, is refused. Phase 3 asks for user presence instead.
+fn confirm(what: &str) -> Result<()> {
+    let stdin = std::io::stdin();
+    if !stdin.is_terminal() {
+        bail!("{what}, so it asks first, on a terminal; run it in one");
+    }
+    eprint!("{what}. Type yes to go on: ");
+    let mut line = String::new();
+    stdin.lock().read_line(&mut line)?;
+    if line.trim() != "yes" {
+        bail!("not confirmed; nothing changed");
+    }
+    Ok(())
+}
+
+/// `setup privacy`: make the key if there is none, then set the mode, so
+/// aliases mode is never set without a key. `--off` keeps the key, so the
+/// aliases are the same if aliases mode comes back.
+fn setup_privacy(off: bool) -> Result<Value> {
+    let held = secret::comment(&Account::PrivacyKey)?.is_some();
+    if off {
+        confirm(
+            "Turning the privacy layer off sends names, IDs and digests to the model provider as they are",
+        )?;
+        privacy::store_mode(privacy::Mode::Off)?;
+        return Ok(
+            json!({ "mode": "off", "key": if held { "kept" } else { "none" },
+            "next": "restart Claude Code and Claude Desktop so their servers start in this mode" }),
+        );
+    }
+    if held {
+        // A key kept must be one this process can use; "kept" would
+        // otherwise leave a broken key in place.
+        privacy::key::check_stored()?;
+    } else {
+        privacy::key::create()?;
+    }
+    privacy::store_mode(privacy::Mode::Aliases)?;
+    Ok(
+        json!({ "mode": "aliases", "key": if held { "kept" } else { "created" },
+        "next": "restart Claude Code and Claude Desktop so their servers start in this mode" }),
+    )
+}
+
+fn rotate_key() -> Result<Value> {
+    if secret::comment(&Account::PrivacyKey)?.is_none() {
+        bail!("there is no privacy key; `protonctl setup privacy` makes one");
+    }
+    confirm(
+        "Replacing the privacy key changes every alias, and old refs and handles stop working",
+    )?;
+    let id = privacy::key::create()?;
+    Ok(json!({ "rotated": true, "keyId": &id[..8] }))
+}
+
+/// Check the CLI's signature and that it is signed in, find the app's folder,
+/// then write `[drive]`. Signing in is the CLI's own step (`proton-drive auth
+/// login`), so protonctl never sees the Proton password.
+async fn setup_drive(folder: Option<PathBuf>, cli: Option<PathBuf>) -> Result<Value> {
+    if config::load()?.drive.is_some() {
+        bail!(
+            "Drive is already set up; edit [drive] in {} to change it",
+            config::path().display()
+        );
+    }
+    // The server resolves a path from its own working directory, so each is
+    // written whole; a symlink stays one, so a CLI updated behind it is used.
+    let folder = folder.map(std::path::absolute).transpose()?;
+    let cli = cli.map(std::path::absolute).transpose()?;
+    if let Some(f) = &folder
+        && !f.is_dir()
+    {
+        bail!("--folder {} is not a folder", f.display());
+    }
+    let wanted = config::DriveConfig {
+        folder: folder.clone(),
+        cli: cli.clone(),
+        ..Default::default()
+    };
+    let drive_cli = drive::cli::Cli::new(drive::cli::path(Some(&wanted)));
+    let version = drive_cli.check().await?;
+    drive_cli
+        .json(&["filesystem", "list", "-j", "/my-files"].map(std::ffi::OsStr::new))
+        .await
+        .context(
+            "the Proton Drive CLI is not signed in; run `proton-drive auth login`, then try again",
+        )?;
+    let root = Drive::new(Some(&wanted))?.root().map(Path::to_path_buf);
+    config::add_drive(folder.as_deref(), cli.as_deref())?;
+    Ok(json!({
+        "folder": match root {
+            Some(r) => json!(r),
+            None => json!("none; list_folder goes through the CLI, and search_files is off"),
+        },
+        "cli": drive_cli.path(),
+        "cliVersion": version,
+        "signedIn": true,
+    }))
 }
 
 /// Pin Bridge's certificate on first contact, prove the login works, then
@@ -306,7 +469,7 @@ async fn setup_mail(address: &str, port: u16) -> Result<Value> {
         .logout()
         .await
         .ok();
-    secret::set(&secret::bridge_account(address), &password)?;
+    secret::set(&Account::Bridge(address.to_string()), &password)?;
     config::add_mail(address, port, &hex::encode(fingerprint))?;
     Ok(json!({
         "address": address,
@@ -330,18 +493,23 @@ async fn doctor(app: &App) -> bool {
         }
     };
     check("config", Ok(config::path().display().to_string()));
-    check(
-        "drive folder",
-        app.drive().map(|d| match d.root() {
-            Some(root) => root.display().to_string(),
-            None => "none; listing goes through the CLI, and search is off".into(),
-        }),
-    );
-    check(
-        "drive cli",
-        drive::cli::verify(app.drive_cli.path())
-            .map(|v| format!("{} {v}", app.drive_cli.path().display())),
-    );
+    check("privacy", app.privacy.diagnose().map(str::to_string));
+    if matches!(&app.drive, Err(e) if e == DRIVE_NOT_SET_UP) {
+        println!("skip  drive: not set up (protonctl setup drive)");
+    } else {
+        check(
+            "drive folder",
+            app.drive().map(|d| match d.root() {
+                Some(root) => root.display().to_string(),
+                None => "none; listing goes through the CLI, and search is off".into(),
+            }),
+        );
+        check(
+            "drive cli",
+            drive::cli::verify(app.drive_cli.path())
+                .map(|v| format!("{} {v}", app.drive_cli.path().display())),
+        );
+    }
     for c in &app.calendars.configs {
         check(
             &format!("calendar {}", c.id),
@@ -365,21 +533,30 @@ fn logout() -> Value {
         problems.push(format!("{e:#}"));
         Vec::new()
     });
+    // By name too, so a search that fails still deletes what is known.
+    accounts.extend([Account::PrivacyKey, Account::PrivacyMode]);
     match config::load() {
         Ok(cfg) => {
-            accounts.extend(cfg.calendar.iter().map(|c| secret::calendar_account(&c.id)));
-            accounts.extend(cfg.mail.iter().map(|m| secret::bridge_account(&m.address)));
+            accounts.extend(cfg.calendar.iter().map(|c| Account::Calendar(c.id.clone())));
+            accounts.extend(cfg.mail.iter().map(|m| Account::Bridge(m.address.clone())));
         }
         Err(e) => problems.push(format!("{e:#}")),
     }
-    accounts.sort();
+    // In the order of their names, as `deleted` lists them.
+    accounts.sort_by_key(ToString::to_string);
     accounts.dedup();
     let mut deleted = Vec::new();
     for account in accounts {
         match secret::delete(&account) {
-            Ok(true) => deleted.push(format!("Keychain protonctl/{account}")),
+            Ok(true) => deleted.push(secret::shown(&account)),
             Ok(false) => {}
-            Err(e) => problems.push(format!("{e:#}")),
+            Err(e) => {
+                // Without a secret store each account fails alike; say it once.
+                let problem = format!("{e:#}");
+                if !problems.contains(&problem) {
+                    problems.push(problem);
+                }
+            }
         }
     }
     json!({
@@ -407,7 +584,18 @@ async fn serve_until_stopped(app: Arc<App>) -> Result<()> {
     }
 }
 
+/// What a panic prints (RFC R25, M2.9): where it happened, and nothing of
+/// its message, which can quote data (a slice off a character boundary
+/// prints up to 256 bytes of the string), since hosts keep stderr in logs.
+fn panic_line(info: &std::panic::PanicHookInfo<'_>) -> String {
+    let at = info
+        .location()
+        .map_or_else(String::new, |l| format!(" at {}:{}", l.file(), l.line()));
+    format!("protonctl: internal error{at}; its message is withheld, as it can quote data")
+}
+
 fn main() -> Result<()> {
+    std::panic::set_hook(Box::new(|info| eprintln!("{}", panic_line(info))));
     // Not from RUST_LOG: at debug, rmcp logs every request and tool result,
     // and hosts keep a server's stderr in log files (RFC R10).
     tracing_subscriber::fmt()
@@ -416,6 +604,7 @@ fn main() -> Result<()> {
         .init();
     let cli = Cli::parse();
     if matches!(cli.command, Cmd::Logout) {
+        confirm("Logging out deletes every secret protonctl holds, the privacy key among them")?;
         let out = logout();
         print(&out)?;
         let clean = out["problems"].as_array().is_some_and(Vec::is_empty);
@@ -445,11 +634,14 @@ fn main() -> Result<()> {
             Cmd::Serve => unreachable!("served above"),
             Cmd::Setup { what } => match what {
                 Setup::Calendar { id, name } => setup_calendar(&id, name).await?,
+                Setup::Drive { folder, cli } => setup_drive(folder, cli).await?,
+                Setup::Privacy { off } => setup_privacy(off)?,
                 Setup::Mail { address, port } => setup_mail(&address, port).await?,
             },
             Cmd::Doctor => std::process::exit(i32::from(!doctor(&app).await)),
-            Cmd::Status => app.status()?,
+            Cmd::Status => app.status(),
             Cmd::Logout => unreachable!("handled before the config is loaded"),
+            Cmd::RotateKey => rotate_key()?,
             Cmd::Calendar(cmd) => match cmd {
                 CalendarCmd::List => app.calendars.list_calendars().await?,
                 CalendarCmd::Events(r) => app.calendars.list_events(&r).await?,
@@ -494,6 +686,21 @@ fn main() -> Result<()> {
     print(&out?)
 }
 
+/// An app with nothing set up, for tests.
+#[cfg(test)]
+impl App {
+    pub fn bare(privacy: privacy::Privacy) -> Self {
+        App {
+            calendars: Calendars::new(Vec::new(), Zone::Local),
+            drive: Err("not set up".into()),
+            drive_cli: drive::cli::Cli::new(PathBuf::from("/nonexistent")),
+            mail: None,
+            export: None,
+            privacy,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,23 +727,123 @@ mod tests {
         );
     }
 
+    /// RFC M1.4: Drive is off without a `[drive]` table and on with one.
+    #[test]
+    fn drive_is_on_only_once_set_up() {
+        let off = App::from_config(config::Config::default()).unwrap();
+        assert_eq!(
+            off.drive.as_ref().err().map(String::as_str),
+            Some(DRIVE_NOT_SET_UP)
+        );
+        assert_eq!(off.status_with(Ok(&[]))["drive"]["error"], DRIVE_NOT_SET_UP);
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config::Config {
+            drive: Some(config::DriveConfig {
+                folder: Some(dir.path().to_path_buf()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let on = App::from_config(cfg).unwrap();
+        let root = on.drive().unwrap().root().map(Path::to_path_buf);
+        assert_eq!(root, Some(dir.path().canonicalize().unwrap()));
+    }
+
+    /// RFC R11: an export folder inside the Proton Drive app's folder is
+    /// refused even before `setup drive`, since the app uploads it.
+    #[test]
+    fn exports_stay_out_of_the_drive_app_folder_without_drive_set_up() {
+        let app_folder = tempfile::tempdir().unwrap();
+        let app_folder = app_folder.path().canonicalize().unwrap();
+        let cfg = |folder: PathBuf| config::Config {
+            export: Some(config::ExportConfig { folder }),
+            ..Default::default()
+        };
+        let inside = App::from_config_beside(
+            cfg(app_folder.join("Exports")),
+            std::slice::from_ref(&app_folder),
+        );
+        assert!(inside.unwrap().export.unwrap().is_err());
+        let elsewhere = tempfile::tempdir().unwrap();
+        let outside = App::from_config_beside(cfg(elsewhere.path().join("x")), &[app_folder]);
+        assert!(outside.unwrap().export.unwrap().is_ok());
+    }
+
     #[test]
     fn status_counts_this_process_s_downloads() {
-        let app = App {
-            calendars: Calendars::new(Vec::new(), Zone::Local),
-            drive: Err("not set up".into()),
-            drive_cli: drive::cli::Cli::new(PathBuf::from("/nonexistent")),
-            mail: None,
-            export: None,
-        };
+        let app = App::bare(privacy::tests::privacy(None, None).0);
         let dir = tempfile::Builder::new()
             .prefix("mail-")
             .tempdir_in(content::downloads().unwrap())
             .unwrap();
         std::fs::write(dir.path().join("a.txt"), "hello").unwrap();
         // Other tests download into the same folder, so at least this file.
-        let shown = &app.status_with(&[])["downloads"];
+        let shown = &app.status_with(Ok(&[]))["downloads"];
         let count = |k: &str| shown[k].as_u64().unwrap_or(0);
         assert!(count("files") >= 1 && count("bytes") >= 5, "{shown}");
+    }
+
+    #[test]
+    fn a_panic_prints_where_and_withholds_what() {
+        let lines = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = lines.clone();
+        let previous = std::panic::take_hook();
+        // Other tests' panics can land here too while it is set.
+        std::panic::set_hook(Box::new(move |info| {
+            seen.lock().unwrap().push(panic_line(info));
+        }));
+        let caught = std::panic::catch_unwind(|| panic!("secret-7Q in the message"));
+        std::panic::set_hook(previous);
+        assert!(caught.is_err());
+        let lines = lines.lock().unwrap();
+        assert!(lines.iter().any(|l| l.contains("main.rs:")), "{lines:?}");
+        assert!(!lines.iter().any(|l| l.contains("secret-7Q")), "{lines:?}");
+    }
+
+    /// RFC R1 where the model reads it: the server's instructions and
+    /// `get_status` say what protonctl cannot do, in the same words.
+    #[test]
+    fn the_model_reads_that_protonctl_is_read_only() {
+        let app = Arc::new(App::bare(privacy::tests::privacy(None, None).0));
+        let cannot = app.status_with(Ok(&[]))["cannot"].clone();
+        let aliases = privacy::tests::privacy(Some(privacy::Mode::Aliases), Some([7; 32])).0;
+        for app in [app, Arc::new(App::bare(aliases))] {
+            let info = rmcp::ServerHandler::get_info(&serve::Server::new(app));
+            let instructions = info.instructions.unwrap();
+            assert!(
+                instructions.contains(&format!("read-only: it cannot {}.", serve::CANNOT)),
+                "{instructions}"
+            );
+        }
+        assert_eq!(
+            cannot,
+            format!("{} (protonctl is read-only)", serve::CANNOT)
+        );
+    }
+
+    #[test]
+    fn status_says_when_the_secret_store_cannot_be_read() {
+        let calendar = config::CalendarConfig {
+            id: "personal".into(),
+            name: "Personal".into(),
+        };
+        let app = App {
+            calendars: Calendars::new(vec![calendar], Zone::Local),
+            ..App::bare(privacy::tests::privacy(None, None).0)
+        };
+        let held = [Account::Calendar("personal".into())];
+        let read = app.status_with(Ok(&held));
+        assert_eq!(read["calendars"][0]["linkStored"], true);
+        let store = platform::SECRET_STORE;
+        assert_eq!(
+            read["secretsHeld"],
+            json!([format!("{store} protonctl/calendar/personal")])
+        );
+        let unread = app.status_with(Err("the store is locked"));
+        assert_eq!(unread["calendars"][0]["linkStored"], Value::Null);
+        assert_eq!(
+            unread["secretsHeld"],
+            json!({ "error": "the store is locked" })
+        );
     }
 }

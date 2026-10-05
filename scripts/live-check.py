@@ -3,6 +3,10 @@
 Mac's real calendar link, Bridge and Drive. Prints one line per call with its
 outcome, time and counts, never message, event or file content or names.
 
+It runs in the privacy mode the server starts in. In aliases mode it also
+counts raw values that must not appear (addresses, links, local paths, raw
+digests) in every result, and that every result names its detectors.
+
 Run it from a normal terminal, since codesign misreports inside Claude Code's
 sandbox, against the installed binary, which the Claude app also runs, so one
 Keychain approval covers both:
@@ -17,6 +21,7 @@ import base64
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -40,6 +45,31 @@ last_id = 0
 failures: list[str] = []
 called: set[str] = set()
 blocks: list[dict] = []  # the content blocks of the last call, after its JSON
+aliases = False  # set from get_status
+last_text = ""  # the JSON text of the last call
+# Raw values aliases mode must never return (R13, R16, R17), counted, never shown.
+# A local path is this machine's home folder: a Drive path such as /home/x is
+# Drive's own, and aliases mode keeps its shape.
+RAW = {
+    "addresses": re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+"),
+    "links": re.compile(r"https?://"),
+    "local paths": re.compile(re.escape(os.path.expanduser("~")) + r"(/|\b)"),
+    "raw digests": re.compile(r"\b([0-9a-f]{40}|[0-9a-f]{64})\b"),
+}
+
+
+def leak_check(shown: str, text: str, data: dict) -> None:
+    """Aliases mode: count raw values, and require `detectors` and no `dropped`."""
+    raw = {kind: len(p.findall(text)) for kind, p in RAW.items()}
+    found = ", ".join(f"{n} {kind}" for kind, n in raw.items() if n)
+    if found:
+        failures.append(f"{shown}: {found}")
+    if "detectors" not in data:
+        failures.append(f"{shown}: no detectors")
+    if data.get("dropped"):
+        failures.append(f"{shown}: {len(data['dropped'])} fields without a policy")
+    if blocks:
+        failures.append(f"{shown}: {len(blocks)} blocks after the JSON")
 
 
 def send(message: dict) -> None:
@@ -88,8 +118,12 @@ def call(name: str, args: dict, describe=counts, label: str = "") -> dict | None
         failures.append(shown)
         print(f"FAIL  {shown:<34} {took:5.1f}s  {(reply.get('error', {}).get('message') or text)[:160]}")
         return None
+    global last_text
+    last_text = text
     data = json.loads(text)
     blocks[:] = (result.get("content") or [])[1:]
+    if aliases:
+        leak_check(shown, text, data)
     note = describe(data)
     if name in CONTENT_TOOLS and "provenance" not in data:
         failures.append(f"{shown}: no provenance")
@@ -128,19 +162,37 @@ def attached(kind: str, size: int | None = None) -> str:
 
 
 def digested(d: dict) -> bool:
-    """Downloads and attachments carry their digests."""
-    ok = len(d.get("sha256") or "") == 64 and len(d.get("sha1") or "") == 40
+    """Downloads and attachments carry their digests: hex, or five words in aliases mode."""
+    if aliases:
+        ok = all(len((d.get(k) or "").split("-")) == 5 for k in ("sha256", "sha1"))
+    else:
+        ok = len(d.get("sha256") or "") == 64 and len(d.get("sha1") or "") == 40
     if not ok:
         failures.append("a saved file without sha256 and sha1")
     return ok
 
 
 status = call("get_status", {}, lambda d: (
+    f"privacy {d['privacy']['mode']}, "
     f"calendars {len(d['calendars'])}, mail {'set up' if isinstance(d['mail'], dict) else 'not set up'}, "
     f"drive folder {'yes' if isinstance(d['drive'].get('folder'), str) else 'no'}, "
     f"secrets held {len(d['secretsHeld'])}"
 ))
-export_folder = ((status or {}).get("export") or {}).get("folder") if isinstance((status or {}).get("export"), dict) else None
+if status is None:
+    sys.exit("get_status failed; if no privacy mode is set, run `protonctl setup privacy` or `--off` first")
+aliases = status["privacy"]["mode"] == "aliases"
+if aliases:
+    # get_status ran before the mode was known; it holds the config path and
+    # the Bridge address, so it is checked too.
+    leak_check("get_status", last_text, status)
+export_folder = None if aliases else (status.get("export") or {}).get("folder") if isinstance(status.get("export"), dict) else None
+
+
+def target(f: dict) -> dict:
+    """How a Drive tool names a file: its path, or in aliases mode its fileId."""
+    return {"fileId": f["fileId"]} if aliases else {"path": f["path"]}
+
+
 call("list_calendars", {})
 
 # Calendar: the coming week, then a search over the default window for an eventId.
@@ -158,11 +210,13 @@ top = call("list_folder", {})
 files = [f for f in (texts or {}).get("files", []) if 0 < (f.get("size") or 0) <= 256 * 1024]
 files += [f for f in (top or {}).get("items", []) if f.get("kind") == "file"]
 if files:
-    path = files[0]["path"]
-    call("get_file_metadata", {"path": path}, lambda d: f"kind {d['file']['kind']}, size given {d['file']['size'] is not None}")
-    first = call("read_file_content", {"path": path}, page)
+    one = target(files[0])
+    call("get_file_metadata", one, lambda d: f"kind {d['file']['kind']}, size given {d['file']['size'] is not None}")
+    first = call("read_file_content", one, page)
     if first and first.get("nextOffset"):
-        call("read_file_content", {"path": path, "offset": first["nextOffset"]}, page, label="next page")
+        call("read_file_content", {**one, "offset": first["nextOffset"]}, page, label="next page")
+if files and not aliases:
+    path = files[0]["path"]
     call("download_file", {"path": path}, lambda d: (
         f"saved {'yes' if os.path.isfile(d['savedTo']) else 'NO'}, "
         f"size matches {os.path.getsize(d['savedTo']) == d['file']['size'] if os.path.isfile(d['savedTo']) else 'n/a'}, "
@@ -180,7 +234,7 @@ if files:
             f"{attached('blob', d['inline']['bytes'])}, {'SAVED (unexpected)' if d.get('savedTo') else 'nothing saved'}, "
             f"sha256 {'yes' if digested(d) else 'NO'}"
         ), label="inline")
-else:
+elif not files:
     print("skip  get_file_metadata, read, download    no file found")
 # A PDF's text, and an image as image content.
 # Over 1 KB: a real PDF is larger than its own trailer.
@@ -195,7 +249,9 @@ def pdf_pages(d: dict) -> str:
     return f"{attached('image')}, images {images}, labels {labels}, pages {d.get('pagesShown')} of {d.get('pdfPages')}"
 
 
-if pdfs:
+if pdfs and aliases:
+    call("read_file_content", target(pdfs[0]), page, label="pdf")
+elif pdfs:
     call("read_file_content", {"path": pdfs[0]["path"]}, lambda d: (
         f"no text layer, {pdf_pages(d)}" if d.get("textLayer") is False else page(d) + f", pdfPages {d.get('pdfPages')}"
     ), label="pdf")
@@ -204,7 +260,9 @@ else:
     print("skip  read_file_content (pdf)            no PDF over 1 KB found")
 images = (call("search_files", {"query": "*.png", "kind": "file", "pageSize": 25}, label="*.png") or {}).get("files") or []
 images = [f for f in images if 0 < (f.get("size") or 0) <= 5 * 1024 * 1024]
-if images:
+if images and aliases:
+    call("read_file_content", target(images[0]), lambda d: f"image {(d.get('image') or {}).get('mimeType')}, no image block", label="image")
+elif images:
     call("read_file_content", {"path": images[0]["path"]}, lambda d: attached("image"), label="image")
 else:
     print("skip  read_file_content (image)          no PNG of 5 MiB or less found")
@@ -215,12 +273,13 @@ if tree and tree.get("nextPageToken"):
 
 # Mail: a recent search, one message and its thread, labels, then one attachment.
 def row_shape(d: dict) -> str:
-    """The row contract: 16-character messageIds, no encryption field."""
+    """The row contract: 16-character messageIds (44-character handles in aliases mode), no encryption field."""
     rows = d.get("messages") or []
-    long_ids = sum(len(r.get("messageId") or "") != 16 for r in rows)
+    length = 44 if aliases else 16
+    long_ids = sum(len(r.get("messageId") or "") != length for r in rows)
     with_encryption = sum("encryption" in r for r in rows)
     if long_ids or with_encryption:
-        failures.append(f"search rows: {long_ids} messageIds not 16 characters, {with_encryption} with encryption")
+        failures.append(f"search rows: {long_ids} messageIds not {length} characters, {with_encryption} with encryption")
     return counts(d) + f", estimatedTotal {d.get('estimatedTotal')}, bad ids {long_ids}, encryption {with_encryption}"
 
 
@@ -235,6 +294,21 @@ if rows:
     ))
     if rows[0].get("threadId"):
         call("get_thread", {"threadId": rows[0]["threadId"]}, lambda d: f"total {d['total']}, shown {d['shown']}")
+if aliases:
+    # A sender's ref from one result finds their mail again, with no name in
+    # the query (R15).
+    refs = [e["ref"] for e in ((recent or {}).get("entities") or {}).values()
+            if e.get("type") == "email" and "sender" in (e.get("hints") or [])]
+
+    def found_again(d: dict) -> str:
+        if not d.get("messages"):
+            failures.append("from:ref: found no message from a sender of a recent row")
+        return row_shape(d)
+
+    if refs:
+        call("search_threads", {"query": f"from:ref:{refs[0]} newer_than:30d", "pageSize": 5}, found_again, label="from:ref:")
+    else:
+        print("skip  search_threads (from:ref:)          no sender's address in the recent rows")
 call("list_labels", {})
 call("count_messages", {"query": "newer_than:30d", "by": "fromDomain"}, lambda d: (
     f"messages {d['messages']}, groups {d.get('groupsTotal')}, shown {len(d.get('groups') or [])}"
@@ -246,7 +320,8 @@ for row in (with_files or {}).get("messages") or []:
     if attachments:
         call("get_attachment", {"messageId": row["messageId"], "index": attachments[0]["index"]}, lambda d: (
             f"size {d['size']}, type {(d.get('mimeType') or '?').split('/')[0]}, "
-            + (page(d) if "content" in d else attached("image") if "image" in d
+            + (page(d) if "content" in d
+               else f"image, {'no image block' if aliases else attached('image')}" if "image" in d
                else f"saved {'yes' if os.path.isfile(d.get('path') or '') else 'NO'}")
             + f", sha256 {'yes' if digested(d) else 'NO'}"
         ))
@@ -256,7 +331,7 @@ if export_folder:
     made = call("export_drive_manifest", {}, lambda d: f"rows {d['rows']}, complete {d['complete']}, sha256 {'yes' if d.get('sha256') else 'NO'}")
     if made and made["manifest"].startswith(export_folder):
         os.remove(made["manifest"])  # the check removes what it wrote
-else:
+elif not aliases:
     print("skip  export_drive_manifest                 no [export] folder configured")
 untried = sorted(tools - called)
 print(f"\ncalled {len(called)} of {len(tools)} tools" + (f"; not called: {', '.join(untried)}" if untried else ""))

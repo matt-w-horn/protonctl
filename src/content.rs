@@ -8,12 +8,14 @@
 use std::fmt::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
 use crate::config::cache_dir;
+use crate::privacy::Fault;
+use crate::privacy::error::Param;
 
 /// Unicode's `Default_Ignorable_Code_Point` (`DerivedCoreProperties` 18.0.0):
 /// characters a renderer shows as nothing, tag characters and bidi
@@ -36,6 +38,12 @@ fn is_hidden(c: char) -> bool {
     let shaping = matches!(c as u32,
         0x200C | 0x200D | 0xFE00..=0xFE0F | 0xE0100..=0xE01EF | 0x034F | 0x115F | 0x1160);
     (ignorable(c) && !shaping) || (c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+}
+
+/// Whether `clean` removes `c`: for detection, which must not let a hidden
+/// character split a name (RFC section 6, Replacement).
+pub fn hidden(c: char) -> bool {
+    is_hidden(c)
 }
 
 /// Characters in an identifier (a Drive path) that a reader cannot see or
@@ -167,7 +175,7 @@ pub fn tokens(query: &str) -> Result<Vec<String>> {
         }
     }
     if quoted {
-        bail!("unbalanced double quote in the query");
+        bail!(Invalid::rule("unbalanced double quote in the query"));
     }
     if !cur.is_empty() {
         out.push(cur);
@@ -186,11 +194,151 @@ pub fn page(token: Option<&str>, size: usize, total: usize) -> Result<(usize, Op
     let offset: usize = token
         .map(str::parse)
         .transpose()
-        .context("invalid pageToken")?
+        .map_err(|e| Invalid::page_token(format!("invalid pageToken: {e}")))?
         .unwrap_or(0);
     let end = offset.saturating_add(size);
     Ok((offset, (end < total).then(|| end.to_string())))
 }
+
+/// `f` on the blocking pool. A panic there becomes an error that withholds
+/// its message, as the panic hook does (R25): tokio's own error quotes it,
+/// and it would reach stderr and the tool's error text.
+pub async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    tokio::task::spawn_blocking(f).await.map_err(|e| {
+        let what = if e.is_panic() {
+            "panicked"
+        } else {
+            "was cancelled"
+        };
+        anyhow::anyhow!("internal error: a background task {what}; its message is withheld")
+    })
+}
+
+tokio::task_local! {
+    /// Set for a call in aliases mode, where no content may reach the disk
+    /// (RFC R10) and no image is returned (R22).
+    static RESTRICTED: bool;
+}
+
+/// Run `call` as aliases mode does: the download folder refused, since
+/// every write of content goes through `downloads()`, so this one check
+/// covers a cloud-only Drive read and a saved attachment alike; and no
+/// image made, since none would be returned.
+pub async fn restricted<F: Future>(call: F) -> F::Output {
+    RESTRICTED.scope(true, call).await
+}
+
+fn is_restricted() -> bool {
+    RESTRICTED.try_with(|r| *r).unwrap_or(false)
+}
+
+/// False inside `restricted`, so a reader can answer without the file
+/// rather than fail.
+pub fn disk_allowed() -> bool {
+    !is_restricted()
+}
+
+/// False inside `restricted`: a reader gives a reason instead of images.
+pub fn images_allowed() -> bool {
+    !is_restricted()
+}
+
+/// What a reader adds to a reason it cannot read a file for: the tool that
+/// saves it, where there is one.
+pub fn save_hint() -> &'static str {
+    if disk_allowed() {
+        "download_file saves it"
+    } else {
+        "the user can open it in Proton"
+    }
+}
+
+/// The download folder was asked for inside `restricted`.
+#[derive(Debug)]
+pub struct DiskForbidden;
+
+impl std::fmt::Display for DiskForbidden {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("aliases mode writes no content to disk (RFC R10)")
+    }
+}
+
+impl std::error::Error for DiskForbidden {}
+
+/// A parameter the caller sent is wrong. Off mode shows `text`, which can
+/// quote the caller's input; aliases mode shows only `fault`, whose text
+/// quotes nothing, since the input can hold the value a ref opened to (R13).
+#[derive(Debug)]
+pub struct Invalid {
+    pub fault: Fault,
+    pub text: String,
+}
+
+impl Invalid {
+    /// A broken rule whose text quotes nothing, the same in both modes.
+    pub fn rule(rule: &'static str) -> Self {
+        Self::quoting(rule, rule)
+    }
+
+    /// A broken rule, with off mode's text, which may quote the input.
+    pub fn quoting(rule: &'static str, text: impl Into<String>) -> Self {
+        Self {
+            fault: Fault::InvalidArgument(rule),
+            text: text.into(),
+        }
+    }
+
+    /// A page token that does not open, or belongs to another query.
+    pub fn page_token(text: impl Into<String>) -> Self {
+        Self {
+            fault: Fault::InvalidPageToken,
+            text: text.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for Invalid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl std::error::Error for Invalid {}
+
+/// An item that does not exist, or is excluded (R7), so aliases mode can
+/// answer `not_found` without quoting the message, which can name it.
+#[derive(Debug)]
+pub struct Missing {
+    /// The parameter that names no item; `None` leaves it to the tool.
+    pub param: Option<Param>,
+    /// Off mode's text.
+    pub text: String,
+}
+
+impl Missing {
+    /// An item the tool's own parameter names (a Drive path or handle).
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            param: None,
+            text: text.into(),
+        }
+    }
+
+    pub fn of(param: Param, text: impl Into<String>) -> Self {
+        Self {
+            param: Some(param),
+            text: text.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for Missing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl std::error::Error for Missing {}
 
 fn downloads_path() -> PathBuf {
     // Unit tests share one process and the real HOME; keep them out of it.
@@ -205,10 +353,37 @@ fn downloads_path() -> PathBuf {
 /// This process's folder for downloaded mail attachments and Drive files, made
 /// 0700 on first use. Nothing else on disk holds their content (RFC R10).
 pub fn downloads() -> Result<PathBuf> {
+    if !disk_allowed() {
+        return Err(DiskForbidden.into());
+    }
     let dir = downloads_path();
     std::fs::create_dir_all(&dir)?;
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
     Ok(dir)
+}
+
+/// A new folder in this process's download folder for one download, named
+/// `{kind}-{seconds}-{random}`, where `seconds` is the wall-clock time it was
+/// made, in Unix seconds. The sweep reads a folder's age from its name,
+/// because not every filesystem records when a folder was made.
+pub fn download_folder(kind: &str) -> Result<PathBuf> {
+    let made = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    Ok(tempfile::Builder::new()
+        .prefix(&format!("{kind}-{made}-"))
+        .tempdir_in(downloads()?)?
+        .keep())
+}
+
+/// When a `drive-` or `mail-` download folder was made, from its name.
+fn made_at(name: &str) -> Option<SystemTime> {
+    let rest = name
+        .strip_prefix("drive-")
+        .or_else(|| name.strip_prefix("mail-"))?;
+    let (seconds, _) = rest.split_once('-')?;
+    // checked_add: a name's number can be too large for a SystemTime.
+    UNIX_EPOCH.checked_add(Duration::from_secs(seconds.parse().ok()?))
 }
 
 /// Delete this process's download folder; every command ends with this. A
@@ -244,24 +419,18 @@ pub fn sweep_downloads() {
     sweep(&downloads_path(), SystemTime::now());
 }
 
-/// Delete the `drive-*` and `mail-*` folders directly in `dir` that are
-/// expired at `now`, by the creation time on disk. Nothing else is touched:
+/// Delete the folders `download_folder` made directly in `dir` that are
+/// expired at `now`, by the time in their names. Nothing else is touched:
 /// not other names, not symlinks, and not `--out` folders, which lie outside.
 fn sweep(dir: &Path, now: SystemTime) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return; // no download yet
     };
     for entry in entries.flatten() {
-        let name = entry.file_name();
-        let ours = name
-            .to_str()
-            .is_some_and(|n| n.starts_with("drive-") || n.starts_with("mail-"));
+        let made = entry.file_name().to_str().and_then(made_at);
         // symlink_metadata: a link is not a folder of ours, whatever it points to.
-        let created = std::fs::symlink_metadata(entry.path())
-            .ok()
-            .filter(std::fs::Metadata::is_dir)
-            .and_then(|m| m.created().ok());
-        if ours && created.is_some_and(|c| expired(c, now)) {
+        let folder = std::fs::symlink_metadata(entry.path()).is_ok_and(|m| m.is_dir());
+        if folder && made.is_some_and(|m| expired(m, now)) {
             remove(&entry.path());
         }
     }
@@ -399,31 +568,74 @@ mod tests {
 
     #[test]
     fn the_sweep_removes_only_expired_download_folders() {
-        use std::fs::{File, FileTimes};
-        use std::os::darwin::fs::FileTimesExt as _;
         let (dir, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let now = SystemTime::now();
-        let made = |parent: &Path, name: &str, mins: u64| {
-            let p = parent.join(name);
+        // A folder named as `download_folder` names one made `mins` ago.
+        let made = |parent: &Path, kind: &str, mins: u64| {
+            let then = now - Duration::from_mins(mins);
+            let secs = then.duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let p = parent.join(format!("{kind}-{secs}-x1y2z3"));
             std::fs::create_dir(&p).unwrap();
             std::fs::write(p.join("file"), "content").unwrap();
-            let created = now - Duration::from_mins(mins);
-            let times = FileTimes::new().set_created(created);
-            File::open(&p).unwrap().set_times(times).unwrap();
             p
         };
-        let old = made(dir.path(), "drive-old", 61);
-        let new = made(dir.path(), "mail-new", 59);
+        let old = made(dir.path(), "drive", 61);
+        let new = made(dir.path(), "mail", 59);
         let other = made(dir.path(), "notes", 120);
-        // An old folder elsewhere, such as an `--out` folder, reached by a link.
-        let target = made(outside.path(), "drive-out", 120);
-        let link = dir.path().join("drive-link");
+        let unnamed = dir.path().join("drive-x1y2z3");
+        std::fs::create_dir(&unnamed).unwrap();
+        // An old folder elsewhere, such as an `--out` folder, reached by a
+        // link whose name says it is old.
+        let target = made(outside.path(), "drive", 120);
+        let link = dir.path().join(target.file_name().unwrap());
         std::os::unix::fs::symlink(&target, &link).unwrap();
         sweep(dir.path(), now);
         assert!(!old.exists());
         assert!(new.join("file").exists());
         assert!(other.join("file").exists());
+        assert!(unnamed.exists());
         assert!(link.symlink_metadata().is_ok() && target.join("file").exists());
+    }
+
+    #[test]
+    fn a_download_folder_carries_the_time_it_was_made() {
+        let before = SystemTime::now() - Duration::from_secs(1);
+        let dir = download_folder("mail").unwrap();
+        let name = dir.file_name().unwrap().to_str().unwrap();
+        let made = made_at(name).unwrap();
+        assert!(made >= before && made <= SystemTime::now(), "{name}");
+        assert!(dir.starts_with(downloads().unwrap()), "{}", dir.display());
+        std::fs::remove_dir(&dir).unwrap();
+        assert_eq!(made_at("notes-1790000000-x"), None);
+        assert_eq!(made_at("drive-soon-x"), None);
+        assert_eq!(made_at(&format!("drive-{}-x", u64::MAX)), None);
+    }
+
+    /// R25: a panic on the blocking pool does not carry its message out.
+    #[tokio::test]
+    async fn a_blocking_panic_withholds_its_message() {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let err = blocking(|| panic!("name Jane Doe")).await.unwrap_err();
+        std::panic::set_hook(previous);
+        let said = format!("{err:#}");
+        assert!(
+            said.contains("panicked") && !said.contains("Jane"),
+            "{said}"
+        );
+    }
+
+    #[tokio::test]
+    async fn aliases_mode_gets_no_download_folder() {
+        let refused = restricted(async { download_folder("drive") })
+            .await
+            .unwrap_err();
+        assert!(
+            refused.downcast_ref::<DiskForbidden>().is_some(),
+            "{refused:#}"
+        );
+        let dir = download_folder("drive").unwrap();
+        std::fs::remove_dir(dir).unwrap();
     }
 
     #[test]

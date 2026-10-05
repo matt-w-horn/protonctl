@@ -9,8 +9,9 @@
 //! port = 1143
 //! cert_sha256 = "<pinned by setup>"
 //!
-//! [drive]
+//! [drive]                              # written by `protonctl setup drive`; Drive is off without it
 //! # folder = "/Users/you/Library/CloudStorage/ProtonDrive-you@proton.me-folder"
+//! # cli = "/Users/you/bin/proton-drive"
 //! exclude = ["/Private"]
 //!
 //! [[calendar]]
@@ -21,6 +22,7 @@
 //! folder = "/Users/you/protonctl-export"
 //! ```
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -89,10 +91,7 @@ pub fn home() -> PathBuf {
     std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
 }
 
-/// protonctl's cache folder, which holds the download folders and the CLI's lock file.
-pub fn cache_dir() -> PathBuf {
-    home().join("Library/Caches/protonctl")
-}
+pub use crate::platform::cache_dir;
 
 pub fn path() -> PathBuf {
     if let Some(p) = std::env::var_os("PROTONCTL_CONFIG") {
@@ -158,6 +157,28 @@ pub fn add_calendar(id: &str, name: &str) -> Result<String> {
     Ok(name.to_string())
 }
 
+/// Append the `[drive]` table that `protonctl setup drive` writes: the
+/// folder and CLI only when given, so the app's folder is still found
+/// automatically, and an empty `exclude` to show where exclusions go.
+pub fn add_drive(folder: Option<&Path>, cli: Option<&Path>) -> Result<()> {
+    append(&path(), &drive_entry(folder, cli)?)
+}
+
+fn drive_entry(folder: Option<&Path>, cli: Option<&Path>) -> Result<String> {
+    let mut entry = String::from("\n[drive]\n");
+    for (key, value) in [("folder", folder), ("cli", cli)] {
+        if let Some(v) = value {
+            let v = v
+                .to_str()
+                .with_context(|| format!("{key} is not UTF-8: {}", v.display()))?;
+            writeln!(entry, "{key} = {}", toml::Value::from(v))
+                .expect("writing to a String cannot fail");
+        }
+    }
+    entry.push_str("exclude = []\n");
+    Ok(entry)
+}
+
 /// Append the `[mail]` table that `protonctl setup mail` writes.
 pub fn add_mail(address: &str, port: u16, cert_sha256: &str) -> Result<()> {
     append(
@@ -210,6 +231,22 @@ mod tests {
             assert_eq!(back.calendar.len(), 1, "{text}");
             assert_eq!(back.calendar[0].name, name, "{text}");
         }
+    }
+
+    #[test]
+    fn the_drive_table_reads_back_exactly() {
+        let bare: Config = toml::from_str(&drive_entry(None, None).unwrap()).unwrap();
+        let drive = bare.drive.unwrap();
+        assert!(drive.folder.is_none() && drive.cli.is_none() && drive.exclude.is_empty());
+        let (folder, cli) = (
+            Path::new("/Users/a \"b\"/Drive"),
+            Path::new("/opt/it's/proton-drive"),
+        );
+        let text = drive_entry(Some(folder), Some(cli)).unwrap();
+        let both: Config = toml::from_str(&text).unwrap();
+        let drive = both.drive.unwrap();
+        assert_eq!(drive.folder.as_deref(), Some(folder), "{text}");
+        assert_eq!(drive.cli.as_deref(), Some(cli), "{text}");
     }
 
     #[test]

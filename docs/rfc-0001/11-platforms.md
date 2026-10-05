@@ -3,38 +3,67 @@
 # 11. Platforms: macOS and Linux
 
 Proposed 2026-10-04. Q29 records the decision to support Linux; Q30 to
-Q35 hold the choices this section recommends but does not settle. No code
-changes until they are answered.
+Q35, decided the same day, adopt the choices this section recommends
+([section 10](10-open-questions.md) gives each reason). Phase P1 is built
+(2026-10-04): protonctl builds and passes its gates on Linux, where it
+serves nothing until Phase P2 gives it a secret store.
 
 ## Why
 
 - **Building and testing.** Cloud containers and most CI run Linux, and
-  protonctl does not compile there today. On 2026-10-04 `cargo check
+  before P1 protonctl did not compile there. On 2026-10-04 `cargo check
   --all-targets` on Linux (Rust 1.97, `--ignore-rust-version`) failed with
   four errors in the binary and two more in the tests, all from the
-  macOS-only APIs in the table below. Every other module compiled, so most
-  of the 132 tests could run on Linux once those few sites are isolated.
-- **Users.** Proton Mail Bridge ships for Linux, and Claude Code runs on
-  Linux. Claude Desktop, and so Cowork, has no Linux release known to this
-  RFC (to confirm in MP0).
+  macOS-only APIs in the table below. Every other module compiled. After
+  P1, every test runs on Linux except the two of macOS's document
+  readers.
+- **Users.** Proton Mail Bridge, the Drive CLI, Claude Code and, in beta,
+  Claude Desktop all ship for Linux (below).
 
-## What is macOS-specific today
+## Linux availability (MP0 findings, 2026-10-04)
 
-From the code at commit 7786b3e:
+Checked on 2026-10-04. This container's network policy blocks proton.me,
+so Proton's facts come from its GitHub repositories, and the two marked
+"reported" from news sites only.
 
-| Area | macOS mechanism | Where | Builds on Linux | Runs on Linux |
-|---|---|---|---|---|
-| Secrets (R2) | Keychain through `security-framework` | `src/secret.rs:7-8` | no | no |
-| Cloud-only files | `st_flags() & SF_DATALESS` through `std::os::macos` | `src/drive/mod.rs:15, 314` | no | no |
-| A test of the download sweep | `FileTimes::set_created` through `std::os::darwin` | `src/content.rs:403-411` | no (test only) | no |
-| Download expiry (R10) | the folder's creation time, `Metadata::created()` | `src/content.rs:263` | yes | only where the filesystem records birth time; elsewhere a folder never expires |
-| Drive folder discovery | `~/Library/CloudStorage/ProtonDrive-*` | `src/drive/mod.rs:283` | yes | finds nothing |
-| Drive CLI check (R9) | `/usr/bin/codesign` and Apple Team ID `2SB5Z68H26` | `src/drive/cli.rs:85-96` | yes | fails |
-| Bridge on demand (Q2) | `/usr/bin/open -g -j -b com.protonmail.bridge` | `src/mail/mod.rs:213` | yes | fails |
-| PDF text and page images | `/usr/bin/osascript` with PDFKit | `src/extract.rs:240, 300` | yes | fails |
-| Word, RTF, OpenDocument | `/usr/bin/textutil` | `src/extract.rs:187` | yes | fails |
-| Cache folder | `~/Library/Caches/protonctl` | `src/config.rs:94` | yes | the wrong place |
-| Planned | LocalAuthentication (R18), `sandbox-exec` (R21), Vision (R21, R22), a RAM disk (R10, Q14), a Keychain attribute for the key ID (R20) | | | |
+| Component | On Linux | Source |
+|---|---|---|
+| Claude Desktop | beta since the week of 2026-06-29: Ubuntu 22.04+ and Debian 12+, x86_64 and arm64, from Anthropic's apt repository; Chat, Cowork and Code. Cowork runs its tasks in a QEMU/KVM virtual machine the app hosts. Its Linux page does not say whether local MCP servers load from `claude_desktop_config.json`, or where | [Claude Desktop on Linux](https://code.claude.com/docs/en/desktop-linux), [release notes, week 27](https://code.claude.com/docs/en/whats-new/2026-w27) |
+| Proton Mail Bridge | v3.27.0 (2026-09-09) ships an x86_64 `.rpm` and an Arch `PKGBUILD` on GitHub, each with a GPG `.sig` and Proton's public key; `--noninteractive` (`-n`) starts it with no interface, and "you still need to set up a supported keychain" | [releases](https://github.com/ProtonMail/proton-bridge/releases), [BUILDS.md](https://github.com/ProtonMail/proton-bridge/blob/master/BUILDS.md) |
+| Proton Drive CLI | Linux builds, `linux/x64` and `linux/x64-baseline` (for CPUs without AVX2); requires "libsecret (e.g., GNOME Keyring, KWallet)"; sign-in through a browser (`auth login`). The README documents no checksum or signature for releases. An arm64 build and version 0.8.0 of 2026-08-13 are reported | [the CLI's README](https://github.com/ProtonDriveApps/sdk/blob/main/cli/README.md); reported by [Neowin](https://www.neowin.net/news/proton-releases-proton-drive-cli-for-windows-mac-and-linux/) |
+| Proton Drive app | none released; a native Linux client is reported in development since June 2026, with no date | reported by [OMG! Ubuntu](https://www.omgubuntu.co.uk/2026/06/proton-drive-linux-client) |
+
+What these facts meant for Q31 to Q33 and the hosts:
+
+- Q31: Bridge and the Drive CLI each need a system keychain on Linux, the
+  CLI through libsecret, so a machine that runs them already has the
+  Secret Service that Q31 recommends.
+- Q32: Bridge's `-n` mode exists, as assumed.
+- Q33: the CLI exists for Linux. With no published checksum or signature
+  found, pinning its SHA-256 at `setup drive` stays the proposal; the
+  CLI-only mode stays the default until a Linux Drive app ships.
+- Hosts: Claude Desktop and Cowork reach Linux. Whether they start a local
+  MCP server there, and how Cowork's VM reaches it, is a live check in
+  MP2, as M1.1 is on macOS.
+
+## What is macOS-specific
+
+Before P1 (commit 7786b3e), the Keychain calls, the cloud-only check and a
+test's `FileTimes::set_created` did not compile on Linux, and download
+expiry read a folder's creation time, which not every Linux filesystem
+records. After P1:
+
+| Area | macOS mechanism | Where | On Linux |
+|---|---|---|---|
+| Secrets (R2) | Keychain through `security-framework`, a macOS-only dependency | `src/platform/macos.rs` | refused: "no secret store on Linux yet" (Q31) |
+| Cloud-only files | `st_flags() & SF_DATALESS` | `src/platform/macos.rs` | none, since no Drive app makes placeholders |
+| Download expiry (R10) | the time in each download folder's name, on both systems | `src/content.rs` | the same |
+| Drive folder discovery | `~/Library/CloudStorage/ProtonDrive-*` | `src/platform/macos.rs` | no place to look: the CLI-only mode |
+| Drive CLI check (R9) | `/usr/bin/codesign` and Apple Team ID `2SB5Z68H26` | `src/drive/cli.rs` | refused, naming Q33 |
+| Bridge on demand (Q2) | `/usr/bin/open -g -j -b com.protonmail.bridge` | `src/mail/mod.rs` | refused when Bridge is not running, naming Q32 |
+| PDF text and page images; Word, RTF, OpenDocument | `/usr/bin/osascript` with PDFKit; `/usr/bin/textutil` | `src/extract.rs` | "no reader for PDF, Word, RTF or OpenDocument files yet" (Q34); text and images read as on macOS |
+| Cache folder | `~/Library/Caches/protonctl` | `src/platform/macos.rs` | `$XDG_CACHE_HOME/protonctl`, else `~/.cache/protonctl` |
+| Planned | LocalAuthentication (R18), `sandbox-exec` (R21), Vision (R21, R22), a RAM disk (R10, Q14), a Keychain attribute for the key ID (R20) | | |
 
 Already portable: IMAP over rustls, the certificate pin, calendar parsing,
 the MCP server (rmcp over stdio), tokio's process handling and Unix
@@ -55,7 +84,7 @@ The options, weighed for this crate:
 | F. A workspace split | a `protonctl-core` crate with no OS dependency, and the binary crate with the platform adapters | the core builds and tests anywhere by construction, and the boundary is visible in review | more Cargo plumbing and two crates to version, against goal 4 | later, if the platform layer grows past a few files |
 | G. A fork or a binary per OS | two code bases | none worth it | duplicated code | rejected |
 
-Recommended (Q30): **B and C together**, with target-specific
+Recommended, and decided (Q30): **B and C together**, with target-specific
 dependencies in `Cargo.toml`
 (`[target.'cfg(target_os = "macos")'.dependencies] security-framework`),
 features only for optional heavy backends (D), and crates where no control
@@ -63,6 +92,13 @@ is lost (E). A feature with no Linux mechanism that meets its requirement
 is **absent** on Linux, not weaker: the tool is not registered, and
 `get_status` says why. Revisit F when `src/platform/` passes about a
 tenth of the crate.
+
+P1 built B: `src/platform/mod.rs` declares each item once and forwards it
+to `macos.rs` or `linux.rs`, so a file whose signature drifts fails to
+compile on its own system, and the macOS build check below catches it
+from Linux. No trait exists yet: the first fake or second backend that
+needs one adds it (C). Two one-line refusals, the Drive CLI check and
+opening Bridge, are `cfg!` tests at their call sites (A).
 
 ```mermaid
 flowchart TB
@@ -107,17 +143,17 @@ flowchart TB
 
 ## Platform services
 
-| Service | Requirement | macOS | Linux options | Proposed Linux default | Question |
+| Service | Requirement | macOS | Linux options | Linux choice | Question |
 |---|---|---|---|---|---|
 | Secret store | R2, R20 | login Keychain | Secret Service over D-Bus (GNOME Keyring, KWallet), through the `secret-service` or `keyring` crate; kernel keyutils (lost at reboot); `pass` (GPG) | Secret Service; with none running (a headless machine), refuse to store secrets, never a plaintext file | Q31 |
 | Bridge on demand | Q2 | `open` the Bridge app hidden | start Bridge's core with `--noninteractive`; a systemd user unit the user enables; or require Bridge running | require it running, and print how to enable the unit | Q32 |
-| Drive CLI check | R9 | `codesign`, Team ID, version | does Proton ship the CLI for Linux? If so: a SHA-256 pinned at `setup drive`, as Bridge's certificate is pinned; Proton's release signature if published; a path the user cannot write | pin at setup | Q33 |
-| Drive folder | the namespace, cloud-only files | the Drive app's folder, `SF_DATALESS` | no official Proton Drive app for Linux is known to this RFC (to confirm): the CLI-only mode built for Macs without the app, with search off | CLI only | Q33 |
+| Drive CLI check | R9 | `codesign`, Team ID, version | the CLI ships for Linux (MP0); no release signature or checksum found: a SHA-256 pinned at `setup drive`, as Bridge's certificate is pinned; Proton's signature if one is published; a path the user cannot write | pin at setup, checked before every run | Q33 |
+| Drive folder | the namespace, cloud-only files | the Drive app's folder, `SF_DATALESS` | no Proton Drive app for Linux yet (MP0): the CLI-only mode built for Macs without the app, with search off | CLI only | Q33 |
 | Converters | R21 | `osascript` (PDFKit), `textutil`, Vision | poppler-utils (`pdftotext`, `pdftoppm`); pandoc or LibreOffice for documents; Tesseract for OCR; or Rust crates (`pdf-extract`, `lopdf`) inside the sandboxed helper | external tools when installed; otherwise the result says the file cannot be read on this machine, and why | Q34 |
 | Sandbox | R21 | a `sandbox-exec` profile (Q13) | Landlock (files from Linux 5.13, network from 6.7) through the `landlock` crate, with a seccomp filter; or bubblewrap | Landlock and seccomp in `protonctl convert` | Q34 |
 | User presence | R18 | LocalAuthentication: Touch ID or the login password | polkit (`pkcheck --allow-user-interaction`, needs an authentication agent, so a desktop session); fprintd; a FIDO2 security key's touch (works on both systems); none | polkit where an agent runs; otherwise no `reveal_*` tools | Q35 |
-| Content off disk | R10, Q14 | a RAM disk | `memfd_create`, which never touches a filesystem, or `/dev/shm` | `memfd_create` | Q14 |
-| Download expiry | R10 | folder creation time | birth time is not recorded everywhere; the time in the folder's name, or its modification time | the time in the name | MP1 |
+| Content off disk | R10, Q14 | a RAM disk | `memfd_create`, which never touches a filesystem; `/dev/shm`; `$XDG_RUNTIME_DIR`, a per-user memory file system | `$XDG_RUNTIME_DIR`, since the CLI writes into a folder, which a `memfd_create` file is not (Q14) | Q14 |
+| Download expiry | R10 | the time in the folder's name, since MP1 | the same | the time in the name (built) | MP1 |
 | Paths | | `~/Library/Caches`, `~/Library/Logs` | `$XDG_CACHE_HOME`, `$XDG_STATE_HOME`; the config path is already XDG | XDG | |
 
 ## Hosts by platform
@@ -125,13 +161,14 @@ flowchart TB
 | Host | macOS | Linux |
 |---|---|---|
 | Claude Code | yes | yes |
-| Claude Desktop | yes | no release known (to confirm) |
-| Cowork | yes, through Claude Desktop | no |
+| Claude Desktop | yes | beta, Ubuntu and Debian (MP0); local MCP servers to check in MP2 |
+| Cowork | yes, through Claude Desktop | through Claude Desktop's beta, in a QEMU/KVM virtual machine; to check in MP2 |
 
-On Linux the only host is Claude Code, so the model always has a shell:
-the residual risk that it runs `proton-drive`, reads files or speaks
-IMAP around protonctl ([section 5](05-security.md)) is the normal case
-there, and Claude Code's sandbox settings (Q17) matter more.
+On Linux the model usually has a shell, in Claude Code or Claude
+Desktop's Code tab: the residual risk that it runs `proton-drive`, reads
+files or speaks IMAP around protonctl ([section 5](05-security.md)) is
+the normal case there, and Claude Code's sandbox settings (Q17) matter
+more.
 
 ## Testing
 
@@ -140,14 +177,18 @@ there, and Claude Code's sandbox settings (Q17) matter more.
   files.
 - Each platform file is tested on its own system; the traits' fakes run
   everywhere.
-- `deny.toml` checks `aarch64-apple-darwin` today; its `[graph] targets`
-  gains `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`.
-- Checking one system's code from the other (`cargo check --target`) would
-  catch signature drift between the platform files, but `ring`'s build
-  script compiles C for the target, so a Linux machine needs an Apple
-  cross toolchain to check the macOS target. MP1 finds out what works;
-  otherwise each system checks its own file, and the gate runs on both
-  before a merge.
+- `deny.toml` checks `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`
+  and `aarch64-unknown-linux-gnu`.
+- On Linux, `scripts/check.sh` also runs clippy on the macOS build
+  (`--target aarch64-apple-darwin`), so a change to `macos.rs` or to code
+  only macOS compiles is checked there too. `ring`'s build script compiles
+  C for the target, which Linux's `cc` cannot do for Apple; `clang`
+  can, freestanding (`-ffreestanding -nostdinc` and ring's
+  `RING_CORE_NOSTDLIBINC`), against a stub of the one Apple header ring
+  includes (`scripts/apple-stub/TargetConditionals.h`). Nothing it builds
+  is linked or run, so macOS tests still run only on a Mac. A planted type
+  error in `macos.rs` failed the gate. The reverse, checking Linux from a
+  Mac, is untried.
 - The RFC's constraint that gates run locally stays; a hosted CI with
   macOS and Linux runners is an option, not a requirement.
 
@@ -155,8 +196,8 @@ there, and Claude Code's sandbox settings (Q17) matter more.
 
 | Phase | Contents | Before |
 |---|---|---|
-| P0 | Answer Q30 to Q35; confirm the Linux availability of Claude Desktop, Bridge's core and the Drive CLI | P1 |
-| P1 | Builds and tests on Linux: `src/platform/` with the traits above; target-specific dependencies; Linux implementations that report "not available on Linux"; the macOS-only test moved behind `cfg`; download expiry by the time in the folder name; `deny.toml` targets; `scripts/check.sh` on Linux | Phase 2, so the privacy layer is built and tested in Linux containers |
+| P0 | Answer Q30 to Q35; confirm the Linux availability of Claude Desktop, Bridge's core and the Drive CLI. Done 2026-10-04 | P1 |
+| P1 | Builds and tests on Linux: `src/platform/`; target-specific dependencies; Linux implementations that report "not available on Linux"; the macOS-only tests behind `cfg`; download expiry by the time in the folder name; `deny.toml` targets; `scripts/check.sh` on Linux, with the macOS build checked from there. Done 2026-10-04 | Phase 2, so the privacy layer is built and tested in Linux containers |
 | P2 | Mail and Calendar on Linux: the secret store (Q31), Bridge started by the user (Q32), `setup`, `doctor` and `status` | alongside Phase 2 |
 | P3 | Drive on Linux, as Q33 decides | after P2 |
 | P4 | Converters and their sandbox on Linux (Q34) | with Phase 4 |

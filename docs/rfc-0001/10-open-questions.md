@@ -15,30 +15,30 @@
 | Q9 | Calendar stays, tokenized | decided 2026-10-04 |  |
 | Q10 | No content on disk; sandboxed converters | decided 2026-10-04 |  |
 | Q11 | All services tokenized at once | decided 2026-10-04 |  |
-| Q26 | The privacy layer is optional | decided 2026-10-04; its proposal to confirm | M2.0 |
-| Q12 | Signing identity and install path | open | Phase 2 |
+| Q26 | The privacy layer is optional | decided 2026-10-04; proposal confirmed |  |
+| Q12 | Signing identity and install path | decided 2026-10-04 |  |
 | Q13 | `sandbox-exec` still enforced | open | Phase 4 |
-| Q14 | Drive downloads to stdout, or a RAM disk | open | Phase 2 |
+| Q14 | Drive downloads to stdout, or a RAM disk | decided 2026-10-04 |  |
 | Q15 | Reaching LocalAuthentication | open | Phase 3 |
-| Q16 | Token cost of words and base64url | open | before Phase 2 |
+| Q16 | Token cost of words and base64url | decided 2026-10-04 |  |
 | Q17 | Claude Code sandbox settings | open | Phase 3 |
-| Q18 | Word list licence and curation | open | Phase 2 |
-| Q19 | Alias input, word count, URLs, what a `ref` holds | open | Phase 2 |
-| Q20 | Drive handles: path or node UID | open | Phase 2 |
-| Q21 | Pairing names with aliases | open | Phase 2 |
-| Q22 | Further entity types; dictionary scope | open | Phase 2 |
+| Q18 | Word list licence and curation | decided 2026-10-04; licence text to check in M2.2 |  |
+| Q19 | Alias input, word count, URLs, what a `ref` holds | decided 2026-10-04 |  |
+| Q20 | Drive handles: path or node UID | decided 2026-10-04 |  |
+| Q21 | Pairing names with aliases | decided 2026-10-04 |  |
+| Q22 | Further entity types; dictionary scope | decided 2026-10-04 |  |
 | Q23 | Model runtime for Phases 5 to 7 | open | Phase 5 |
-| Q24 | Check the CLI's signature before every run | open | Phase 2 |
-| Q25 | `/security-review` for Phases 2 and 3 | open | Phase 2 |
-| Q27 | Mode of a new install | open | Phase 2 |
-| Q28 | Where the mode lives | open | Phase 2 |
+| Q24 | Check the CLI's signature before every run | decided 2026-10-04 |  |
+| Q25 | `/security-review` for Phases 2 and 3 | decided 2026-10-04 |  |
+| Q27 | Mode of a new install | decided 2026-10-04 |  |
+| Q28 | Where the mode lives | decided 2026-10-04 |  |
 | Q29 | Linux is supported beside macOS | decided 2026-10-04 | |
-| Q30 | How platform code is structured | open, B and C recommended | P1 |
-| Q31 | The secret store on Linux | open | P2 |
-| Q32 | Starting Bridge on Linux | open | P2 |
-| Q33 | Drive on Linux: the CLI, its check, no app folder | open | P3 |
-| Q34 | Converters and their sandbox on Linux | open | P4 |
-| Q35 | User presence on Linux | open | P5 |
+| Q30 | How platform code is structured | decided 2026-10-04 |  |
+| Q31 | The secret store on Linux | decided 2026-10-04 |  |
+| Q32 | Starting Bridge on Linux | decided 2026-10-04 |  |
+| Q33 | Drive on Linux: the CLI, its check, no app folder | decided 2026-10-04 |  |
+| Q34 | Converters and their sandbox on Linux | decided 2026-10-04 |  |
+| Q35 | User presence on Linux | decided 2026-10-04 |  |
 
 ## Decisions and questions
 
@@ -95,131 +95,145 @@
   failure fails the call (R13). If a raw fallback was meant instead, R13's
   fail-closed rule is the place to change.
 - Q26, decided 2026-10-04: the privacy layer is optional, since some users
-  want a read-only stand-in for Claude's Google connectors without it.
-  Proposed with it, to confirm in M2.0 ([section 4, Settings](04-design.md#settings)): one mode,
-  `off` or `aliases`, for every service and host on the Mac; off mode keeps
-  the 18 tools as built, with their parameters, page images, downloads and
-  the export folder; a service is on only once set up, Drive through a new
-  `setup drive`; a running server refuses calls after a mode change, and
-  aliases mode refuses without its key (R26).
+  want a read-only stand-in for Claude's Google connectors without it. Its
+  proposal ([section 4, Settings](04-design.md#settings)) was confirmed the
+  same day: one mode, `off` or `aliases`, for every service and host; off
+  mode keeps the 18 tools as built, with their parameters, page images,
+  downloads and the export folder; a service is on only once set up,
+  Drive through a new `setup drive` (M1.4), so an install whose config has
+  no `[drive]` table loses Drive until `setup drive` runs, and `doctor`
+  and `status` say so; a running server refuses calls after a mode change,
+  and aliases mode refuses without its key (R26).
 - Q29, decided 2026-10-04: Linux is supported beside macOS on Apple
   silicon, so that protonctl builds and tests in cloud containers and
   serves Linux users. Windows stays out. A feature with no Linux mechanism
   that meets its requirement is absent on Linux ([section 11](11-platforms.md)).
+
+- Decided on 2026-10-04 for Phase 2 and the Linux phases. The maintainer
+  answered Q27 and delegated the rest; each gives its reason.
+  - Q27: a new install has no mode. Until `setup privacy` or
+    `setup privacy --off` runs, every call answers with those two commands
+    and `doctor` fails. The two mistakes cost different amounts: a wrong
+    `off` sends names to the provider, where they cannot be recalled; a
+    wrong `aliases` costs one command to undo. An install upgraded to
+    Phase 2 has no mode either, so the maintainer's install chooses once.
+  - Q28: the mode lives in the secret store, as item `privacy-mode` beside
+    `privacy-key`, not in the config. In Claude Code the model can edit
+    the config file unless the sandbox denies it (Q17), so injected text
+    could turn the layer off there; a Keychain item changed from outside
+    protonctl meets a prompt. `status`, `doctor` and `get_status` show the
+    mode, which keeps it visible. A missing item reads as no mode (Q27),
+    so deleting it refuses calls rather than falling back to off.
+    `setup privacy --off` asks for confirmation on a terminal in Phase 2,
+    and for user presence from Phase 3 ([API specification](lld-api.md#command-line)).
+  - Q12: protonctl is signed with a self-signed code-signing certificate
+    in the login keychain, made once by the maintainer, so a rebuild no
+    longer brings a Keychain prompt and a swapped binary does. The binary
+    stays in `~/.cargo/bin`. An Apple Developer ID waits until protonctl
+    is distributed to others.
+  - Q14: `proton-drive` cannot write a download to stdout: its
+    `filesystem download` takes remote paths and one local folder, and
+    nothing else (the CLI's source, `cli/src/commands/fileSystem/commandFileSystemDownload.ts`,
+    commit 28ac9cd of 2026-10-02). So in aliases mode a cloud-only file is
+    read through a per-process RAM disk on macOS, and through
+    `$XDG_RUNTIME_DIR`, a per-user memory file system, on Linux. M2.8
+    checks that the RAM disk needs no admin, honours ownership and stays
+    out of Finder and Spotlight; where it cannot be made, the read fails
+    rather than touch the disk.
+  - Q16: aliases and keyed digests stay words, since people and Claude
+    read them in prose ([Appendix C](appendix-c-roleplay.md)), which a
+    token count does not change; refs and handles are base64url already.
+    The token measurement sets only the page-size cap (M2.4), with
+    Anthropic's token-counting API when a key is at hand.
+  - Q18: the EFF large word list, curated as [section 6](06-privacy.md#identifiers)
+    says: loaded words, names, brands and words that name a kind of place,
+    organization, role or relation dropped, at least 7,132 words kept.
+    Its licence is understood to be Creative Commons Attribution 3.0 US;
+    M2.2 checks the licence text before the list is added, and the README
+    credits EFF. eff.org was blocked from the container that recorded this.
+  - Q19: names (person, organization, location) enter the alias HMAC with
+    one shared tag, `name`, so a detector that retypes a name keeps its
+    alias (Q8); other types keep their own tag. Three words, with a fourth
+    only when two entities in one result share three. A change to the
+    canonical rules, the word list or a detector's typing raises the
+    format version (the `v1` in the key labels), which `get_status`
+    reports and the release notes announce; there is no automatic
+    rotation. URLs get no word alias and no `ref`: each is
+    "link N" within its result, beside its domain's alias, because a
+    newsletter's hundreds of tracking URLs would crowd out the content and
+    each become an entity; to open a link, the user opens the item in
+    Proton. A `ref` holds the canonical value only; a person's addresses
+    are listed in the entity, each with its own `ref`.
+  - Q20: a Drive handle holds the path as stored, padded. Exclusions then
+    apply by path with no lookup; a handle goes stale when the file or a
+    folder above it is renamed or moved, and the error says to search
+    again. A node UID would need a CLI `info` per use where the app's
+    folder cannot map it, 4.6 s each ([Appendix A](appendix-a-phase-0.md)).
+  - Q21: `queryEntities` pairs a typed name with its alias only when the
+    name matches an entity in the result. `reveal_*` results carry the
+    pairing, since the user approved that item's text and Claude cannot
+    connect it to other results without it; the cost, that the pairing
+    outlives the chat, is accepted in the [review](security-privacy-review.md).
+    No key epochs: `rotate-key` stays a command the user runs.
+  - Q22: Phase 2 adds three entity types: one-time codes and passwords
+    that follow a label such as "code", "password" or "PIN" on the same
+    line (`secret`), US Social Security numbers that pass their format
+    rules (`national_id`), and the local account name in paths
+    (`account`). The name dictionary covers the whole process: every
+    correspondent's display name from All Mail's ENVELOPE (1.9 s for about
+    20,000 messages) and every calendar attendee, built on the first
+    aliases-mode call and held in memory only. It finds a correspondent's
+    name in Drive names, subjects and titles, the largest gap before
+    Phase 5.
+  - Q24: the Drive CLI's signature is checked before every run, one
+    `codesign` call each, rather than once per process; this closes the
+    window for a swap after the check and needs no admin-owned folder.
+  - Q25: `/security-review` runs on the Phase 2 and Phase 3 changes,
+    beside `/code-review`, since they add protonctl's own cryptography and
+    user presence.
+  - Q30: the module per system that P1 built (option B), with traits added
+    when a fake or a second backend first needs one (C), and the one-line
+    refusals as `cfg!` tests at their call sites (A).
+  - Q31: the Secret Service over D-Bus (GNOME Keyring, KDE Wallet). Bridge
+    and the Drive CLI need it on Linux anyway ([section 11](11-platforms.md#linux-availability-mp0-findings-2026-10-04)).
+    With none running, protonctl refuses to store secrets and never writes
+    them to a file. The crate is chosen in MP2.
+  - Q32: Bridge runs before protonctl does; protonctl never starts it on
+    Linux, and `doctor` says how to run it as a systemd user unit.
+  - Q33: the CLI's SHA-256 is pinned at `setup drive` and checked before
+    every run, as Q24 does with `codesign`, since Proton publishes no
+    checksum or signature for it; each CLI update needs `setup drive`
+    again. Drive lists through the CLI, with search off, until a Linux
+    Drive app ships.
+  - Q34: external tools (`pdftotext` and `pdftoppm` from poppler-utils,
+    pandoc, and Tesseract for OCR) inside `protonctl convert`, under
+    Landlock and a seccomp filter. When a tool is missing, the result
+    names the package to install.
+  - Q35: polkit (`pkcheck --allow-user-interaction`) where an
+    authentication agent runs, as in a desktop session; elsewhere Linux
+    has no `reveal_*` tools.
+
 - Open, to check before the phase that depends on each:
-  - Q12 (Phase 2): sign protonctl with a stable identity, so that a
-    Keychain prompt after a rebuild stops being routine, and install it to
-    a path the user cannot write, so that a swap needs an admin. The path
-    alone does not stop the prompt: an ad-hoc signature's requirement is
-    the binary's hash. Identities, cheapest first: a self-signed
-    code-signing certificate in the login keychain (free; its private key
-    is readable by the user's own processes after a prompt), an Apple
-    Development certificate, or a Developer ID.
   - Q13 (Phase 4): `sandbox-exec` is marked deprecated in its man page.
     Check that it still enforces a profile on the current macOS, and that
     Vision, PDFKit through `osascript`, and `textutil` run under a profile
     that denies network access and file writes.
-  - Q14 (Phase 2): can `proton-drive` write a download to stdout, or to a
-    named pipe? If not, R10's RAM disk is needed; then check that it can be
-    made and removed without an admin, that it honours ownership (macOS can
-    mount disk images with ownership ignored), and that it can stay out of
-    Finder and Spotlight.
   - Q15 (Phase 3): does a LocalAuthentication prompt appear when protonctl
     runs as a child of Claude Desktop, as a child of Claude Code, and inside
     Claude Code's sandbox? Which route reaches it with unsafe code
     forbidden: an `osascript` script, a Swift helper, or `objc2` with one
     reviewed exception (R18)? Whichever starts the prompt is the process
     macOS names in it.
-  - Q16 (before Phase 2): measure with Anthropic's token-counting API
-    whether words cost fewer tokens than base64url for aliases, references,
-    handles and keyed digests.
   - Q17 (Phase 3): which Claude Code sandbox settings deny reading the
     Drive app's folder, running `proton-drive`, connecting to Bridge's
     port, writing protonctl's config, running `security` on protonctl's
     Keychain items, and reaching hosts outside an allowlist?
-  - Q18 (Phase 2): the EFF word list's license, and the curation rule: keep
-    at least 7,132 words, so that five words hold 64 bits, after dropping
-    loaded words, names, brands, and words that name a kind of place,
-    organization, role or relation ([Appendix C](appendix-c-roleplay.md)).
-  - Q19 (Phase 2): the alias. Whether names (person, organization,
-    location) enter the HMAC with their type, so that a detector's change
-    of type changes the alias, or without it; how a change to the canonical
-    rules or the word list is announced (a version in `detectors`, or a
-    key rotation); three words, four (about 51 bits: a collision across a
-    million entities about 0.02%), or three with a fourth only on a
-    collision in one result; whether URLs get word aliases and `ref`s at
-    all, or a per-result number with the host's alias; and whether a `ref`
-    holds only the canonical value, or also the forms seen and the
-    person's addresses, so that a search by `ref` finds "Chen, Alice".
-  - Q20 (Phase 2): the Drive handle. The path as stored, padded, so that
-    exclusions apply by path, but stale after any rename or move above the
-    file; or the node UID, stable across renames, resolved to a path at
-    each use (a CLI `info` per call where the app's folder cannot map it).
-  - Q21 (Phase 2): pairing names with aliases. `queryEntities` on every
-    query, only when the name matches, or never (Claude then cannot link
-    the name it typed); `reveal_*` results with the `entities` pairing or
-    without; key epochs, a scheduled `rotate-key`, which bound how far one
-    pairing reaches but end Q8's stability at each epoch.
-  - Q22 (Phase 2): further entity types: government ID numbers (SSN,
-    passport, tax IDs), credentials and one-time codes in mail, and local
-    account names in paths; and whether the dictionary covers the whole
-    process (every correspondent's name from All Mail's ENVELOPE, held in
-    memory) rather than one call.
   - Q23 (Phase 5): the model runtime for GLiNER, the Phase 6 local model
     and Privacy Filter: in process (`ort`, unsafe code in a dependency
     only), inside the sandboxed converter, or a local server on 127.0.0.1,
     which R3 would have to name and `deny.toml`'s HTTP-crate bans would
     have to allow; weights shipped with the install and pinned by SHA-256;
     their licences.
-  - Q24 (Phase 2): R9's check runs once per process and the CLI then runs
-    by a path the user can write. Check the signature before every run
-    (one `codesign` call each), or require the CLI at a path the user
-    cannot write?
-  - Q25 (Phases 2 and 3): `/security-review` on the phases that add
-    protonctl's own cryptography and user presence, beside `/code-review`?
-    Declined on 2026-10-02, before either existed.
-  - Q27 (Phase 2): the mode of a new install. (a) None: until a mode is
-    set, every call answers with the two `setup privacy` commands, and
-    `doctor` fails. Recommended, because the two errors cost different
-    amounts: a wrong `off` sends names to the provider, where they cannot
-    be recalled, and a wrong `aliases` costs one command to undo. (b)
-    `off`: a stand-in with no extra step, as built, and an opt-in that
-    comes with reading what Phase 2 does not cover (names in free text
-    until Phase 5); Lockdown Mode and Advanced Data Protection are opt-in
-    too. (c) `aliases`: protects whoever skips the docs, at the cost of
-    friction for stand-in use while coverage is partial. Under (a), the
-    maintainer's install chooses once when Phase 2 ships.
-  - Q28 (Phase 2): where the mode lives. In the config it is visible and
-    `doctor` can explain it, but `src/config.rs` only appends, so changing
-    the mode needs an edit in place (`toml_edit`, declined on 2026-10-03
-    when nothing was edited in place) or a hand edit; and in Claude Code
-    the model can edit the file unless the sandbox denies it (Q17). In a
-    Keychain item beside the key, no config edit is needed, and a change
-    from outside protonctl meets a Keychain prompt (to confirm for
-    deletion, which would otherwise read as a missing key and refuse calls
-    rather than fall back). Also: whether `setup privacy --off` asks for
-    user presence (R18's route, from Phase 3), so that injected text
-    running the CLI cannot turn the layer off.
-  - Q30 (P1): how platform code is structured. Recommended: one platform
-    module per system chosen by `cfg`, behind a trait per service, with
-    target-specific dependencies; features only for optional backends;
-    cross-platform crates where no control is lost; a workspace split
-    later. [Section 11](11-platforms.md) weighs the seven options.
-  - Q31 (P2): the secret store on Linux: the Secret Service (recommended),
-    kernel keyutils (lost at reboot), or `pass`; and with no Secret
-    Service running, refuse rather than write a file.
-  - Q32 (P2): Bridge on Linux: start its core with `--noninteractive`,
-    leave it to a systemd user unit, or require it running (recommended
-    first).
-  - Q33 (P3): Drive on Linux: whether Proton ships the Drive CLI for
-    Linux, how to check it without `codesign` (a SHA-256 pinned at
-    `setup drive`, or Proton's signature), and the CLI-only mode, since no
-    Linux Drive app with a local folder is known.
-  - Q34 (P4): converters on Linux: poppler-utils, pandoc or LibreOffice,
-    and Tesseract as external tools, or Rust crates inside the helper; the
-    sandbox: Landlock and seccomp (recommended) or bubblewrap.
-  - Q35 (P5): user presence on Linux: polkit with an authentication
-    agent, fprintd, a FIDO2 key's touch, or no `reveal_*` on Linux.
 
 - Declined on 2026-10-03:
   - per-label and per-folder scope levels: out of scope for this package;

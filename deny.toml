@@ -1,8 +1,9 @@
 # cargo-deny: run by scripts/check.sh before every commit.
 
 [graph]
-# protonctl only runs on Apple-silicon macOS; other platforms' crates never build.
-targets = ["aarch64-apple-darwin"]
+# protonctl builds for Apple-silicon macOS and for Linux (RFC section 11);
+# other platforms' crates never build.
+targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 
 [advisories]
 # RustSec advisories (the database is fetched each run); yanked crates fail too.

@@ -8,9 +8,9 @@
    and check that every tool maps to a policy row, no `Command` builds a shell string, stdout
    carries only MCP frames, every IO path has a timeout.
 2. `/code-review` on the Phase 1a changes and on each privacy phase.
-   `/security-review` is not part of the process (decided 2026-10-02,
-   before protonctl had cryptography or user presence of its own; Q25
-   reopens it for Phases 2 and 3).
+   `/security-review` runs beside it on the Phase 2 and Phase 3 changes,
+   which add protonctl's own cryptography and user presence (Q25); it was
+   left out on 2026-10-02, before either existed.
 3. Privacy: confirm by reading the code that each tool returns only the
    fields its schema lists; that in aliases mode every result leaves
    through the privacy pipeline (R13), errors and page tokens included, and

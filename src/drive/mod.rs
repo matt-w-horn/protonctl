@@ -12,30 +12,31 @@ pub mod cli;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io::{Read, Write as _};
-use std::os::macos::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, FixedOffset, Utc};
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::calendar::{ics::Zone, parse_time};
-use crate::config::{DriveConfig, home};
-use crate::content::{Attached, Reply, downloads, escape_hidden, page, unescape_hidden};
+use crate::config::DriveConfig;
+use crate::content::{
+    Attached, Invalid, Missing, Reply, clean, download_folder, escape_hidden, page, save_hint,
+    unescape_hidden,
+};
 use crate::digest;
 use crate::export::Export;
 use crate::extract::{self, Content, Document, MAX_IMAGE, MAX_SOURCE};
 use cli::Cli;
 
-/// `st_flags` bit for a cloud-only (dataless) File Provider placeholder.
-const SF_DATALESS: u32 = 0x4000_0000;
 const INDEX_TTL: Duration = Duration::from_secs(60);
 const WALK_LIMIT: usize = 300_000;
 const WALK_BUDGET: Duration = Duration::from_secs(30);
@@ -164,14 +165,22 @@ pub struct FileMetadataReq {
     pub digests: bool,
 }
 
+/// What an entry is, as results name it in `kind`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+enum EntryKind {
+    File,
+    Folder,
+    /// A symlink in the app's folder; a read follows it while it stays in the Drive.
+    Symlink,
+}
+
 #[derive(Clone)]
 struct Entry {
     path: String,
     /// Lower-case NFC file name, for matching.
     key: String,
-    folder: bool,
-    /// A symlink in the app's folder; a read follows it while it stays in the Drive.
-    link: bool,
+    kind: EntryKind,
     size: u64,
     /// The app's own file time for a local entry, which it can change without
     /// the content changing; Proton's node time for an entry from the CLI.
@@ -210,16 +219,16 @@ impl Entry {
         self.path.rsplit('/').next().unwrap_or_default()
     }
 
+    fn is_folder(&self) -> bool {
+        self.kind == EntryKind::Folder
+    }
+
     fn json(&self) -> Value {
-        let (kind, file) = match (self.folder, self.link) {
-            (true, _) => ("folder", false),
-            (_, true) => ("symlink", false),
-            _ => ("file", true),
-        };
+        let file = self.kind == EntryKind::File;
         let mut v = json!({
             "path": escape_hidden(&self.path),
             "name": escape_hidden(self.name()),
-            "kind": kind,
+            "kind": self.kind,
             "size": file.then_some(self.size),
             "cloudOnly": file.then_some(self.cloud_only),
         });
@@ -237,7 +246,7 @@ impl Entry {
     fn proton_view(&self) -> Value {
         let mut v = json!({
             "modified": rfc3339(self.modified),
-            "size": (!self.folder).then_some(self.size),
+            "size": (!self.is_folder()).then_some(self.size),
         });
         if let Some(p) = &self.proton {
             p.add(&mut v);
@@ -276,23 +285,14 @@ fn fold(s: &str) -> String {
     s.nfc().collect::<String>().to_lowercase()
 }
 
-/// The Proton Drive app's folder under ~/Library/CloudStorage: `None` when
-/// there is none, so protonctl lists through the CLI; an error when there are
-/// several.
+/// The Proton Drive app's folder, under ~/Library/CloudStorage on macOS:
+/// `None` when there is none, so protonctl lists through the CLI; an error
+/// when there are several.
 fn find_folder() -> Result<Option<PathBuf>> {
-    let base = home().join("Library/CloudStorage");
-    let Ok(items) = std::fs::read_dir(&base) else {
+    let Some(base) = crate::platform::cloud_storage() else {
         return Ok(None);
     };
-    let found: Vec<PathBuf> = items
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("ProtonDrive-"))
-        })
-        .collect();
-    match found.as_slice() {
+    match app_folders_in(&base).as_slice() {
         [] => Ok(None),
         [one] => Ok(Some(one.clone())),
         _ => bail!(
@@ -302,16 +302,47 @@ fn find_folder() -> Result<Option<PathBuf>> {
     }
 }
 
+/// The Proton Drive app's folders in `base`: `ProtonDrive-<account>`.
+fn app_folders_in(base: &Path) -> Vec<PathBuf> {
+    let Ok(items) = std::fs::read_dir(base) else {
+        return Vec::new();
+    };
+    items
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("ProtonDrive-"))
+        })
+        .collect()
+}
+
+/// Every Proton Drive app folder on this machine, resolved, whether or not
+/// Drive is set up: writing into any of them uploads to Proton (R11).
+pub fn app_folders() -> Vec<PathBuf> {
+    crate::platform::cloud_storage()
+        .map(|base| app_folders_in(&base))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|p| p.canonicalize().ok())
+        .collect()
+}
+
 fn entry(path: String, meta: &std::fs::Metadata) -> Entry {
     let key = fold(path.rsplit('/').next().unwrap_or_default());
     Entry {
         path,
         key,
-        folder: meta.is_dir(),
-        link: meta.is_symlink(),
+        kind: if meta.is_dir() {
+            EntryKind::Folder
+        } else if meta.is_symlink() {
+            EntryKind::Symlink
+        } else {
+            EntryKind::File
+        },
         size: meta.len(),
         modified: meta.modified().ok(),
-        cloud_only: meta.st_flags() & SF_DATALESS != 0,
+        cloud_only: crate::platform::cloud_only(meta),
         proton: None,
     }
 }
@@ -400,7 +431,7 @@ impl Drive {
     fn remote(&self, path: &str) -> Result<String> {
         let path = plain(path)?;
         if self.excluded(&path) {
-            bail!("not found: {}", escape_hidden(&path));
+            bail!(Missing::new(format!("not found: {}", escape_hidden(&path))));
         }
         Ok(path)
     }
@@ -410,7 +441,7 @@ impl Drive {
     async fn locate(&self, path: &str, cli: &Cli) -> Result<(Entry, Option<PathBuf>, String)> {
         if let Some(root) = &self.root {
             let (root, exclude, path) = (root.clone(), self.exclude.clone(), path.to_string());
-            return tokio::task::spawn_blocking(move || {
+            return crate::content::blocking(move || {
                 let (disk, path, real) = resolve(&root, &exclude, &path)?;
                 let e = entry(path, &std::fs::symlink_metadata(&disk)?);
                 let local = (!e.cloud_only).then_some(disk);
@@ -419,8 +450,8 @@ impl Drive {
             .await?;
         }
         let path = self.remote(path)?;
-        let node = query(cli, "info", &path).await?;
-        Ok((node_entry(path.clone(), &node), None, path))
+        let node: Node = query(cli, "info", &path).await?;
+        Ok((node.entry(path.clone()), None, path))
     }
 
     /// Walk the folder, at most once a minute. Hidden names and excluded
@@ -435,7 +466,7 @@ impl Drive {
         let root = root.to_path_buf();
         let exclude = self.exclude.clone();
         let (entries, complete) =
-            tokio::task::spawn_blocking(move || walk_from(&root, "", &exclude)).await?;
+            crate::content::blocking(move || walk_from(&root, "", &exclude)).await?;
         let entries = Arc::new(entries);
         *guard = Some(Index {
             built: Instant::now(),
@@ -447,14 +478,14 @@ impl Drive {
 
     pub async fn search_files(&self, req: &SearchFilesReq) -> Result<Value> {
         let Some(root) = &self.root else {
-            bail!(
+            bail!(Invalid::rule(
                 "search needs the Proton Drive app's folder on this Mac, and protonctl does not walk \
                  the remote tree (Proton's SDK rules); browse with list_folder instead"
-            );
+            ));
         };
         let q = fold(req.query.trim());
         if q.is_empty() {
-            bail!("query is empty");
+            bail!(Invalid::rule("query is empty"));
         }
         let pattern: Option<Vec<char>> = q.contains(['*', '?']).then(|| q.chars().collect());
         // "/Projects" becomes the prefix "/projects/"; "/" (everywhere) becomes no scope.
@@ -475,7 +506,10 @@ impl Drive {
                 None => e.key.contains(&q),
             })
             .filter(|e| scope.as_ref().is_none_or(|s| fold(&e.path).starts_with(s)))
-            .filter(|e| req.kind.is_none_or(|k| (k == Kind::Folder) == e.folder))
+            .filter(|e| {
+                req.kind
+                    .is_none_or(|k| (k == Kind::Folder) == e.is_folder())
+            })
             .filter(|e| after.is_none_or(|a| e.modified.is_some_and(|m| m >= a)))
             .filter(|e| before.is_none_or(|b| e.modified.is_some_and(|m| m < b)))
             .collect();
@@ -502,7 +536,11 @@ impl Drive {
             Some(root) => self.list_local(root, asked).await?,
             None => self.list_remote(cli, asked).await?,
         };
-        entries.sort_by(|a, b| b.folder.cmp(&a.folder).then_with(|| a.key.cmp(&b.key)));
+        entries.sort_by(|a, b| {
+            b.is_folder()
+                .cmp(&a.is_folder())
+                .then_with(|| a.key.cmp(&b.key))
+        });
         let size = req.page_size.unwrap_or(100).clamp(1, 200);
         let (offset, next) = page(req.page_token.as_deref(), size, entries.len())?;
         let items: Vec<Value> = entries
@@ -532,13 +570,16 @@ impl Drive {
         asked: &str,
     ) -> Result<(String, Vec<Entry>, serde_json::Map<String, Value>)> {
         let (root, exclude, asked) = (root.to_path_buf(), self.exclude.clone(), asked.to_string());
-        let (path, real, mut entries, hidden) = tokio::task::spawn_blocking(
+        let (path, real, mut entries, hidden) = crate::content::blocking(
             move || -> Result<(String, String, Vec<Entry>, Vec<String>)> {
                 let (disk, path, real) = resolve(&root, &exclude, &asked)?;
                 let (mut out, mut hidden) = (Vec::new(), Vec::new());
-                for item in
-                    std::fs::read_dir(&disk).with_context(|| format!("not a folder: {path}"))?
-                {
+                for item in std::fs::read_dir(&disk).map_err(|e| {
+                    Invalid::quoting(
+                        "This folder cannot be listed; it may be a file.",
+                        format!("not a folder: {}: {e}", escape_hidden(&path)),
+                    )
+                })? {
                     let item = item?;
                     let name = item.file_name().to_string_lossy().nfc().collect::<String>();
                     if name.starts_with('.') {
@@ -574,7 +615,7 @@ impl Drive {
         asked: &str,
     ) -> Result<(String, Vec<Entry>, serde_json::Map<String, Value>)> {
         let path = self.remote(asked)?;
-        let nodes = list_nodes(cli, &path).await?;
+        let nodes: Vec<Node> = query(cli, "list", &path).await?;
         // An entry whose name does not decrypt could be an excluded child
         // of this folder, so when an exclusion names one, such entries are
         // only counted (R7).
@@ -583,21 +624,21 @@ impl Drive {
         // A name that does not decrypt, or holds a '/', cannot be asked
         // for by path, so it is named by its node rather than shown.
         for n in &nodes {
-            match node_name(n) {
+            match n.name() {
                 // Joined, a name holding a '/' reads as a deeper path; an
                 // exclusion matching it that way hides it too.
                 Some(name) if self.excluded(&join(&path, name)) => {}
                 Some(name) if !name.contains('/') => {
-                    shown.push(node_entry(join(&path, name), n));
+                    shown.push(n.entry(join(&path, name)));
                 }
                 Some(name) => unlisted.push(json!({
-                    "nodeId": n["uid"],
+                    "nodeId": n.uid,
                     "name": escape_hidden(name),
                     "reason": "the name holds a '/', so no path reaches it",
                 })),
                 None if child_excluded => unlisted_hidden += 1,
                 None => unlisted.push(json!({
-                    "nodeId": n["uid"],
+                    "nodeId": n.uid,
                     "name": null,
                     "reason": "the name does not decrypt or verify",
                 })),
@@ -622,9 +663,9 @@ impl Drive {
         // local facts standing.
         let claimed = match &e.proton {
             Some(p) => p.claimed_sha1.clone(),
-            None => match query(cli, "info", &real).await {
+            None => match query::<Node>(cli, "info", &real).await {
                 Ok(node) => {
-                    let theirs = node_entry(real, &node);
+                    let theirs = node.entry(real);
                     out["proton"] = theirs.proton_view();
                     theirs.proton.and_then(|p| p.claimed_sha1)
                 }
@@ -636,8 +677,8 @@ impl Drive {
         };
         // Only content already on this Mac, so the File Provider never
         // downloads on our behalf, and off the async threads.
-        if let Some(disk) = local.filter(|_| !e.folder && e.size <= DIGEST_MAX_BYTES) {
-            let sums = tokio::task::spawn_blocking(move || digest::file(&disk)).await??;
+        if let Some(disk) = local.filter(|_| !e.is_folder() && e.size <= DIGEST_MAX_BYTES) {
+            let sums = crate::content::blocking(move || digest::file(&disk)).await??;
             sums.add(&mut out, claimed.as_deref());
         }
         Ok(out)
@@ -650,8 +691,11 @@ impl Drive {
     /// extraction.
     pub async fn read_file_content(&self, req: &ReadReq, cli: &Cli) -> Result<Reply> {
         let (e, local, real) = self.locate(&req.path, cli).await?;
-        if e.folder {
-            bail!("{} is a folder; use list_folder", escape_hidden(&e.path));
+        if e.is_folder() {
+            bail!(Invalid::quoting(
+                "This is a folder; use list_folder.",
+                format!("{} is a folder; use list_folder", escape_hidden(&e.path))
+            ));
         }
         let mut out = json!({ "file": e.json(), "provenance": PROVENANCE });
         let unreadable = |mut out: Value, why: &str| -> Result<Reply> {
@@ -671,10 +715,8 @@ impl Drive {
             doc
         } else {
             if e.size > MAX_SOURCE {
-                return unreadable(
-                    out,
-                    "the file is larger than 64 MiB; download_file saves it",
-                );
+                let why = format!("the file is larger than 64 MiB; {}", save_hint());
+                return unreadable(out, &why);
             }
             let bytes = self.bytes(local, &real, cli).await?;
             match extract::content(&bytes, e.name()).await? {
@@ -697,13 +739,14 @@ impl Drive {
                     });
                 }
                 Content::Image { .. } => {
-                    return unreadable(
-                        out,
-                        "the image is larger than 5 MiB, the most returned inline; download_file saves it",
+                    let why = format!(
+                        "the image is larger than 5 MiB, the most returned inline; {}",
+                        save_hint()
                     );
+                    return unreadable(out, &why);
                 }
                 Content::Other(why) => {
-                    return unreadable(out, &format!("{why}; download_file saves it"));
+                    return unreadable(out, &format!("{why}; {}", save_hint()));
                 }
             }
         };
@@ -731,7 +774,7 @@ impl Drive {
             let dir = got.parent().map(Path::to_path_buf);
             (got, dir)
         };
-        let bytes = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
+        let bytes = crate::content::blocking(move || -> std::io::Result<Vec<u8>> {
             let mut bytes = Vec::new();
             let outcome = std::fs::File::open(&disk)
                 .and_then(|f| f.take(MAX_SOURCE + 1).read_to_end(&mut bytes));
@@ -744,7 +787,9 @@ impl Drive {
         .await??;
         // Capped in case the file grew since its size was read.
         if bytes.len() as u64 > MAX_SOURCE {
-            bail!("the file is larger than 64 MiB; download_file saves it");
+            bail!(Invalid::rule(
+                "the file is larger than 64 MiB; download_file saves it"
+            ));
         }
         Ok(bytes)
     }
@@ -759,19 +804,22 @@ impl Drive {
         export: Result<&Export>,
     ) -> Result<Reply> {
         let (e, local, real) = self.locate(&req.path, cli).await?;
-        if e.folder {
-            bail!(
-                "{} is a folder; download_file saves one file",
-                escape_hidden(&e.path)
-            );
+        if e.is_folder() {
+            bail!(Invalid::quoting(
+                "This is a folder; download_file saves one file.",
+                format!(
+                    "{} is a folder; download_file saves one file",
+                    escape_hidden(&e.path)
+                )
+            ));
         }
         // From the CLI, `info` brought the claim; from the app's folder there is none at hand.
         let claimed = e.proton.as_ref().and_then(|p| p.claimed_sha1.clone());
         if req.inline {
             if req.export || dest.is_some() {
-                bail!(
+                bail!(Invalid::rule(
                     "inline returns the file's bytes rather than saving it; ask for one or the other"
-                );
+                ));
             }
             if e.size > MAX_IMAGE as u64 {
                 bail!(
@@ -810,7 +858,7 @@ impl Drive {
         };
         let saved = fetch(cli, &real, mirrored.as_deref().or(dest)).await?;
         let disk = saved.clone();
-        let sums = tokio::task::spawn_blocking(move || digest::file(&disk)).await??;
+        let sums = crate::content::blocking(move || digest::file(&disk)).await??;
         let mut out = json!({ "file": e.json(), "savedTo": saved, "provenance": PROVENANCE });
         sums.add(&mut out, claimed.as_deref());
         Ok(out.into())
@@ -851,7 +899,11 @@ fn folder_print(top: &str) -> String {
 /// The `At` a tree page token names, for a listing of `top` with
 /// `with_sha1`. Its folder is checked before anything is read.
 fn read_tree_token(token: &str, with_sha1: bool, top: &str) -> Result<At> {
-    let invalid = || anyhow!("invalid pageToken; pass the nextPageToken exactly as returned");
+    let invalid = || {
+        anyhow!(Invalid::page_token(
+            "invalid pageToken; pass the nextPageToken exactly as returned"
+        ))
+    };
     let mut parts = token.split(':');
     let (Some(mode), Some(print), Some(folder), Some(skip), None) = (
         parts.next(),
@@ -869,15 +921,15 @@ fn read_tree_token(token: &str, with_sha1: bool, top: &str) -> Result<At> {
         return Err(invalid());
     };
     if mode != if with_sha1 { "s" } else { "p" } {
-        bail!(
+        bail!(Invalid::page_token(format!(
             "this pageToken is from a listing with withSha1 {}; pass the same withSha1",
             !with_sha1
-        );
+        )));
     }
     if print != folder_print(top) || !within(top, &folder) {
-        bail!(
+        bail!(Invalid::page_token(
             "this pageToken is for another folder; pass the path the listing began with, or start again without pageToken"
-        );
+        ));
     }
     Ok(At { folder, skip })
 }
@@ -889,7 +941,11 @@ fn manifest_token(name: &str, tree: &str) -> String {
 
 /// A manifest page token's file name and tree token.
 fn read_manifest_token(token: &str) -> Result<(&str, &str)> {
-    let invalid = || anyhow!("invalid pageToken; pass the nextPageToken exactly as returned");
+    let invalid = || {
+        anyhow!(Invalid::page_token(
+            "invalid pageToken; pass the nextPageToken exactly as returned"
+        ))
+    };
     let (name, tree) = token.split_once(':').ok_or_else(invalid)?;
     let named = name.starts_with("drive-")
         && Path::new(name)
@@ -951,7 +1007,7 @@ fn next_folder(
     done: &str,
     children: &[Entry],
 ) -> Option<String> {
-    if let Some(first) = children.iter().find(|e| e.folder) {
+    if let Some(first) = children.iter().find(|e| e.is_folder()) {
         return Some(first.path.clone());
     }
     let mut at = done;
@@ -962,7 +1018,7 @@ fn next_folder(
         let after = folder_entries(root, exclude, up)
             .unwrap_or_default()
             .into_iter()
-            .find(|e| e.folder && order(e) > (key.as_str(), name));
+            .find(|e| e.is_folder() && order(e) > (key.as_str(), name));
         if let Some(e) = after {
             return Some(e.path);
         }
@@ -995,10 +1051,10 @@ impl Drive {
         deadline: Instant,
     ) -> Result<Value> {
         let Some(root) = &self.root else {
-            bail!(
+            bail!(Invalid::rule(
                 "export_drive_manifest needs the Proton Drive app's folder on this Mac, as search_files \
                  does: protonctl does not walk the remote tree (Proton's SDK rules)"
-            );
+            ));
         };
         let top = self.listed_folder(root, req.path.as_deref()).await?;
         let (name, at) = match req.page_token.as_deref() {
@@ -1042,7 +1098,7 @@ impl Drive {
         });
         if next.is_none() {
             let at = file.clone();
-            let sums = tokio::task::spawn_blocking(move || digest::file(&at)).await??;
+            let sums = crate::content::blocking(move || digest::file(&at)).await??;
             sums.add(&mut result, None);
         }
         Ok(result)
@@ -1052,11 +1108,11 @@ impl Drive {
     /// rows and order as a manifest, returned rather than written.
     pub async fn list_tree(&self, req: &TreeReq, cli: &Cli) -> Result<Value> {
         let Some(root) = &self.root else {
-            bail!(
+            bail!(Invalid::rule(
                 "list_drive_tree needs the Proton Drive app's folder on this Mac, as search_files \
                  does: protonctl does not walk the remote tree (Proton's SDK rules); browse with \
                  list_folder instead"
-            );
+            ));
         };
         let top = self.listed_folder(root, req.path.as_deref()).await?;
         let at = req
@@ -1089,10 +1145,13 @@ impl Drive {
     async fn listed_folder(&self, root: &Path, asked: Option<&str>) -> Result<String> {
         let (root, exclude) = (root.to_path_buf(), self.exclude.clone());
         let asked = asked.unwrap_or("/").to_string();
-        tokio::task::spawn_blocking(move || -> Result<_> {
+        crate::content::blocking(move || -> Result<_> {
             let (disk, path, real) = resolve(&root, &exclude, &asked)?;
             if !std::fs::metadata(&disk)?.is_dir() {
-                bail!("{} is a file, not a folder", escape_hidden(&path));
+                bail!(Invalid::quoting(
+                    "This is a file, not a folder.",
+                    format!("{} is a file, not a folder", escape_hidden(&path))
+                ));
             }
             Ok(real)
         })
@@ -1123,7 +1182,7 @@ impl Drive {
         // The entries of `folder` and the folder after it, read off the async threads.
         let step = |folder: String| {
             let (r, x, t) = (root.to_path_buf(), self.exclude.clone(), top.to_string());
-            tokio::task::spawn_blocking(move || {
+            crate::content::blocking(move || {
                 let entries = folder_entries(&r, &x, &folder);
                 let next = next_folder(&r, &x, &t, &folder, entries.as_deref().unwrap_or_default());
                 (entries, next)
@@ -1172,12 +1231,12 @@ impl Drive {
         root: &Path,
     ) -> Result<Vec<Value>> {
         let (r, x, f) = (root.to_path_buf(), self.exclude.clone(), folder.to_string());
-        let (_, _, real) = tokio::task::spawn_blocking(move || resolve(&r, &x, &f)).await??;
-        let nodes = list_nodes(cli, &real).await?;
-        let mut theirs: BTreeMap<String, &Value> = BTreeMap::new();
+        let (_, _, real) = crate::content::blocking(move || resolve(&r, &x, &f)).await??;
+        let nodes: Vec<Node> = query(cli, "list", &real).await?;
+        let mut theirs: BTreeMap<String, &Node> = BTreeMap::new();
         let mut unnamed = Vec::new();
         for n in &nodes {
-            match node_name(n) {
+            match n.name() {
                 Some(name) => {
                     theirs.insert(fold(name), n);
                 }
@@ -1188,7 +1247,7 @@ impl Drive {
         for e in mine {
             let mut row = e.json();
             if let Some(n) = theirs.remove(&e.key) {
-                let node = node_entry(e.path.clone(), n);
+                let node = n.entry(e.path.clone());
                 if let Some(p) = &node.proton {
                     p.add(&mut row);
                 }
@@ -1198,14 +1257,14 @@ impl Drive {
         }
         let child_excluded = self.excludes_child_of(folder);
         for n in theirs.values() {
-            let name = node_name(n).unwrap_or_default();
+            let name = n.name().unwrap_or_default();
             if self.excluded(&join(folder, name)) {
                 continue;
             }
             rows.push(json!({
                 "parent": escape_hidden(folder),
                 "name": escape_hidden(name),
-                "nodeId": n["uid"],
+                "nodeId": n.uid,
                 "reason": "Proton lists it; the Proton Drive app's folder does not show it",
             }));
         }
@@ -1214,7 +1273,7 @@ impl Drive {
                 rows.push(json!({
                     "parent": escape_hidden(folder),
                     "name": null,
-                    "nodeId": n["uid"],
+                    "nodeId": n.uid,
                     "reason": "the name does not decrypt or verify",
                 }));
             }
@@ -1228,10 +1287,7 @@ impl Drive {
 /// where it is.
 async fn fetch(cli: &Cli, real: &str, dest: Option<&Path>) -> Result<PathBuf> {
     let Some(dest) = dest else {
-        let dir = tempfile::Builder::new()
-            .prefix("drive-")
-            .tempdir_in(downloads()?)?
-            .keep();
+        let dir = download_folder("drive")?;
         return download(cli, real, &dir).await;
     };
     // Through a new folder inside `dest`, deleted when this returns, so the
@@ -1269,9 +1325,11 @@ async fn download(cli: &Cli, real: &str, dir: &Path) -> Result<PathBuf> {
         count("skippedItems"),
     ) != (Some(1), Some(0), Some(0))
     {
+        // The report can repeat a node's name, which a third party wrote (R6).
         bail!(
-            "the Proton Drive CLI did not download {}: {report}",
-            escape_hidden(real)
+            "the Proton Drive CLI did not download {}: {}",
+            escape_hidden(real),
+            clean(&report.to_string(), &mut 0)
         );
     }
     let left: Vec<PathBuf> = std::fs::read_dir(dir)?
@@ -1301,16 +1359,22 @@ fn cli_path(path: &str) -> Result<String> {
     let parts: Vec<&str> = path.split('/').skip(1).collect();
     for (i, part) in parts.iter().enumerate() {
         if uid_shaped(part) {
-            bail!(
-                "{}: a name shaped like a Proton node ID cannot go to the Proton Drive CLI",
-                escape_hidden(path)
-            );
+            bail!(Invalid::quoting(
+                "The Proton Drive CLI cannot reach this item; the user can open it in Proton.",
+                format!(
+                    "{}: a name shaped like a Proton node ID cannot go to the Proton Drive CLI",
+                    escape_hidden(path)
+                )
+            ));
         }
         if i + 1 < parts.len() && part.ends_with('\\') {
-            bail!(
-                "{}: the Proton Drive CLI cannot reach inside a folder whose name ends with a backslash",
-                escape_hidden(path)
-            );
+            bail!(Invalid::quoting(
+                "The Proton Drive CLI cannot reach this item; the user can open it in Proton.",
+                format!(
+                    "{}: the Proton Drive CLI cannot reach inside a folder whose name ends with a backslash",
+                    escape_hidden(path)
+                )
+            ));
         }
     }
     Ok(if path == "/" {
@@ -1339,7 +1403,7 @@ fn uid_shaped(part: &str) -> bool {
 /// threads, where a stall cannot stop the R8 time limit.
 fn resolve(root: &Path, exclude: &[String], path: &str) -> Result<(PathBuf, String, String)> {
     let path = normalize(path)?;
-    let not_found = || anyhow!("not found: {}", escape_hidden(&path));
+    let not_found = || anyhow!(Missing::new(format!("not found: {}", escape_hidden(&path))));
     if is_excluded(exclude, &fold(&path)) {
         return Err(not_found());
     }
@@ -1364,64 +1428,137 @@ fn resolve(root: &Path, exclude: &[String], path: &str) -> Result<(PathBuf, Stri
 
 /// One CLI query (`info` or `list`) about a Drive path. A missing path reads
 /// as "not found", the same as an excluded one (RFC R7).
-async fn query(cli: &Cli, sub: &str, path: &str) -> Result<Value> {
+/// The CLI's JSON for `filesystem <sub>` on the Drive path `path`, read
+/// into `T` where it arrives.
+async fn query<T: DeserializeOwned>(cli: &Cli, sub: &str, path: &str) -> Result<T> {
     let remote = cli_path(path)?;
-    match cli
+    let json = match cli
         .json(&["filesystem", sub, "-j", &remote].map(OsStr::new))
         .await
     {
         Err(e) if e.downcast_ref::<cli::NotFound>().is_some() => {
-            bail!("not found: {}", escape_hidden(path))
+            bail!(Missing::new(format!("not found: {}", escape_hidden(path))))
         }
-        r => r,
-    }
-}
-
-/// The nodes the CLI lists in the folder at the Drive path `path`.
-async fn list_nodes(cli: &Cli, path: &str) -> Result<Vec<Value>> {
-    match query(cli, "list", path).await? {
-        Value::Array(nodes) => Ok(nodes),
-        _ => bail!("the Proton Drive CLI's listing was not a list"),
-    }
-}
-
-/// A CLI node's name, if it decrypted and verified.
-fn node_name(n: &Value) -> Option<&str> {
-    n["name"]["value"]
-        .as_str()
-        .filter(|_| n["name"]["ok"] == true)
-}
-
-/// An entry from one of the CLI's JSON nodes (RFC Appendix A). Nothing it
-/// lists is on this Mac, so every file is cloud-only. The claimed SHA-1 is
-/// kept only as 40 hex digits and the claimed time only as a time, so no
-/// text an uploader wrote passes through them.
-fn node_entry(path: String, node: &Value) -> Entry {
-    let folder = node["type"] == "folder";
-    let key = fold(path.rsplit('/').next().unwrap_or_default());
-    let revision = &node["activeRevision"];
-    let time = |v: &Value| {
-        v.as_str()
-            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
-            .map(SystemTime::from)
+        r => r?,
     };
-    Entry {
-        path,
-        key,
-        folder,
-        link: false,
-        size: revision["claimedSize"].as_u64().unwrap_or(0),
-        modified: time(&node["modificationTime"]),
-        cloud_only: !folder,
-        proton: Some(Proton {
-            node_id: node["uid"].as_str().map(String::from),
-            revision_id: revision["uid"].as_str().map(String::from),
-            claimed_sha1: revision["claimedDigests"]["sha1"]
-                .as_str()
-                .filter(|h| h.len() == 40 && h.bytes().all(|b| b.is_ascii_hexdigit()))
-                .map(str::to_ascii_lowercase),
-            claimed_modified: time(&revision["claimedModificationTime"]),
-        }),
+    serde_json::from_value(json).with_context(|| {
+        format!("the Proton Drive CLI's `filesystem {sub}` output is not the form protonctl reads")
+    })
+}
+
+/// One node as the Proton Drive CLI's `filesystem info` and `list` print it
+/// (RFC Appendix A); what protonctl does not use is not read. Every field
+/// reads leniently: a value of another type is absent, so one odd node
+/// cannot stop its folder from listing. A node whose name is absent or does
+/// not decrypt reads with `name.ok` false, and is listed by its node.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct Node {
+    #[serde(deserialize_with = "lenient")]
+    uid: Option<String>,
+    #[serde(rename = "type", deserialize_with = "lenient_or_default")]
+    kind: NodeKind,
+    #[serde(deserialize_with = "lenient_or_default")]
+    name: NodeName,
+    #[serde(deserialize_with = "lenient")]
+    modification_time: Option<DateTime<FixedOffset>>,
+    #[serde(deserialize_with = "lenient")]
+    active_revision: Option<Revision>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum NodeKind {
+    Folder,
+    /// A file, or a type this version does not know, read as a file.
+    #[default]
+    #[serde(other)]
+    File,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct NodeName {
+    #[serde(deserialize_with = "lenient_or_default")]
+    ok: bool,
+    #[serde(deserialize_with = "lenient")]
+    value: Option<String>,
+}
+
+/// A file's current revision. Its `claimed` fields are the uploader's, so
+/// each reads leniently: a value of another type is absent rather than a
+/// failure, lest one upload stop a whole folder from listing.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct Revision {
+    #[serde(deserialize_with = "lenient")]
+    uid: Option<String>,
+    #[serde(deserialize_with = "lenient")]
+    claimed_size: Option<u64>,
+    #[serde(deserialize_with = "lenient")]
+    claimed_modification_time: Option<DateTime<FixedOffset>>,
+    #[serde(deserialize_with = "lenient_or_default")]
+    claimed_digests: Digests,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Digests {
+    #[serde(deserialize_with = "lenient")]
+    sha1: Option<String>,
+}
+
+/// `T`, or `None` for a value of any other type.
+fn lenient<'de, D: Deserializer<'de>, T: DeserializeOwned>(d: D) -> Result<Option<T>, D::Error> {
+    Ok(T::deserialize(Value::deserialize(d)?).ok())
+}
+
+/// `T`, or its default for a value of any other type.
+fn lenient_or_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned + Default,
+{
+    Ok(lenient(d)?.unwrap_or_default())
+}
+
+impl Node {
+    /// The name, if it decrypted and verified.
+    fn name(&self) -> Option<&str> {
+        self.name.value.as_deref().filter(|_| self.name.ok)
+    }
+
+    /// An entry for this node at `path`. Nothing the CLI lists is on this
+    /// Mac, so every file is cloud-only. The claimed SHA-1 is kept only as
+    /// 40 hex digits and the claimed time only as a time, so no text an
+    /// uploader wrote passes through them.
+    fn entry(&self, path: String) -> Entry {
+        let folder = self.kind == NodeKind::Folder;
+        let key = fold(path.rsplit('/').next().unwrap_or_default());
+        let revision = self.active_revision.as_ref();
+        Entry {
+            path,
+            key,
+            kind: if folder {
+                EntryKind::Folder
+            } else {
+                EntryKind::File
+            },
+            size: revision.and_then(|r| r.claimed_size).unwrap_or(0),
+            modified: self.modification_time.map(SystemTime::from),
+            cloud_only: !folder,
+            proton: Some(Proton {
+                node_id: self.uid.clone(),
+                revision_id: revision.and_then(|r| r.uid.clone()),
+                claimed_sha1: revision
+                    .and_then(|r| r.claimed_digests.sha1.as_deref())
+                    .filter(|h| h.len() == 40 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+                    .map(str::to_ascii_lowercase),
+                claimed_modified: revision
+                    .and_then(|r| r.claimed_modification_time)
+                    .map(SystemTime::from),
+            }),
+        }
     }
 }
 
@@ -1446,7 +1583,7 @@ fn plain(path: &str) -> Result<String> {
     let mut out = String::new();
     for part in unescape_hidden(path).split('/').filter(|p| !p.is_empty()) {
         if part == "." || part == ".." {
-            bail!("'.' and '..' are not allowed in Drive paths");
+            bail!(Invalid::rule("'.' and '..' are not allowed in Drive paths"));
         }
         out.push('/');
         out.push_str(part);
@@ -1471,7 +1608,7 @@ fn walk_from(dir: &Path, base: &str, exclude: &[String]) -> (Vec<Entry>, bool) {
             return (out, false);
         }
         for (disk, e) in entries_in(&dir, &base, exclude) {
-            if e.folder {
+            if e.is_folder() {
                 stack.push((disk, e.path.clone()));
             }
             out.push(e);
@@ -1577,8 +1714,9 @@ mod tests {
     /// download under its name with the characters the real CLI replaces
     /// turned into '_' (control characters and the backslash aside), and
     /// prints the report the real CLI prints (RFC Appendix A). With a `fail`
-    /// file beside it, a download reports a failed item and still exits 0, as
-    /// the real one does.
+    /// file beside it, a download prints that file as its report, or one
+    /// failed item when the file is empty, and still exits 0, as the real one
+    /// does.
     fn fake_cli(dir: &Path) -> Cli {
         use std::os::unix::fs::PermissionsExt;
         let script = dir.join("proton-drive");
@@ -1598,6 +1736,7 @@ list|info)
   ;;
 esac
 for dest; do :; done
+if [ -s "$here/fail" ]; then cat "$here/fail"; exit 0; fi
 if [ -e "$here/fail" ]; then
   echo '{"transferredItems":0,"transferredBytes":0,"skippedItems":0,"failedItems":1,"failures":[{"error":"x"}]}'
   exit 0
@@ -1619,6 +1758,40 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
 
     /// One node as the CLI prints it, reduced to the fields protonctl reads.
     /// A file claims the SHA-1 of "hello", the content the fake CLI saves.
+    /// A node's fields of another type read as absent, so one odd node,
+    /// an uploader's claims or Proton's own fields, does not fail a listing;
+    /// a node type this version does not know reads as a file.
+    #[test]
+    fn odd_fields_and_types_do_not_fail_a_node() {
+        let n: Node = serde_json::from_value(json!({
+            "uid": "vol~x", "type": "photo", "name": { "ok": true, "value": "a" },
+            "activeRevision": { "claimedSize": "big", "claimedModificationTime": 7,
+                "claimedDigests": { "sha1": ["not", "text"] } },
+        }))
+        .unwrap();
+        assert_eq!(n.kind, NodeKind::File);
+        let e = n.entry("/a".into());
+        let p = e.proton.unwrap();
+        assert_eq!(
+            (e.size, p.claimed_sha1, p.claimed_modified),
+            (0, None, None)
+        );
+        assert_eq!(p.node_id.as_deref(), Some("vol~x"));
+        for odd in [
+            json!({ "uid": "vol~y", "name": null, "type": null, "activeRevision": { "claimedDigests": null } }),
+            json!({ "uid": "vol~y", "name": "a", "type": 3, "activeRevision": "odd" }),
+            json!({ "uid": "vol~y", "name": { "ok": "yes", "value": 4 }, "activeRevision": { "claimedDigests": "odd" } }),
+        ] {
+            let n: Node =
+                serde_json::from_value(odd.clone()).unwrap_or_else(|e| panic!("{odd}: {e}"));
+            assert_eq!(
+                (n.name(), n.kind, n.uid.as_deref()),
+                (None, NodeKind::File, Some("vol~y")),
+                "{odd}"
+            );
+        }
+    }
+
     fn node(name: &str, size: Option<u64>) -> Value {
         let mut n = json!({
             "uid": format!("vol~node-{name}"),
@@ -1992,6 +2165,38 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
             .await
             .unwrap_err();
         assert!(format!("{err:#}").contains("did not download"), "{err:#}");
+        // The report can repeat a node's name, written by whoever named the
+        // file; it reaches the error cleaned (R6).
+        let report = json!({ "transferredItems": 0, "skippedItems": 0, "failedItems": 1,
+            "failures": [{ "name": "plan\u{202E}dm.exe" }] });
+        std::fs::write(bin.path().join("fail"), report.to_string()).unwrap();
+        let err = d
+            .download_file(
+                &saving(&get("/Projects/plan.md")),
+                &cli,
+                Some(out.path()),
+                no_export(),
+            )
+            .await
+            .unwrap_err();
+        let shown = format!("{err:#}");
+        assert!(!shown.contains('\u{202E}'), "{shown:?}");
+        assert!(shown.contains("plandm.exe"), "{shown}");
+    }
+
+    #[tokio::test]
+    async fn listing_a_file_names_it_with_hidden_characters_escaped() {
+        let t = tree();
+        std::fs::write(t.path().join("Projects/a\u{202E}b.txt"), "x").unwrap();
+        let d = drive(t.path(), &[]);
+        let req = ListFolderReq {
+            path: Some("/Projects/a\\u{202E}b.txt".into()),
+            ..Default::default()
+        };
+        let err = d.list_folder(&req, &no_cli()).await.unwrap_err();
+        let shown = format!("{err:#}");
+        assert!(!shown.contains('\u{202E}'), "{shown:?}");
+        assert!(shown.contains("/Projects/a\\u{202E}b.txt"), "{shown}");
     }
 
     #[tokio::test]
@@ -2996,7 +3201,11 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         });
         std::fs::write(t.path().join("Projects/long.txt"), &long).unwrap();
         std::fs::write(t.path().join("Projects/old.txt"), b"Caf\xE9").unwrap();
+        #[cfg(target_os = "macos")]
         let pdf = crate::extract::tests::sample_pdf();
+        // Without macOS's readers, any PDF is unreadable; these bytes suffice.
+        #[cfg(not(target_os = "macos"))]
+        let pdf = b"%PDF-1.4 a page".to_vec();
         std::fs::write(t.path().join("Projects/doc.pdf"), pdf).unwrap();
         let png = b"\x89PNG\r\n\x1a\nnot a real image".to_vec();
         std::fs::write(t.path().join("Projects/pic.png"), &png).unwrap();
@@ -3026,11 +3235,17 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
             "{old}"
         );
         let doc = read("/Projects/doc.pdf", None).await.json;
-        assert!(
-            doc["content"].as_str().unwrap().contains("Café — accents."),
-            "{doc}"
-        );
-        assert_eq!(doc["textFrom"], "pdf");
+        if crate::platform::DOCUMENT_READERS {
+            assert!(
+                doc["content"].as_str().unwrap().contains("Café — accents."),
+                "{doc}"
+            );
+            assert_eq!(doc["textFrom"], "pdf");
+        } else {
+            assert_eq!(doc["content"], Value::Null);
+            let why = doc["reason"].as_str().unwrap();
+            assert!(why.contains("no reader for PDF"), "{doc}");
+        }
         let pic = read("/Projects/pic.png", None).await;
         assert!(matches!(
             pic.attached.as_slice(),
@@ -3122,7 +3337,10 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         // The download's last argument is the new folder it saved into.
         let argv = std::fs::read_to_string(bin.path().join("argv.txt")).unwrap();
         let folder = Path::new(argv.lines().last().unwrap());
-        assert!(folder.starts_with(downloads().unwrap()), "{argv}");
+        assert!(
+            folder.starts_with(crate::content::downloads().unwrap()),
+            "{argv}"
+        );
         assert!(!folder.exists(), "{} is still there", folder.display());
     }
 

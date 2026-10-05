@@ -5,7 +5,8 @@
 Goals:
 
 1. Search and read Proton Mail and Drive, and read Proton Calendar, from Claude
-   Code, Claude Desktop and Cowork on macOS, and from Claude Code on Linux
+   Code, Claude Desktop and Cowork on macOS, and on Linux from Claude Code
+   and, where its beta loads local servers, Claude Desktop
    ([section 11](11-platforms.md)), with tools shaped like Claude's Gmail,
    Calendar and Drive connectors.
 2. Let the user choose what reaches the model provider. In aliases mode,
@@ -24,7 +25,8 @@ who turn on Lockdown Mode or Advanced Data Protection: people at risk of
 targeted attacks, malicious files and legal demands for their transcripts.
 Off mode suits people who want a read-only stand-in for Claude's Google
 connectors. Every protection that costs the user nothing applies in both
-modes; which mode a new install starts in is open (Q27).
+modes. A new install has no mode until the user picks one, since a
+wrong `off` cannot be recalled (Q27).
 
 Non-goals: sending mail, sharing, public links and invitations (never); any
 write to the account, drafts, labels, moves, flags, trash and uploads

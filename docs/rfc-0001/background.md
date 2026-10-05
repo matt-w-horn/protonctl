@@ -26,8 +26,8 @@
   server is a live test ([section 9](09-rollout.md)).
 - Inferred from Claude Desktop's code: tool calls time out at 180 s, tools are
   re-approved when their definitions change, `outputSchema` is not forwarded.
-- On Linux the only host is Claude Code: Claude Desktop, and so Cowork,
-  has no Linux release known to this RFC ([section 11](11-platforms.md)).
+- On Linux, Claude Code runs, and Claude Desktop with Cowork has been in
+  beta since the week of 2026-06-29 ([section 11](11-platforms.md#linux-availability-mp0-findings-2026-10-04)).
 - Claude Code: permission rules match tool names, not arguments;
   `_meta["anthropic/requiresUserInteraction"]` prompts on every call; it
   keeps every tool result in the session's transcript under
@@ -66,7 +66,8 @@ a path.
 6. The official CLI keeps local state, so calls to it are serialized.
 7. Least disclosure when chosen: in aliases mode, results carry aliases
    and hints, not names, and steer Claude toward topics and references
-   before raw content. Which mode a new install starts in is Q27.
+   before raw content. A new install has no mode until the user picks one
+   (Q27).
 8. Stable without state: aliases, references, handles and keyed digests
    derive from one local key, so they stay valid for months and no map of
    them exists on disk. Stability is also linkability: a name paired with

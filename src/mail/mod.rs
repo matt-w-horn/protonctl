@@ -192,10 +192,15 @@ pub async fn login(tls: TlsStream<TcpStream>, user: &str, password: &str) -> Res
 /// If nothing answers on Bridge's port, the Bridge app is opened hidden first.
 pub async fn open(cfg: &MailConfig) -> Result<Session> {
     let pinned = parse_hex(&cfg.cert_sha256)?;
-    let account = secret::bridge_account(&cfg.address);
-    let password = tokio::task::spawn_blocking(move || secret::get(&account))
+    let account = secret::Account::Bridge(cfg.address.clone());
+    let password = crate::content::blocking(move || secret::get(&account))
         .await??
-        .context("no Bridge password in the Keychain; run `protonctl setup mail` again")?;
+        .with_context(|| {
+            format!(
+                "no Bridge password in the {}; run `protonctl setup mail` again",
+                crate::platform::SECRET_STORE
+            )
+        })?;
     let attempt = async || -> Result<Session> {
         let (tls, _) = connect(cfg.port, Some(pinned)).await.context(
             "if Bridge was reinstalled, its certificate changed: delete [mail] from the config \
@@ -206,6 +211,9 @@ pub async fn open(cfg: &MailConfig) -> Result<Session> {
     match attempt().await {
         Err(e) if e.downcast_ref::<NotListening>().is_some() => {}
         result => return result,
+    }
+    if !cfg!(target_os = "macos") {
+        bail!("nothing answers on Bridge's port; start Proton Mail Bridge first (RFC-0001 Q32)");
     }
     // Until Bridge has loaded the account it refuses logins ("no such user"),
     // so every failure is retried until the deadline.

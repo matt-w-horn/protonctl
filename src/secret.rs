@@ -1,86 +1,139 @@
-//! The macOS Keychain is the only place protonctl keeps secrets (RFC R2).
-//! Items live under service `protonctl`; accounts are `calendar/<id>` and,
-//! after Phase 0, `bridge/<address>`.
+//! protonctl keeps secrets only in the system's secret store (RFC R2): the
+//! login Keychain on macOS, and on Linux none yet (RFC section 11, Q31).
+//! Items live under service `protonctl`; `Account` names them.
 
 use anyhow::{Result, anyhow};
 use secrecy::{ExposeSecret as _, SecretString};
-use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
-use security_framework::passwords;
+
+use crate::platform;
 
 /// Every secret protonctl holds in memory: `Debug` shows it redacted, and
 /// `expose_secret()` marks each place that reads it.
 pub type Secret = SecretString;
 
 const SERVICE: &str = "protonctl";
-/// `errSecItemNotFound`.
-const NOT_FOUND: i32 = -25300;
 
-pub fn get(account: &str) -> Result<Option<Secret>> {
-    match passwords::get_generic_password(SERVICE, account) {
-        #[expect(
-            clippy::map_err_ignore,
-            reason = "the UTF-8 error owns the secret's bytes, and {:#?} would print them"
-        )]
-        Ok(bytes) => String::from_utf8(bytes)
-            .map(|s| Some(Secret::from(s)))
-            .map_err(|_| anyhow!("Keychain item {SERVICE}/{account} is not UTF-8")),
-        Err(e) if e.code() == NOT_FOUND => Ok(None),
-        Err(e) => Err(anyhow!("Keychain read of {SERVICE}/{account} failed: {e}")),
+/// An item under service `protonctl`. Its account name in the store is the
+/// only place these are text: an item is named from this type when written,
+/// and parsed back into it when listed.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Account {
+    /// `calendar/<id>`: a calendar's share link.
+    Calendar(String),
+    /// `bridge/<address>`: the Bridge password for an address.
+    Bridge(String),
+    /// `privacy-mode`: the mode, `off` or `aliases`, in its comment (RFC Q28).
+    PrivacyMode,
+    /// `privacy-key`: the privacy key, with its key ID in the comment (R20).
+    PrivacyKey,
+    /// Any other name under the service, from an older version: listed and
+    /// deleted by `logout`, never read.
+    Other(String),
+}
+
+impl Account {
+    fn parse(name: &str) -> Self {
+        match name.split_once('/') {
+            Some(("calendar", id)) => Self::Calendar(id.to_string()),
+            Some(("bridge", address)) => Self::Bridge(address.to_string()),
+            _ => match name {
+                "privacy-mode" => Self::PrivacyMode,
+                "privacy-key" => Self::PrivacyKey,
+                other => Self::Other(other.to_string()),
+            },
+        }
     }
 }
 
-pub fn set(account: &str, value: &Secret) -> Result<()> {
-    passwords::set_generic_password(SERVICE, account, value.expose_secret().as_bytes())
-        .map_err(|e| anyhow!("Keychain write of {SERVICE}/{account} failed: {e}"))
+impl std::fmt::Display for Account {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Calendar(id) => write!(f, "calendar/{id}"),
+            Self::Bridge(address) => write!(f, "bridge/{address}"),
+            Self::PrivacyMode => f.write_str("privacy-mode"),
+            Self::PrivacyKey => f.write_str("privacy-key"),
+            Self::Other(name) => f.write_str(name),
+        }
+    }
+}
+
+pub fn get(account: &Account) -> Result<Option<Secret>> {
+    let Some(bytes) = platform::secret_get(SERVICE, &account.to_string())? else {
+        return Ok(None);
+    };
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "the UTF-8 error owns the secret's bytes, and {:#?} would print them"
+    )]
+    String::from_utf8(bytes)
+        .map(|s| Some(Secret::from(s)))
+        .map_err(|_| {
+            let store = platform::SECRET_STORE;
+            anyhow!("{store} item {SERVICE}/{account} is not UTF-8")
+        })
+}
+
+pub fn set(account: &Account, value: &Secret) -> Result<()> {
+    platform::secret_set(
+        SERVICE,
+        &account.to_string(),
+        value.expose_secret().as_bytes(),
+    )
 }
 
 /// Returns false when there was nothing to delete.
-pub fn delete(account: &str) -> Result<bool> {
-    match passwords::delete_generic_password(SERVICE, account) {
-        Ok(()) => Ok(true),
-        Err(e) if e.code() == NOT_FOUND => Ok(false),
-        Err(e) => Err(anyhow!(
-            "Keychain delete of {SERVICE}/{account} failed: {e}"
-        )),
-    }
+pub fn delete(account: &Account) -> Result<bool> {
+    platform::secret_delete(SERVICE, &account.to_string())
 }
 
 /// Every account protonctl holds under its service, including any whose
 /// calendar has left the config. Reads attributes only, so no secret is loaded
 /// and macOS asks for no approval.
-pub fn accounts() -> Result<Vec<String>> {
-    let found = ItemSearchOptions::new()
-        .class(ItemClass::generic_password())
-        .service(SERVICE)
-        .load_attributes(true)
-        .limit(Limit::All)
-        .search();
-    match found {
-        Ok(items) => {
-            // "acct" is kSecAttrAccount.
-            let mut accounts: Vec<String> = items
-                .iter()
-                .filter_map(|i| i.simplify_dict()?.remove("acct"))
-                .collect();
-            accounts.sort();
-            Ok(accounts)
-        }
-        Err(e) if e.code() == NOT_FOUND => Ok(Vec::new()),
-        Err(e) => Err(anyhow!("Keychain search of {SERVICE} failed: {e}")),
-    }
+pub fn accounts() -> Result<Vec<Account>> {
+    Ok(platform::secret_accounts(SERVICE)?
+        .iter()
+        .map(|name| Account::parse(name))
+        .collect())
 }
 
-pub fn calendar_account(id: &str) -> String {
-    format!("calendar/{id}")
+/// Store `value` with a non-secret `comment` beside it, in one update (RFC
+/// Q28, R20: the privacy mode and the privacy key's ID).
+pub fn set_with_comment(account: &Account, value: &Secret, comment: &str) -> Result<()> {
+    let name = account.to_string();
+    platform::secret_set_with_comment(SERVICE, &name, value.expose_secret().as_bytes(), comment)
 }
 
-pub fn bridge_account(address: &str) -> String {
-    format!("bridge/{address}")
+/// An item's comment, read without loading its secret.
+pub fn comment(account: &Account) -> Result<Option<String>> {
+    platform::secret_comment(SERVICE, &account.to_string())
+}
+
+/// How status and logout name an item: the store, then service/account.
+pub fn shown(account: &Account) -> String {
+    format!("{} {SERVICE}/{account}", platform::SECRET_STORE)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_names_round_trip() {
+        for account in [
+            Account::Calendar("personal".into()),
+            Account::Bridge("you@proton.me".into()),
+            Account::PrivacyMode,
+            Account::PrivacyKey,
+            Account::Other("legacy".into()),
+        ] {
+            assert_eq!(Account::parse(&account.to_string()), account);
+        }
+        // An ID may hold a slash; only the first one splits.
+        assert_eq!(
+            Account::parse("calendar/a/b"),
+            Account::Calendar("a/b".into())
+        );
+    }
 
     #[test]
     fn secrets_are_redacted_in_debug_output() {

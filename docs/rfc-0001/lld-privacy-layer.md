@@ -3,15 +3,16 @@
 # Low-level design: the privacy layer
 
 Draft, 2026-10-04. This file says how the privacy setting (R26) and aliases
-mode ([section 6](06-privacy.md)) would be built into the code as it stands
+mode ([section 6](06-privacy.md)) would be built into the code as it stood
 at commit 7786b3e. [The API specification](lld-api.md) gives every tool,
 parameter, result field, error, command and wire format. Where the RFC
 leaves a choice open, this draft names the choice it is written with and
 the question that can change it; each such choice stays inside one module.
 
-Code locations are `file:line` at that commit. Nothing here is built yet:
-`src/` holds no privacy code (a search for `hmac`, `pseudonym`, `privacy`
-and `tokeni` finds only the `Debug` redaction in `src/secret.rs`).
+Code locations are `file:line` at that commit. Phase 2 is now built,
+except M2.8 and the Mac checks ([section 9](09-rollout.md)); the code is
+the reference for how it behaves, and [As built](#as-built) lists where it
+differs from this draft. Phases 3 to 5 below are still a design.
 
 ## Contents
 
@@ -28,6 +29,7 @@ and `tokeni` finds only the `Debug` redaction in `src/secret.rs`).
 11. [Concurrency and performance](#concurrency-and-performance)
 12. [Testing hooks](#testing-hooks)
 13. [Build order](#build-order)
+14. [As built](#as-built)
 
 ## Scope and principles
 
@@ -57,10 +59,10 @@ New files, under `src/privacy/`:
 | `mod.rs` | `Mode`; `Privacy`, the runtime handle that `serve.rs` and `main.rs` hold; `Privacy::check()` (R26) | 2 |
 | `key.rs` | the privacy key in the Keychain: create, load, reload on change, rotate; HKDF subkeys | 2 |
 | `words.rs` | the curated word list (`include_str!`), numbers to words and back | 2 |
-| `canon.rs` | canonical forms of names, addresses, phone numbers, URLs, domains | 2 |
-| `ident.rs` | aliases, refs, handles, sealed page tokens, keyed digests, log IDs | 2 |
+| `canon.rs` | canonical forms of names, addresses, phone numbers, domains, and of URLs for numbering them within a result | 2 |
+| `ident.rs` | aliases, refs, handles, sealed page tokens, keyed digests | 2 |
 | `detect/mod.rs` | the `Detector` trait, `Mention`, the detector registry | 2 |
-| `detect/pattern.rs` | regex with validators: email, phone, card (Luhn), IBAN (mod-97), URL, domain, IP | 2 |
+| `detect/pattern.rs` | regex with validators: email, phone, card (Luhn), IBAN (mod-97), URL, domain, IP, US Social Security number, a labelled one-time code or password, the local account name in a path (Q22) | 2 |
 | `detect/dict.rs` | the call dictionary over `aho-corasick` | 2 |
 | `detect/gliner.rs` | GLiNER through `gline-rs` | 5 |
 | `resolve.rs` | mentions to entities: merge rules, `maybeSameAs` | 2, 5 |
@@ -75,14 +77,13 @@ Changed files:
 
 | File | Change | Milestone |
 |---|---|---|
-| `src/config.rs` | `[privacy] mode` (`PrivacyConfig`), unless Q28 moves the mode to the Keychain | M2.11 |
 | `src/main.rs` | `App` gains `privacy: Privacy`; `setup privacy`, `setup privacy --off`, `setup drive`, `rotate-key`; `status` and `doctor` name the mode; `logout` deletes the key; `App::load` builds `Drive` only when `[drive]` exists | M1.4, M2.1, M2.11 |
 | `src/serve.rs` | `reply()` takes `&Privacy`; tools disabled per mode; aliases-mode request structs; `instructions` per mode | M2.4, M2.5, M2.11 |
-| `src/secret.rs` | an attribute read and write of one item's comment (the key ID), for key reload | M2.1 |
+| `src/secret.rs` | the `privacy-mode` item (Q28); an attribute read and write of one item's comment (the key ID), for key reload; a read of an item's modification date, for `SettingWatch` | M2.1, M2.11 |
 | `src/content.rs` | `Reply` gains `entities`; `Attached` stays for off mode | M2.4 |
 | `src/drive/mod.rs` | error sites take a display name (the escaped path, or the handle in aliases mode) | M2.4 |
 | `src/mail/read.rs`, `src/calendar/mod.rs` | error sites quoting third-party text get a fixed form in aliases mode | M2.4 |
-| `src/secret.rs`, `src/drive/cli.rs`, `src/mail/mod.rs`, `src/extract.rs`, `src/config.rs`, `src/drive/mod.rs` | their macOS calls move behind the platform traits; `security-framework` becomes a macOS-only dependency | MP1 |
+| `src/platform/` | done in MP1: the Keychain, cache path, Drive app folder and cloud-only check per system; `security-framework` a macOS-only dependency. Traits arrive with their first fake or second backend (`KeySource`, `Presence`) | MP1, M2.1, M3.2 |
 | `Cargo.toml` | `aes-siv`; HMAC and HKDF from `ring` or RustCrypto (M2.2); `phonenumber`; a case-folding crate; `aho-corasick` moved from transitive to direct | M2.2, M2.3 |
 
 How the modules depend on each other (arrows point at what is used):
@@ -132,9 +133,9 @@ pub enum Mode { Off, Aliases }
 
 /// Held by `App`; one per process.
 pub struct Privacy {
-    started: Option<Mode>,           // the mode at start; None when none is set (Q27, option a)
+    started: Option<Mode>,           // the mode at start; None when none is set (Q27)
     refusing: AtomicBool,            // set once the configured mode differs; never cleared (R26)
-    setting: SettingWatch,           // where the configured mode is read from (Q28)
+    setting: SettingWatch,           // the Keychain item privacy-mode (Q28)
     keys: Option<KeyWatch>,          // Some in aliases mode
     approvals: Approvals,            // Phase 3
     presence: Box<dyn Presence>,     // Phase 3
@@ -142,7 +143,7 @@ pub struct Privacy {
 }
 
 impl Privacy {
-    /// R26: refuse when no mode is set (Q27, option a); once the configured
+    /// R26: refuse when no mode is set (Q27); once the configured
     /// mode differs from the start mode, and from then on; or when the key is gone.
     pub fn check(&self) -> Result<Session, Fault>;
 }
@@ -160,7 +161,6 @@ pub struct Keys {                    // all Zeroize on drop (R20)
     reference: SivKey,               // 64 bytes: Aes256Siv
     handle: SivKey,
     digest: HmacKey,
-    log: HmacKey,
     id: [u8; 16],                    // derived from the key; also in the item's comment
 }
 pub struct KeyWatch { current: RwLock<Arc<Keys>>, source: Box<dyn KeySource> }
@@ -174,7 +174,8 @@ pub trait KeySource: Send + Sync {
 
 ```rust
 // privacy/ident.rs
-pub enum EntityType { Person, Organization, Location, Address, Email, Phone, Card, Iban, Url, Domain, Ip }
+pub enum EntityType { Person, Organization, Location, Address, Email, Phone, Card, Iban, Domain, Ip, Secret, NationalId, Account }
+// A URL is not an entity: it is written as `link N (<domain alias>)`, numbered within one result (Q19).
 pub enum ItemKind { Message, Thread, Event, DrivePath }
 pub enum TokenKind { MailCursor, Offset, Tree, CalendarWindow, ThreadPage }
 
@@ -192,7 +193,6 @@ impl Session {
     pub fn seal_token(&self, k: TokenKind, token: &str) -> String;
     pub fn open_token(&self, k: TokenKind, sealed: &str) -> Result<String, Fault>;
     pub fn keyed_digest(&self, algorithm: &str, raw_hex: &str) -> KeyedDigest;
-    pub fn log_id(&self, kind: &str, value: &str) -> String;
 }
 ```
 
@@ -267,7 +267,7 @@ classDiagram
         reload_if_changed()
     }
     class Keys {
-        alias, reference, handle, digest, log
+        alias, reference, handle, digest
     }
     class Pipeline {
         run(tool, Value, Session) Value
@@ -317,7 +317,7 @@ erDiagram
     APPROVAL }o--|| HANDLE : covers
 
     ENTITY {
-        string type "person, email, url, ..."
+        string type "person, email, domain, ..."
         string canonical "never leaves the process"
     }
     ALIAS {
@@ -355,13 +355,13 @@ expands it; each subkey has its own `info` label:
 | reference | `protonctl v1 ref` | 64 | `Aes256Siv` |
 | handle | `protonctl v1 handle` | 64 | `Aes256Siv`, also for page tokens |
 | digest | `protonctl v1 digest` | 32 | HMAC-SHA-256 |
-| log | `protonctl v1 log` | 32 | HMAC-SHA-256 |
 | key ID | `protonctl v1 key id` | 16 | names the key in the item's comment (R20) |
 
 The `v1` in each label is the format version. A future change to the
 canonical rules or the word list can move to `v2` labels, which changes
-every alias at once rather than some of them silently (Q19 asks how such a
-change is announced).
+every alias at once rather than some of them silently; `get_status`
+reports the format version, and the release notes announce the change
+(Q19).
 
 ### Constructions
 
@@ -371,10 +371,11 @@ occur inside the parts:
 
 - **Alias**: `HMAC(alias, "v1" 0x00 tag 0x00 canonical)`, first 8 bytes as
   a big-endian `u64`, reduced modulo `N³` for a list of `N` words, then
-  written as three words in base `N`. Drafted with `tag` = `name` for
-  person, organization and location, so a detector that retypes a name
-  (Phase 5) keeps its alias, and the entity's own type for everything
-  else; Q19 can put the type back.
+  written as three words in base `N`. `tag` is `name` for person,
+  organization and location, so a detector that retypes a name (Phase 5)
+  keeps its alias, and the entity's own type for everything else (Q19).
+  When two entities in one result share three words, the later one gets a
+  fourth.
 - **Ref**: `AES-SIV(reference, AD = "protonctl ref v1", type || canonical
   || 0x80 || 0x00…)`, padded to a multiple of 32 bytes; base64url without
   padding. One block of 16 bytes (the synthetic IV) precedes the
@@ -387,7 +388,6 @@ occur inside the parts:
   || token)`, padded when the token carries a path (a Drive tree token).
 - **Keyed digest**: `HMAC(digest, algorithm 0x00 raw_digest_bytes)`, first
   8 bytes, written as five words (`N⁵ ≥ 2⁶⁴` once `N ≥ 7,132`).
-- **Log ID**: `HMAC(log, kind 0x00 value)`, first 6 bytes in hex.
 
 AES-SIV with no nonce is deterministic: the same input gives the same
 output, which is what makes refs and handles stable, and it reveals only
@@ -402,7 +402,8 @@ point; the [review](security-privacy-review.md) weighs them.
 | email | lower case; NFKC on the domain |
 | phone | E.164 through `phonenumber` |
 | card, IBAN | digits and capital letters only |
-| URL | scheme and host in lower case; path and query kept; fragment removed |
+| URL (to number links within a result, Q19) | scheme and host in lower case; path and query kept; fragment removed |
+| secret, national ID, account | as found, with whitespace removed |
 | domain, IP | lower case; IPv6 in its compressed form |
 
 Canonicalizing twice changes nothing (a property test in
@@ -573,7 +574,8 @@ part is rewritten from the unescaped name and escaped (R6) afterwards; the
 leaf's handle goes in a sibling `fileId`.
 
 `queryEntities` pairs each name the caller typed in this call's query with
-its alias; those names stay as typed in this result only (R13, Q21).
+its alias, when the name matches an entity in the result; those names stay
+as typed in this result only (R13, Q21).
 
 ### Size
 
@@ -618,7 +620,7 @@ specification lists) and maps the rest to `internal`. Rules:
 ```mermaid
 flowchart TB
     S(["call arrives"]) --> U{"a mode<br/>set at start?"}
-    U -->|"no (Q27, option a)"| F0(["privacy_mode_unset:<br/>run setup privacy"])
+    U -->|"no (Q27)"| F0(["privacy_mode_unset:<br/>run setup privacy"])
     U -->|yes| X{"refusing<br/>already?"}
     X -->|yes| F1
     X -->|no| M{"configured mode<br/>equals the start mode?"}
@@ -639,11 +641,12 @@ flowchart TB
     class U,X,M,A,K,D q
 ```
 
-- **Reading the configured mode.** From the config (`SettingWatch` keeps
-  the file's modification time and parses again only when it changes), or
-  from a Keychain item if Q28 moves it there. A setting that cannot be
-  read or parsed (a typo such as `mode = "alias"`) refuses every call, in
-  either mode: an off-mode server that kept answering would serve names to
+- **Reading the configured mode.** From the Keychain item
+  `protonctl/privacy-mode` (Q28). `SettingWatch` reads the item's
+  modification date, an attribute read that loads no secret and asks for
+  no approval, and reads the value again only when the date changes. A
+  value that cannot be read, or is neither `off` nor `aliases`, refuses
+  every call, in either mode: an off-mode server that kept answering would serve names to
   a user who believes they switched to aliases. Once a server refuses
   because the mode changed, it keeps refusing even if the setting changes
   back, until the host restarts it.
@@ -702,7 +705,7 @@ stateDiagram-v2
   result, so no Proton ID, `Message-Id`, raw digest or local path leaves
   (R16, R17); `Text`, `Address` and `Person` leaves stay as written, with
   R6's cleaning and `provenance`. The `entities` table pairs each name with
-  its alias by an added `name` member, unless Q21 leaves the pairing out.
+  its alias by an added `name` member (Q21).
 
 ## Sequences
 
@@ -789,7 +792,7 @@ sequenceDiagram
 | Hook | Real | In tests |
 |---|---|---|
 | `KeySource` | the Keychain item `protonctl/privacy-key` | a fixed key in memory, or none |
-| `SettingWatch` | the config file, or Q28's Keychain item | a value the test changes |
+| `SettingWatch` | the Keychain item `protonctl/privacy-mode` (Q28) | a value the test changes |
 | `Clock` | wall clock | a clock the test moves (approvals, R12-style freshness) |
 | `Presence` | LocalAuthentication through Q15's route | approves, refuses, or never answers |
 | Detectors | the registry | each alone, or a planted panic for the fail-closed test |
@@ -825,3 +828,69 @@ flowchart TB
 ---
 
 [← Appendix C: Role-play of aliases mode](appendix-c-roleplay.md) · [Contents](../rfc-0001.md#contents) · [API specification →](lld-api.md)
+
+## As built
+
+Phase 2 as built on 2026-10-04 differs from this draft here; the code is
+the reference.
+
+- **Where the pipeline runs.** Not inside `reply()`: `Server::call` in
+  `src/serve.rs` runs the privacy check, then the operation, then, in
+  aliases mode, the pipeline. Tools are registered from three routers:
+  the tools shared by both modes, off mode's Drive and saving tools, and
+  aliases mode's Drive tools, which take handles, and its `get_attachment`,
+  which saves nothing. Off mode's surface snapshot is unchanged.
+- **No `resolve.rs`.** Mentions become entities in the pipeline's registry
+  (`src/privacy/pipeline.rs`); `maybeSameAs` waits for Phase 5.
+- **Field policies by name.** `src/privacy/fields.rs` gives a policy per
+  member name, with the few differences by tool, not JSON pointer
+  patterns. A test runs the coverage check over the mail snapshots, the
+  calendar results and every Drive tool, so a new string field without a
+  rule fails a test, as it would be dropped at run time.
+- **No size retry.** A result over the cap of 90,000 characters gives
+  `too_large` at once; the caller passes a smaller `maxChars` or
+  `pageSize`. The `entities` table is not counted toward the page size.
+- **No log key.** protonctl's own logs carry no identifiers, so R25 needs
+  no keyed log IDs, and the key has no log subkey (the tables above no
+  longer list one). A panic prints a fixed line with the code location,
+  never its message (M2.9).
+- **The setting's watch.** Each call reads the `privacy-mode` item's
+  comment (the mode, read without the secret) and compares it with the
+  mode at start; there is no check of the item's modification date.
+  A setting that cannot be read gives `privacy_mode_unreadable`, a code
+  the draft did not have; on Linux, which has no secret store yet, every
+  call gives it.
+- **Errors.** An operation's error reaches aliases mode only by its type:
+  `content::Missing` gives `not_found`; `content::Invalid` carries the
+  fault (`invalid_argument` with fixed text, or `invalid_page_token`) and
+  off mode's text, which can quote the caller's input; `DiskForbidden`,
+  `drive::cli::NotFound` and `mail::NotListening` have their own codes.
+  Any other error gives `unavailable` for the tool's service. Off mode's
+  text is unchanged.
+- **No disk in aliases mode.** The call runs inside a task-local scope in
+  which `content::downloads()` refuses, so no file is saved. Until M2.8's
+  RAM disk, a cloud-only Drive file cannot be read in aliases mode, and
+  without the Proton Drive app no Drive file can.
+- **The process dictionary (Q22).** Correspondents' display names come
+  from the From, To and Cc headers of All Mail, and attendees' and
+  organizers' names from the calendars that can be read. Both sources are
+  read at once, each within 30 s, on the first aliases-mode call, and each
+  only once per server process, so no later call waits on Bridge or the
+  feed. A source that fails or is cut short keeps what it read, and every
+  result names it in `dictionaryIncomplete` until the server restarts. A
+  one-word name on the alias word list ("Support") is left out; the list
+  is not every common word, so "Notifications" still joins. Names match in
+  any case, with Unicode case folding, and each address's domain joins the
+  result's dictionary, so a domain whose top-level domain is not on the
+  pattern's short list is still found beside its address.
+- **Values a sender or organizer can write.** A calendar `status` and an
+  attendee's reply, and mail's `origin` and `encryption` markers, are
+  parsed into their standard values where they arrive, or `other`, in both
+  modes; aliases mode keeps only known MIME types.
+- **The check's time.** The privacy check, which can wait on a Keychain
+  approval, runs off the async threads and within the call's 150 s.
+- **Refs in queries.** A `ref:REF` term is opened before the query runs,
+  and the value it holds joins the call's dictionary, so a result that
+  echoes the query (`searched`) shows its alias.
+- **A listing's own folder.** The top-level `path` of `list_folder` and
+  `list_drive_tree` gets a `folderId` beside it.

@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 
-use crate::content::clean;
+use crate::content::{Invalid, clean};
 use mail_parser::decoders::html::html_to_text;
 
 /// Most occurrences one event can contribute to one query window.
@@ -30,8 +30,14 @@ impl Zone {
     pub fn parse(name: Option<&str>) -> Result<Self> {
         match name {
             None => Ok(Self::Local),
-            Some(n) => n.parse().map(Self::Iana).with_context(|| {
-                format!("unknown time zone {n:?}; use an IANA name like America/Los_Angeles")
+            Some(n) => n.parse().map(Self::Iana).map_err(|e| {
+                Invalid::quoting(
+                    "The time zone is unknown; use an IANA name like America/Los_Angeles.",
+                    format!(
+                        "unknown time zone {n:?}; use an IANA name like America/Los_Angeles: {e}"
+                    ),
+                )
+                .into()
             }),
         }
     }
@@ -140,11 +146,45 @@ fn parse_tzid(tzid: &str) -> Option<chrono_tz::Tz> {
         .find_map(|n| parts[parts.len() - n..].join("/").parse().ok())
 }
 
+/// An attendee's reply (`PARTSTAT`, RFC 5545 section 3.2.12). A value
+/// outside the standard ones, which only an invitation's writer could have
+/// chosen, reads as `Other`, so none of its text passes on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, strum::EnumString)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case", ascii_case_insensitive)]
+pub enum Response {
+    NeedsAction,
+    Accepted,
+    Declined,
+    Tentative,
+    Delegated,
+    #[strum(disabled)]
+    Other,
+}
+
+/// An event's `STATUS` (RFC 5545 section 3.8.1.11), read the same way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, strum::EnumString)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
+pub enum EventStatus {
+    Tentative,
+    Confirmed,
+    Cancelled,
+    #[strum(disabled)]
+    Other,
+}
+
+/// One of a property's standard values, read after hidden characters are
+/// removed (R6), or `other`.
+fn choice<T: std::str::FromStr>(value: &str, other: T) -> T {
+    clean(value.trim(), &mut 0).parse().unwrap_or(other)
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Person {
     pub name: Option<String>,
     pub email: Option<String>,
-    pub response: Option<String>,
+    pub response: Option<Response>,
 }
 
 #[derive(Clone, Debug)]
@@ -160,7 +200,7 @@ pub struct VEvent {
     pub rdates: Vec<When>,
     pub exdates: Vec<When>,
     pub recurrence_id: Option<When>,
-    pub status: Option<String>,
+    pub status: Option<EventStatus>,
     pub transparent: bool,
     pub organizer: Option<Person>,
     pub attendees: Vec<Person>,
@@ -206,9 +246,7 @@ impl VEvent {
     }
 
     fn cancelled(&self) -> bool {
-        self.status
-            .as_deref()
-            .is_some_and(|s| s.eq_ignore_ascii_case("CANCELLED"))
+        self.status == Some(EventStatus::Cancelled)
     }
 }
 
@@ -358,7 +396,7 @@ fn person(p: &Prop) -> Person {
     Person {
         name: param(&p.params, "CN").map(str::to_string),
         email,
-        response: param(&p.params, "PARTSTAT").map(str::to_ascii_lowercase),
+        response: param(&p.params, "PARTSTAT").map(|v| choice(v, Response::Other)),
     }
 }
 
@@ -399,7 +437,7 @@ fn build_event(props: &[Prop]) -> Result<VEvent> {
         rdates,
         exdates,
         recurrence_id: when("RECURRENCE-ID")?,
-        status: get("STATUS").map(|p| p.value.trim().to_ascii_lowercase()),
+        status: get("STATUS").map(|p| choice(&p.value, EventStatus::Other)),
         transparent: get("TRANSP")
             .is_some_and(|p| p.value.trim().eq_ignore_ascii_case("TRANSPARENT")),
         organizer: get("ORGANIZER").map(person),
@@ -421,12 +459,7 @@ fn build_event(props: &[Prop]) -> Result<VEvent> {
         &mut e.location,
     ]
     .into_iter()
-    .chain(e.status.iter_mut())
-    .chain(people.flat_map(|p| {
-        [&mut p.name, &mut p.email, &mut p.response]
-            .into_iter()
-            .flatten()
-    }));
+    .chain(people.flat_map(|p| [&mut p.name, &mut p.email].into_iter().flatten()));
     for s in fields {
         *s = clean(s, &mut hidden);
     }
@@ -704,6 +737,31 @@ END:VCALENDAR\r\n";
         assert_eq!(
             feed.events[2].description,
             "Line one\nline two that is folded onto a second line"
+        );
+    }
+
+    /// A status or reply outside the standard values is `Other`, so no text
+    /// an invitation's writer chose passes on; a hidden character inside a
+    /// standard value does not hide it.
+    #[test]
+    fn statuses_and_replies_are_standard_values_or_other() {
+        let feed = parse(
+            "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\nDTSTART:20261005T170000Z\r\n\
+             STATUS:Call Dana Ruiz\r\n\
+             ATTENDEE;CN=Ann;PARTSTAT=ACCEPTED:mailto:ann@x.test\r\n\
+             ATTENDEE;CN=Bo;PARTSTAT=X-DANA:mailto:bo@x.test\r\nEND:VEVENT\r\n\
+             BEGIN:VEVENT\r\nUID:b\r\nDTSTART:20261005T170000Z\r\n\
+             STATUS:CANCEL\u{200B}LED\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        )
+        .unwrap();
+        let (a, b) = (&feed.events[0], &feed.events[1]);
+        assert_eq!(a.status, Some(EventStatus::Other));
+        let replies: Vec<_> = a.attendees.iter().map(|p| p.response).collect();
+        assert_eq!(replies, [Some(Response::Accepted), Some(Response::Other)]);
+        assert!(b.cancelled());
+        assert_eq!(
+            serde_json::to_value(Response::NeedsAction).unwrap(),
+            "needs-action"
         );
     }
 

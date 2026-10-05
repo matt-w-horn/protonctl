@@ -89,9 +89,9 @@ expression: tools
   {
     "annotations": {
       "destructiveHint": false,
-      "idempotentHint": true,
+      "idempotentHint": false,
       "openWorldHint": false,
-      "readOnlyHint": true,
+      "readOnlyHint": false,
       "title": "Download Drive file"
     },
     "description": "Save one Proton Drive file and return where it is, or with `inline: true` return its bytes. To read a text file, PDF, document or image, use `read_file_content` instead, which returns its content directly. By default the file goes to protonctl's private temporary folder on this Mac (removed after an hour, or when the server stops), downloaded through the official Proton Drive CLI even when it is only in the cloud. With `export: true` it goes into the export folder set in protonctl's config, at drive/<Drive path>, where it stays until someone deletes it and an agent that cannot reach this Mac's private folder can read it. With `inline: true` (files up to 5 MiB) nothing is saved: the bytes follow the JSON as an MCP embedded resource, base64, which not every host accepts. The result carries the file's `sha256` and `sha1`, and `matchesClaimedSha1` when Proton's claimed SHA-1 is at hand (without the Proton Drive app).",
@@ -163,9 +163,9 @@ expression: tools
   {
     "annotations": {
       "destructiveHint": false,
-      "idempotentHint": true,
+      "idempotentHint": false,
       "openWorldHint": false,
-      "readOnlyHint": true,
+      "readOnlyHint": false,
       "title": "Get email attachment"
     },
     "description": "Read one email attachment into the conversation. Takes a messageId and an attachment index from `get_message`. Text, PDF, Word, RTF and OpenDocument attachments return their text a page at a time: up to maxChars characters (default 20,000) from offset (default 0), with `totalChars` and `nextOffset`; while `nextOffset` is not null, call again with offset set to it to read on. A PDF with no text layer (a scan) comes instead as images of its pages, up to 4 per call, each after a \"Page N:\" label; call again with page set to `nextPage` to see on, and set page on any PDF to get its pages as images. Images (PNG, JPEG, GIF or WebP up to 5 MiB) come back as image content. Anything else is saved to protonctl's private temporary folder on this Mac (removed after an hour) and its `path` returned. With `export: true` the attachment is saved instead into the export folder set in protonctl's config, at mail/<messageId>/<index>-<name>, where it stays until someone deletes it; with `inline: true` (up to 5 MiB) its bytes follow the JSON as an MCP embedded resource, base64, which not every host accepts. The result carries the attachment's `sha256` and `sha1`.",

@@ -2,11 +2,11 @@
 //! compiled into the mailbox to search, IMAP SEARCH criteria, and an
 //! attachment test that runs on each fetched summary.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use async_imap::types::NameAttribute;
 use chrono::{Duration, NaiveDate};
 
-use crate::content::{tokens, unquote};
+use crate::content::{Invalid, tokens, unquote};
 
 const OPERATORS: [&str; 13] = [
     "from",
@@ -49,7 +49,7 @@ pub struct Query {
 /// An IMAP quoted string. The value is sent as UTF-8; CR, LF and NUL are refused.
 pub(super) fn quoted(s: &str) -> Result<String> {
     if s.contains(['\r', '\n', '\0']) {
-        bail!("search terms cannot contain line breaks");
+        bail!(Invalid::rule("search terms cannot contain line breaks"));
     }
     Ok(format!(
         "\"{}\"",
@@ -58,8 +58,13 @@ pub(super) fn quoted(s: &str) -> Result<String> {
 }
 
 fn date(value: &str) -> Result<NaiveDate> {
-    NaiveDate::parse_from_str(&value.replace('/', "-"), "%Y-%m-%d")
-        .with_context(|| format!("cannot read date {value:?}; use YYYY-MM-DD"))
+    NaiveDate::parse_from_str(&value.replace('/', "-"), "%Y-%m-%d").map_err(|e| {
+        Invalid::quoting(
+            "A date in the query cannot be read; use YYYY-MM-DD.",
+            format!("cannot read date {value:?}; use YYYY-MM-DD: {e}"),
+        )
+        .into()
+    })
 }
 
 /// IMAP dates look like 2-Oct-2026.
@@ -70,24 +75,41 @@ fn imap_date(d: NaiveDate) -> String {
 /// A span such as 7d, 3m or 1y (a month is 30 days, a year 365). Every step
 /// is checked: the value comes from the query, and chrono panics on overflow.
 fn span(value: &str) -> Result<Duration> {
-    let usage = || format!("cannot read {value:?}; use 7d, 3m or 1y");
-    let (cut, unit) = value.char_indices().last().with_context(usage)?;
-    let n: i64 = value[..cut].parse().with_context(usage)?;
+    let usage = |cause: String| {
+        Invalid::quoting(
+            "A span in newer_than: or older_than: cannot be read; use 7d, 3m or 1y.",
+            format!("cannot read {value:?}; use 7d, 3m or 1y{cause}"),
+        )
+    };
+    let (cut, unit) = value
+        .char_indices()
+        .last()
+        .ok_or_else(|| usage(String::new()))?;
+    let n: i64 = value[..cut].parse().map_err(|e| usage(format!(": {e}")))?;
     let days = match unit {
         'd' => Some(n),
         'm' => n.checked_mul(30),
         'y' => n.checked_mul(365),
-        _ => bail!(usage()),
+        _ => bail!(usage(String::new())),
     };
-    days.and_then(Duration::try_days)
-        .with_context(|| format!("{value:?} is too long"))
+    days.and_then(Duration::try_days).ok_or_else(|| {
+        Invalid::quoting(
+            "A span in newer_than: or older_than: is too long.",
+            format!("{value:?} is too long"),
+        )
+        .into()
+    })
 }
 
 /// The day that the span `value` reaches back to from `today`.
 fn day_before(today: NaiveDate, value: &str) -> Result<NaiveDate> {
-    today
-        .checked_sub_signed(span(value)?)
-        .with_context(|| format!("{value:?} reaches outside the calendar"))
+    today.checked_sub_signed(span(value)?).ok_or_else(|| {
+        Invalid::quoting(
+            "A span in newer_than: or older_than: reaches outside the calendar.",
+            format!("{value:?} reaches outside the calendar"),
+        )
+        .into()
+    })
 }
 
 /// The mailbox an `in:` value names: a special-use role, INBOX, or All Mail.
@@ -101,13 +123,20 @@ fn in_mailbox(value: &str) -> Result<Mailbox> {
         "spam" => Mailbox::Role(NameAttribute::Junk),
         "trash" => Mailbox::Role(NameAttribute::Trash),
         "anywhere" | "all" => Mailbox::All,
-        _ => bail!(
-            "in:{value} is not supported; use inbox, sent, drafts, archive, starred, spam or trash"
-        ),
+        _ => bail!(Invalid::quoting(
+            "This in: value is not supported; use inbox, sent, drafts, archive, starred, spam or trash.",
+            format!(
+                "in:{value} is not supported; use inbox, sent, drafts, archive, starred, spam or trash"
+            )
+        )),
     })
 }
 
 /// Translate the Gmail-style subset into a [`Query`].
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pass over the tokens, each operator's rule beside its error"
+)]
 pub fn compile(query: &str, today: NaiveDate) -> Result<Query> {
     let mut mailbox: Option<Mailbox> = None;
     let mut attachment: Option<bool> = None;
@@ -118,9 +147,9 @@ pub fn compile(query: &str, today: NaiveDate) -> Result<Query> {
     for token in tokens(query)? {
         if token == "OR" {
             if !after_term || or_pending {
-                bail!(
+                bail!(Invalid::rule(
                     "OR needs a search term on each side; in:, label: and has: are not search terms"
-                );
+                ));
             }
             or_pending = true;
             continue;
@@ -139,7 +168,9 @@ pub fn compile(query: &str, today: NaiveDate) -> Result<Query> {
                 match op.to_ascii_lowercase().as_str() {
                     "in" | "label" => {
                         if negated || or_pending || mailbox.is_some() {
-                            bail!("use at most one in: or label:, without - or OR");
+                            bail!(Invalid::rule(
+                                "use at most one in: or label:, without - or OR"
+                            ));
                         }
                         mailbox = Some(if op.eq_ignore_ascii_case("label") {
                             Mailbox::Label(value.to_string())
@@ -153,17 +184,23 @@ pub fn compile(query: &str, today: NaiveDate) -> Result<Query> {
                         "unread" => "UNSEEN".to_string(),
                         "read" => "SEEN".to_string(),
                         "starred" => "FLAGGED".to_string(),
-                        _ => bail!("is:{value} is not supported; use unread, read or starred"),
+                        _ => bail!(Invalid::quoting(
+                            "This is: value is not supported; use unread, read or starred.",
+                            format!("is:{value} is not supported; use unread, read or starred")
+                        )),
                     },
                     "has" if value.eq_ignore_ascii_case("attachment") => {
                         if or_pending || attachment.is_some() {
-                            bail!("use has:attachment at most once, without OR");
+                            bail!(Invalid::rule("use has:attachment at most once, without OR"));
                         }
                         attachment = Some(!negated);
                         after_term = false;
                         continue;
                     }
-                    "has" => bail!("has:{value} is not supported; use has:attachment"),
+                    "has" => bail!(Invalid::quoting(
+                        "This has: value is not supported; use has:attachment.",
+                        format!("has:{value} is not supported; use has:attachment")
+                    )),
                     "after" => format!("SINCE {}", imap_date(date(value)?)),
                     "before" => format!("BEFORE {}", imap_date(date(value)?)),
                     "newer_than" => format!("SINCE {}", imap_date(day_before(today, value)?)),
@@ -188,7 +225,9 @@ pub fn compile(query: &str, today: NaiveDate) -> Result<Query> {
         after_term = true;
     }
     if or_pending {
-        bail!("OR needs a search term on each side; in:, label: and has: are not search terms");
+        bail!(Invalid::rule(
+            "OR needs a search term on each side; in:, label: and has: are not search terms"
+        ));
     }
     if terms.is_empty() {
         terms.push("ALL".into());

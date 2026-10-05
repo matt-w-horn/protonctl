@@ -86,7 +86,7 @@ and setup, is settled in M2.1.
 
 ## Settings
 
-Proposed 2026-10-04 with Q26; Q27 and Q28 hold the open parts.
+Proposed 2026-10-04 with Q26 and confirmed the same day, with Q27 (no mode until the user chooses) and Q28 (the mode in the Keychain).
 
 A user makes three choices. Everything else is found automatically, or is
 not a setting.
@@ -116,21 +116,21 @@ flowchart TB
 | Choice | Made by | Values |
 |---|---|---|
 | What Claude can reach | one setup command per service; a service is on only once set up | `setup mail`; `setup calendar`, once per calendar; `setup drive` |
-| What Claude sees | `protonctl setup privacy`, or `protonctl setup privacy --off` | `off` or `aliases`, for every service and host on the Mac |
+| What Claude sees | `protonctl setup privacy`, or `protonctl setup privacy --off`; none until one runs | `off` or `aliases`, for every service and host on the machine, kept as the Keychain item `privacy-mode` |
 | What Claude never sees | `[drive] exclude` in the config | Drive paths |
-
-```toml
-[privacy]
-mode = "aliases"   # or "off"; written by `protonctl setup privacy`
-```
 
 - **Services.** Mail and each calendar are on once set up, as built. Drive
   is on today whenever the Proton Drive app's folder or the CLI is found
   (`Drive::new` in `src/drive/mod.rs`), so it is the one service a user
-  cannot leave out, short of excluding `/`. `protonctl setup drive` would
-  check the CLI's signature and sign-in, find the app's folder and write a
-  `[drive]` table; Drive is then on when the config has that table, so a
-  config that already has one keeps working.
+  cannot leave out, short of excluding `/`. From M1.4,
+  `protonctl setup drive` checks the CLI's signature and sign-in, finds
+  the app's folder and writes a `[drive]` table; Drive is on only when the
+  config has that table. A config that already has one keeps working; one
+  without it loses Drive until `setup drive` runs, and `doctor` and
+  `status` say so.
+- **No mode yet (Q27).** Until `setup privacy` or `setup privacy --off`
+  runs, every call answers with those two commands and `doctor` fails, on
+  a new install and on one upgraded to Phase 2.
 - **Privacy mode.**
   - `off`: results as built: names, Proton IDs, digests, page images, and
     the download and export folders. The 18 tools keep their names and
@@ -164,7 +164,7 @@ mode = "aliases"   # or "off"; written by `protonctl setup privacy`
 ```mermaid
 stateDiagram-v2
     direction LR
-    [*] --> Unset: new install, if Q27 picks (a)
+    [*] --> Unset: new or upgraded install (Q27)
     Unset --> Off: setup privacy --off
     Unset --> Aliases: setup privacy
     Off --> Aliases: setup privacy
@@ -228,8 +228,8 @@ Claude Code allow rules for the tools that only read:
 `mcp__proton__count_*`, `mcp__proton__read_*`. In off mode
 `get_attachment`, `download_file` and `export_drive_manifest` can leave
 files behind (the download folder for an hour, the export folder until
-someone deletes them), so they stay on ask, and M1.6 marks the first two
-`readOnlyHint: false` as the third is. The `reveal_*` tools match none of these, so they
+someone deletes them), so they stay on ask, and since M1.6 all three are
+marked `readOnlyHint: false`. The `reveal_*` tools match none of these, so they
 stay on ask; Touch ID gates them either way. Whether Claude Code matches a
 glob inside a tool name, rather than only a whole server or one tool, is
 checked in the Phase 1a Claude Code test (M1.1); if it does not, the rules
@@ -291,13 +291,13 @@ send on whatever protonctl returned ([section 5](05-security.md)).
 
 | What | Where |
 |---|---|
-| Binary | `~/.cargo/bin/protonctl` (Q12 weighs a path the user cannot write) |
-| Config | `~/.config/protonctl/config.toml` (no secrets; format in `src/config.rs`; `[privacy] mode` from Phase 2, unless Q28 moves it to the Keychain) |
-| Secrets | Keychain service `protonctl`, accounts `calendar/<id>`, `bridge/<address>` and, in aliases mode, `privacy-key` |
-| Downloads | `~/Library/Caches/protonctl/downloads/<pid>/` (mail attachments and Drive files); off mode only from Phase 2 |
-| Cloud-only Drive files | in aliases mode, from Phase 2, a per-process RAM disk, only if `proton-drive` cannot stream to stdout |
+| Binary | `~/.cargo/bin/protonctl`, signed from Phase 2 with a self-signed certificate in the login keychain (Q12) |
+| Config | `~/.config/protonctl/config.toml` (no secrets, and not the privacy mode; format in `src/config.rs`) |
+| Secrets | Keychain service `protonctl`, accounts `calendar/<id>`, `bridge/<address>`, from Phase 2 `privacy-mode` and, in aliases mode, `privacy-key` |
+| Downloads | `~/Library/Caches/protonctl/downloads/<pid>/<drive or mail>-<Unix seconds>-<random>/` (mail attachments and Drive files; the sweep reads each folder's age from its name); off mode only from Phase 2 |
+| Cloud-only Drive files | in aliases mode, from Phase 2, a per-process RAM disk, since `proton-drive` cannot stream to stdout (Q14) |
 | Exports | the folder `[export] folder` names: `drive/<Drive path>`, `mail/<messageId>/<index>-<name>`, `manifests/drive-<UTC time>.jsonl`; off mode only from Phase 2 |
-| On Linux | the same names under XDG folders: `$XDG_CACHE_HOME/protonctl`, `$XDG_STATE_HOME/protonctl`; secrets in the Secret Service ([section 11](11-platforms.md)) |
+| On Linux | the same names under XDG folders: `$XDG_CACHE_HOME/protonctl` (else `~/.cache/protonctl`), and from Phase P2 `$XDG_STATE_HOME/protonctl`; no secret store until Phase P2, which Q31 picks ([section 11](11-platforms.md)) |
 | Not protonctl's, but holding its results | Claude Code's transcripts under `~/.claude/projects/`; Claude Desktop's logs under `~/Library/Logs/Claude/` ([section 5](05-security.md)) |
 
 ---
