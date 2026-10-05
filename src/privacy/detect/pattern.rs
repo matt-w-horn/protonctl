@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use super::{Detector, Kind, Mention};
+use super::{Detector, Form, Kind, Mention};
 use crate::privacy::canon;
 use crate::privacy::ident::{Algorithm, EntityType};
 
@@ -79,6 +79,7 @@ fn push(out: &mut Vec<Mention>, start: usize, end: usize, kind: Kind, value: Str
         kind,
         value,
         source: Detector::Regex,
+        form: Form::Whole,
     });
 }
 

@@ -2,7 +2,7 @@
 
 # 7. Testing
 
-Built (on macOS on 2026-10-04, `cargo test` ran 242 tests: 233 unit, 9
+Built (on macOS on 2026-10-04, `cargo test` ran 244 tests: 235 unit, 9
 against the built binary, and 3 ignored. On Linux on 2026-10-05 it ran 217: 208 unit, 9
 against the built binary; 4 more are ignored by default: one lists Drive
 through the real CLI, two reach a Secret Service and run in
@@ -613,7 +613,16 @@ missing ones:
   spaces, is found, a two-character one too, while a Latin name inside a
   longer word is not. Built: `a_name_in_running_text_without_spaces_is_found`
   in `src/privacy/detect/dict.rs`, shown to fail with the boundary rule
-  applied to every script.
+  applied to every script. B15 and B16 (built 2026-10-04): a known
+  person's given name, surname and name without middle names, and the
+  initials of the result's own people, are found, a one-word form of a
+  name the result does not hold only inside a sentence; a form joins its
+  full name's alias only when one name fits and the result holds it, and
+  is otherwise its own entity linked by `maybeSameAs` both ways. Built:
+  `short_forms_and_initials_are_found` in `src/privacy/detect/dict.rs`,
+  shown to fail with no short forms made, and
+  `a_short_form_joins_its_full_name_only_when_one_local_name_fits` in
+  `src/privacy/pipeline.rs`, shown to fail with joining off.
 - Evaluation (Phase 2, defect D1 in [section 9](09-rollout.md#phase-2-defects-found-on-real-results)):
   aliases mode over a labeled synthetic corpus that plants each person,
   organization and project in every form D2 to D7 name (surname, given

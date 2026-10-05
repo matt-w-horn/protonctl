@@ -129,11 +129,18 @@ parentheses, numbered within the result, with no word alias and no
   own alias, listed under the person's `addresses` when a header pairs them.
   A name with two addresses can be one person or two people who share a
   name; the table shows both addresses, so a reader can tell.
-- From Phase 5, short forms in one item ("Alice", "Ms. Chen") join the full
-  name when exactly one candidate fits, and similar names in one result are
-  marked `maybeSameAs` instead of merged. Two aliases for one person cost a
-  missed link; one alias for two people silently mixes their words. The
-  rule accepts the first error to avoid the second.
+- Short forms of a known person's name (built 2026-10-04): the given
+  name, the surname, the name without its middle names, and, for the
+  people in the result's own headers, their initials in capitals ("JL",
+  "J.L."). A form joins the full name's alias when exactly one known name
+  fits and the result's own headers hold that name; any other form gets
+  its own alias, and the result's `entities` table links the two both
+  ways with `maybeSameAs` instead of merging them. A one-word form of a
+  name the result does not hold counts only inside a sentence, where its
+  capital says it is a name. Two aliases for one person cost a missed
+  link; one alias for two people silently mixes their words. The rule
+  accepts the first error to avoid the second. Names that appear in no
+  header reach the dictionary only through Phase 5's model.
 - Known limits: inflected names (a German genitive, Slavic case endings) and
   names written in another script get their own aliases unless an email
   address links them.

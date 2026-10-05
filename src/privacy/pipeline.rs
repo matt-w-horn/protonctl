@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use super::canon;
 use super::detect::dict::{Dictionary, Names};
-use super::detect::{self, Detector, Kind, Mention, pattern};
+use super::detect::{self, Detector, Form, Kind, Mention, pattern};
 use super::fields::{Policy, policy};
 use super::ident::{AliasClass, EntityType, ItemKind};
 use super::key::Keys;
@@ -231,6 +231,9 @@ struct Registry {
     /// Links by canonical URL, in order of first appearance.
     links: Vec<String>,
     aliases: HashMap<EntityKey, String>,
+    /// Entities that may be one: a short form that was not joined to its
+    /// full name, both ways (`maybeSameAs`).
+    same: BTreeMap<EntityKey, BTreeSet<EntityKey>>,
 }
 
 impl Registry {
@@ -264,6 +267,14 @@ impl Registry {
             .roles
             .insert(role);
         Some(key)
+    }
+
+    /// Record that `a` and `b` may be one entity.
+    fn maybe_same(&mut self, a: &EntityKey, b: &EntityKey) {
+        if a != b {
+            self.same.entry(a.clone()).or_default().insert(b.clone());
+            self.same.entry(b.clone()).or_default().insert(a.clone());
+        }
     }
 
     fn link(&mut self, url: &str) {
@@ -373,6 +384,10 @@ struct State<'a> {
     tool: Tool,
     keys: &'a Keys,
     names: Names,
+    /// The names this result's own headers, attendees and query hold.
+    local: Names,
+    /// The same, canonical, once the Names stage is over.
+    local_canon: BTreeSet<String>,
     dict: Option<Dictionary>,
     reg: Registry,
     dropped: Vec<String>,
@@ -439,6 +454,19 @@ impl State<'_> {
             .collect()
     }
 
+    /// The value a mention's alias comes from (RFC section 6, Canonical
+    /// values): a short form joins its full name when it fits exactly one
+    /// known name and this result's own headers hold that name; any other
+    /// mention stands for itself.
+    fn resolved<'m>(&self, m: &'m Mention) -> &'m str {
+        match &m.form {
+            Form::Short(of) if of.len() == 1 && self.local_canon.contains(&canon::name(&of[0])) => {
+                &of[0]
+            }
+            _ => &m.value,
+        }
+    }
+
     /// Free text: register in the Register stage; rewritten in Rewrite.
     fn text(&mut self, text: &str, role: Role) -> Option<String> {
         let mentions = self.mentions(text);
@@ -448,7 +476,16 @@ impl State<'_> {
                 for m in &mentions {
                     match &m.kind {
                         Kind::Entity(t) => {
-                            self.reg.add(*t, &m.value, role);
+                            let value = self.resolved(m).to_string();
+                            let key = self.reg.add(*t, &value, role);
+                            // A form not joined may still be its full name.
+                            if let (Some(key), Form::Short(of)) = (key, &m.form) {
+                                for full in of {
+                                    if let Some(other) = Registry::key(*t, full) {
+                                        self.reg.maybe_same(&key, &other);
+                                    }
+                                }
+                            }
                         }
                         Kind::Link => self.reg.link(&m.value),
                         Kind::Digest(_) | Kind::MessageId => {}
@@ -464,7 +501,9 @@ impl State<'_> {
                 for m in mentions {
                     out.push_str(&text[at..m.start]);
                     let replaced = match &m.kind {
-                        Kind::Entity(t) => self.reg.alias(*t, &m.value).map(str::to_string),
+                        Kind::Entity(t) => {
+                            self.reg.alias(*t, self.resolved(&m)).map(str::to_string)
+                        }
                         Kind::Link => Some(self.reg.link_text(&m.value)),
                         Kind::Digest(alg) => hex::decode(&m.value)
                             .ok()
@@ -517,6 +556,7 @@ impl State<'_> {
             Stage::Names => {
                 if has_name {
                     self.names.add(name, EntityType::Person);
+                    self.local.add(name, EntityType::Person);
                 }
                 if has_email {
                     self.names.add_address(email);
@@ -716,6 +756,7 @@ fn person_object(
         Stage::Names => {
             if let Some(n) = &name {
                 st.names.add(n, EntityType::Person);
+                st.local.add(n, EntityType::Person);
             }
             if let Some(e) = &email {
                 st.names.add_address(e);
@@ -821,50 +862,34 @@ fn hints(e: &Entity, key: &EntityKey, you: Option<&str>) -> Vec<Hint> {
     h
 }
 
-/// Rewrite one result. `keys` are the call's (R20).
-pub fn run(mut value: Value, keys: &Keys, ctx: &Context) -> Result<Value, PipelineError> {
-    let more = more_exists(&value);
-    let mut st = State {
-        stage: Stage::Names,
-        tool: ctx.tool,
-        keys,
-        names: ctx.names.clone(),
-        dict: None,
-        reg: Registry::default(),
-        dropped: Vec::new(),
-    };
-    let typed = ctx.query.map(query_names).unwrap_or_default();
-    for name in &typed {
-        st.names.add(name, typed_type(name));
-    }
-    walk(&mut value, Policy::Within, "", "", &mut st)?;
-    #[expect(
-        clippy::map_err_ignore,
-        reason = "R13: the error can quote a name; the call fails with a fixed fault"
-    )]
-    let dict = Dictionary::new(&st.names).map_err(|_| PipelineError::Failed)?;
-    st.dict = Some(dict);
-    st.stage = Stage::Register;
-    walk(&mut value, Policy::Within, "", "", &mut st)?;
-    st.reg.settle_aliases(keys);
-    st.stage = Stage::Rewrite;
-    walk(&mut value, Policy::Within, "", "", &mut st)?;
-
+/// The `entities` table: each entity's alias, with its type, hints, ref,
+/// addresses and the entities it may be (`maybeSameAs`).
+fn entities_table(reg: &Registry, keys: &Keys, you: Option<&str>) -> Map<String, Value> {
     let mut entities = Map::new();
-    for (key, e) in &st.reg.entities {
-        let alias = st.reg.aliases[key].clone();
+    for (key, e) in &reg.entities {
+        let alias = reg.aliases[key].clone();
         let mut row = json!({
             "type": e.t,
-            "hints": hints(e, key, ctx.you),
+            "hints": hints(e, key, you),
             "ref": keys.reference(e.t, &key.1),
         });
+        // Other entities in this result that may be this one.
+        let same: Vec<&str> = reg
+            .same
+            .get(key)
+            .into_iter()
+            .flatten()
+            .filter_map(|k| reg.aliases.get(k).map(String::as_str))
+            .collect();
+        if !same.is_empty() {
+            row["maybeSameAs"] = json!(same);
+        }
         if !e.emails.is_empty() {
             let addresses: Vec<&str> = e
                 .emails
                 .iter()
                 .filter_map(|m| {
-                    st.reg
-                        .aliases
+                    reg.aliases
                         .get(&(EntityType::Email.class(), m.clone()))
                         .map(String::as_str)
                 })
@@ -873,6 +898,44 @@ pub fn run(mut value: Value, keys: &Keys, ctx: &Context) -> Result<Value, Pipeli
         }
         entities.insert(alias, row);
     }
+    entities
+}
+
+/// Rewrite one result. `keys` are the call's (R20).
+pub fn run(mut value: Value, keys: &Keys, ctx: &Context) -> Result<Value, PipelineError> {
+    let more = more_exists(&value);
+    let mut st = State {
+        stage: Stage::Names,
+        tool: ctx.tool,
+        keys,
+        names: ctx.names.clone(),
+        local: Names::default(),
+        local_canon: BTreeSet::new(),
+        dict: None,
+        reg: Registry::default(),
+        dropped: Vec::new(),
+    };
+    let typed = ctx.query.map(query_names).unwrap_or_default();
+    for name in &typed {
+        st.names.add(name, typed_type(name));
+        st.local.add(name, typed_type(name));
+    }
+    walk(&mut value, Policy::Within, "", "", &mut st)?;
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "R13: the error can quote a name; the call fails with a fixed fault"
+    )]
+    let dict =
+        Dictionary::with_initials_of(&st.names, &st.local).map_err(|_| PipelineError::Failed)?;
+    st.dict = Some(dict);
+    st.local_canon = st.local.iter().map(|(n, _)| canon::name(n)).collect();
+    st.stage = Stage::Register;
+    walk(&mut value, Policy::Within, "", "", &mut st)?;
+    st.reg.settle_aliases(keys);
+    st.stage = Stage::Rewrite;
+    walk(&mut value, Policy::Within, "", "", &mut st)?;
+
+    let entities = entities_table(&st.reg, keys, ctx.you);
     let Value::Object(out) = &mut value else {
         return Err(PipelineError::Failed);
     };
@@ -1524,6 +1587,41 @@ mod tests {
             .map(|a| a["mimeType"].as_str().unwrap())
             .collect();
         assert_eq!(types, ["application/pdf", "application/other", "other"]);
+    }
+
+    /// B15, B16 and B19: a short form or initials take the alias of the
+    /// full name when exactly one known name fits and this result's own
+    /// headers hold it; a form that fits two people, or a name known only
+    /// to the process, gets its own alias, linked both ways by
+    /// `maybeSameAs` to the full names this result holds, so two people
+    /// are never merged.
+    #[test]
+    fn a_short_form_joins_its_full_name_only_when_one_local_name_fits() {
+        let v = json!({ "message": {
+            "from": "Dana Ruiz <dana@ruiz-events.example>",
+            "to": ["John Lee <john@lee-family.example>"],
+            "body": "Ruiz agreed, as did «DR». «Lee» and «Raman» too.",
+        } });
+        let names = Names::people(["Jane Lee", "Priya Raman"].map(String::from));
+        let out = run_as(Tool::GetMessage, None, &names, v);
+        let alias_of = |header: &str| -> String { header.split_once(" <").unwrap().0.to_string() };
+        let dana = alias_of(out["message"]["from"].as_str().unwrap());
+        let john = alias_of(out["message"]["to"][0].as_str().unwrap());
+        let body = out["message"]["body"].as_str().unwrap();
+        let between: Vec<&str> = body
+            .split('«')
+            .skip(1)
+            .map(|s| s.split('»').next().unwrap())
+            .collect();
+        assert!(body.starts_with(&format!("{dana} agreed")), "{body}");
+        assert_eq!(between[0], dana, "{body}");
+        let (lee, raman) = (between[1], between[2]);
+        assert!(lee != john && raman != dana, "{body}");
+        let e = &out["entities"];
+        assert_eq!(e[lee]["maybeSameAs"], json!([john]), "{e}");
+        assert_eq!(e[&john]["maybeSameAs"], json!([lee]), "{e}");
+        assert_eq!(e[raman].get("maybeSameAs"), None, "{e}");
+        assert_eq!(e[&dana].get("maybeSameAs"), None, "{e}");
     }
 
     /// A From with a name and no address, which mail shows as "Name <>",
