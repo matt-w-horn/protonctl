@@ -118,7 +118,11 @@ passes its format rules; `account` the local account name in a path
 Off mode keeps today's text (`src/serve.rs`), which since M1.3 says "It
 is read-only: it cannot send, draft, share, label, move or delete anything
 in Proton, or create links or invitations", in the words of
-`serve::CANNOT`, which `get_status` repeats. Aliases mode:
+`serve::CANNOT`, which `get_status` repeats. To name the mode (R26), it
+ends "The privacy setting is off: names and content appear as Proton's
+apps show them." A server that started with no mode, or could not read
+it, sends the same text ending in the message of `privacy_mode_unset` or
+`privacy_mode_unreadable` instead. Aliases mode:
 
 > protonctl reads the user's Proton Mail, Drive and Calendar on this
 > computer through Proton's own apps, and is read-only. Results are JSON.

@@ -76,8 +76,6 @@ maintainer.
   "Mme Chen", "Mr Chen" and "Ms Chen", "John Smith Sr." and "John
   Smith"); and an intact file's keyed local SHA-1 equal to its keyed
   claim, with one changed byte making them differ (R17).
-- T17 (here) Tests that `status`, `doctor` and the server's
-  `instructions` name the mode (R26); only `get_status` has one.
 - T18 (here) `scripts/live-check.py` in aliases mode does not check phone
   numbers, that every `entities` entry has a `ref`, or that a second
   server run gives the same aliases for the same search, as section 7

@@ -396,9 +396,10 @@ missing ones:
   `an_unreadable_setting_refuses_in_either_mode` in `src/privacy/mod.rs`;
   `calls_are_refused_without_a_mode_or_after_a_change` and
   `get_status_in_aliases_mode_shows_no_local_path` in `src/serve.rs`;
-  `drive_is_on_only_once_set_up` in `src/main.rs`. No test checks that
-  `status`, `doctor` and the `instructions` name the mode
-  ([docs/todo.md](../todo.md), T17).
+  `drive_is_on_only_once_set_up` in `src/main.rs`; and
+  `status_doctor_and_the_instructions_name_the_mode` in `src/main.rs`,
+  which checks that `status`, `doctor` and the `instructions` name the
+  mode, or say there is none or that it cannot be read.
 - Leak test, end to end (Phase 2, in aliases mode): the scripted Bridge, the stand-in CLI and
   a synthetic calendar feed hold a planted corpus: names in headers and in
   bodies, in Latin and other scripts; email addresses; phone numbers from

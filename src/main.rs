@@ -892,6 +892,47 @@ mod tests {
         );
     }
 
+    /// RFC R26: `status` (as `get_status`), `doctor` and the server's
+    /// instructions name the mode the process started in, or say that
+    /// there is none, or that it cannot be read.
+    #[test]
+    fn status_doctor_and_the_instructions_name_the_mode() {
+        use privacy::key::tests::FakeKey;
+        use privacy::tests::FakeMode;
+        use privacy::{Mode, Privacy};
+        let with = |mode: Result<Option<Mode>, ()>| {
+            Privacy::new(
+                Box::new(Arc::new(FakeMode(std::sync::Mutex::new(mode)))),
+                Box::new(Arc::new(FakeKey(std::sync::Mutex::new(Some([7; 32]))))),
+            )
+        };
+        let cases = [
+            (Ok(Some(Mode::Off)), "off", "The privacy setting is off"),
+            (
+                Ok(Some(Mode::Aliases)),
+                "aliases",
+                "The privacy setting is on",
+            ),
+            (Ok(None), "unset", "No privacy mode is set"),
+            (Err(()), "unreadable", "privacy setting cannot be read"),
+        ];
+        for (mode, word, says) in cases {
+            let app = Arc::new(App::bare(with(mode)));
+            assert_eq!(app.status_with(Ok(&[]))["privacy"]["mode"], word);
+            let doctor = app.privacy.diagnose().map_err(|e| format!("{e:#}"));
+            match word {
+                "off" | "aliases" => assert_eq!(doctor, Ok(word)),
+                _ => assert!(
+                    doctor.as_ref().is_err_and(|e| e.contains(says)),
+                    "{doctor:?}"
+                ),
+            }
+            let info = rmcp::ServerHandler::get_info(&serve::Server::new(app));
+            let instructions = info.instructions.unwrap();
+            assert!(instructions.contains(says), "{word}: {instructions}");
+        }
+    }
+
     #[test]
     fn status_says_when_the_secret_store_cannot_be_read() {
         let calendar = config::CalendarConfig {
