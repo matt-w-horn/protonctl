@@ -12,114 +12,54 @@ maintainer.
 
 ## Bugs
 
-- B1 (here) On Linux, every unit-test run leaves an empty
-  `protonctl-<pid>` folder in `/dev/shm/protonctl-test-<uid>` (22 on
-  2026-10-05). A server killed before it exits leaves its folder under
-  `$XDG_RUNTIME_DIR` the same way, possibly with a file in it, until
-  logout.
-- B2 (here) In aliases mode, short forms of a name pass raw
+- B15 (here) In aliases mode, short forms of a name pass raw
   ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D2).
-- B3 (here) In aliases mode, initials pass raw
+- B16 (here) In aliases mode, initials pass raw
   ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D3).
-- B4 (here) In aliases mode, misspelled names pass raw, from typing and
+- B17 (here) In aliases mode, misspelled names pass raw, from typing and
   from OCR
   ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D4).
-- B5 (here) In aliases mode, project names pass raw, in text and in Drive
+- B18 (here) In aliases mode, project names pass raw, in text and in Drive
   paths and names
   ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D5).
   Projects need an entity type and a source of names.
-- B6 (here) In aliases mode, one entity gets several aliases
+- B19 (here) In aliases mode, one entity gets several aliases
   ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D6).
   Forms of one name, one organization or one project should share an
   alias, or be linked (`maybeSameAs`, M5.2).
-- B7 (here) In aliases mode, organizations and products are typed
+- B20 (here) In aliases mode, organizations and products are typed
   `person`, or pass raw
   ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D7).
-- B8 (Mac) A folder made online-only in the Drive app lists as empty, with
+- B21 (Mac) A folder made online-only in the Drive app lists as empty, with
   no note, in both modes
   ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D8).
   It should be listed through the CLI, or say that its contents are not
   on this computer.
-- B9 (here) In aliases mode, `guidance` comes only after a name typed in a
+- B22 (here) In aliases mode, `guidance` comes only after a name typed in a
   query (`src/privacy/pipeline.rs`). R23 also asks for it when a result
   was cut short or paged, and
   [section 6](rfc-0001/06-privacy.md#guidance) gives its text; no code
   adds it.
 
-- B2 (here) The readers' sandbox lets a reader change the metadata of
-  any file the user owns: Landlock does not cover chmod, chown, utimes or
-  extended attributes, and seccomp refuses only sockets and io_uring
-  (probed: chmod 0644 of a 0600 file succeeded inside `sandbox()`). R21
-  says the reader writes nothing.
-- B3 (here) A `page` past 2^64 - 4 overflows in `poppler_pages`
-  (`first + PAGE_IMAGES - 1`) and panics; the off-mode call is never
-  answered (R8), and `drive cat --page` exits 101.
-- B4 (here) A PDF's own Title can set the page count: `page_count` takes
-  the first `Pages:` line of `pdfinfo`, which prints the metadata, unescaped,
-  before it. A 6-page scan with "\nPages: 1" in its Title showed 1 page.
-- B5 (here) A running server keeps the CLI pin it loaded: after
-  `setup drive` re-pins, it still refuses, and neither message says to
-  restart the hosts.
 - B6 (here) Creating a Secret Service item never unlocks a locked
   collection, so a first `setup` fails with IsLocked instead of showing
   the unlock prompt.
-- B7 (here) `with_cli_pin` edits the config line by line: a calendar name
-  with a newline (from a feed's X-WR-CALNAME, which a third party writes)
-  is a multi-line TOML string, a `[drive]` line inside it is taken for the
-  table, and the pin is written into the name; the check after the edit
-  compares only the calendar count. The rewrite is not atomic either.
-- B8 (here) The swap check: `CRYPT-INTEGRITY-` and `CRYPT-VERITY-` devices
-  pass as encrypted; zram passes even with a writeback `backing_dev`; a
-  swap file on btrfs (an anonymous device) is always refused.
-- B9 (here) Sandbox failures read as the wrong cause: `doctor` runs only
-  `convert check`, never a reader, so a reader that cannot start under
-  the sandbox fails calls while `doctor` says the sandbox holds; in aliases
-  mode the failure reads as "Proton Drive cannot be reached".
-- B10 (here) A panic in any tool's operation leaves the call unanswered
-  (R8); only the aliases-mode pipeline runs under `catch_unwind`.
-- B11 (here) The unit tests for the memory folder check the host's real
-  /proc/swaps, so they fail on a machine with plain swap.
-- B12 (here) scripts/check.sh's Secret Service step races: the throwaway
-  keyring's name is not yet on the bus when the tests start, so the first
-  call can activate a second daemon, which uses the user's real keyring
-  folder.
-- B13 (here) Nothing tests that a reader runs confined: with `sandbox()`
-  removed from `convert::run`, tests/convert.rs still passes.
-- B14 (Mac or Linux desktop) Whether the Drive CLI writes a download to
-  `os.tmpdir()` (on disk) before moving it into the folder protonctl
-  names; if it does, aliases mode needs a TMPDIR in memory (R10).
+- B10 (here) A panic in an aliases-mode tool's operation leaves the call
+  unanswered (R8): only the pipeline runs under `catch_unwind` there. Off
+  mode answers since 6631570.
 
 ## Documentation that states something wrong
 
-- D1 (here) `09-rollout.md`: the phase table says P2 to P4 are to do and
-  leaves the Linux readers out of Phase 4; M2.10 says the live runs wait
-  for a Mac, but the aliases-mode run passed.
-- D2 (here) `security-privacy-review.md`, the invariants: I3, I6, I7, I10,
-  I11, I12, I13, I16 and I18 read "planned" though they are built; I3 says
-  secrets live only in the Keychain.
-- D3 (here) `security-privacy-review.md`, the threats: "medium until Phase
-  2" for a replaced binary (Q12 is done), "medium until M2.9" for panics
-  (done), and the converter row without the Linux sandbox; the closing
-  table's lists of built and planned checks.
-- D4 (here) `security-privacy-review.md`: the data-flow diagram was not
-  checked again when Phase 2 closed, and lacks `protonctl convert`, the
-  Secret Service and the memory folder.
-- D5 (here) `10-open-questions.md`: Q18's row says the licence is still to
-  check; it was checked on the Mac.
-- D6 (here) `02-requirements.md`: R2 says secrets are kept in the macOS
-  Keychain only.
-- D7 (here) `07-testing.md`: the list of planned privacy-layer tests does
-  not say which exist; the counts at the top are from 2026-10-04.
-- D8 (here) `02-requirements.md` R13 and `06-privacy.md` ("Names in the
+- W8 (here) `02-requirements.md` R13 and `06-privacy.md` ("Names in the
   chat") say that a name typed in a query appears as typed in that call's
   result. As built, every field of the result shows its alias, and the
   name as typed is only a key of `queryEntities`
   (`a_name_typed_in_the_query_is_paired_with_its_alias` in
   `src/privacy/pipeline.rs`).
-- D9 (here) `README.md`, "How it fits together": the diagram's store is
+- W9 (here) `README.md`, "How it fits together": the diagram's store is
   the macOS Keychain with the Bridge password and the calendar links only.
   It lacks the privacy key and setting, and the Secret Service on Linux.
-- D10 (here) `04-design.md`: the components diagram and the MCP tools
+- W10 (here) `04-design.md`: the components diagram and the MCP tools
   table name only macOS's readers (PDFKit and `textutil`). On Linux,
   poppler and pandoc run in `protonctl convert`'s sandbox
   ([section 11](rfc-0001/11-platforms.md#the-document-readers-as-built-p4)).

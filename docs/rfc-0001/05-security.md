@@ -129,8 +129,9 @@ flowchart LR
   folder under `~/Library/Caches/protonctl/downloads/` until someone deletes
   it. In aliases mode there is no download folder; a RAM disk left behind holds
   at most the files of one process and is gone after a restart. On Linux
-  the memory folder under `$XDG_RUNTIME_DIR` stays until logout
-  ([docs/todo.md](../todo.md), B1).
+  the memory folder under `$XDG_RUNTIME_DIR` stays until the next
+  protonctl process to use one finds its process gone and the folder
+  unchanged for 10 minutes, or until logout.
 
 ---
 

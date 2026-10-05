@@ -232,7 +232,7 @@ Found on 2026-10-04 by the first aliases-mode reads of the maintainer's
 own Drive, Mail and Calendar ([Appendix C](appendix-c-roleplay.md#first-real-results-2026-10-04)).
 Examples here are synthetic. Each is open until a test or the evaluation
 (D1) shows it fixed: D1 is T15 in [docs/todo.md](../todo.md), and D2 to
-D8 are B2 to B8 there.
+D8 are B15 to B21 there.
 
 - D1 No evaluation of the privacy layer. Nothing measures what passes
   raw: the leak test plants exact values, and Phase 5's recall

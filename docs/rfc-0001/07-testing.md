@@ -494,11 +494,11 @@ missing ones:
   alias in the next call's. As built, the result shows the typed name as
   its alias too, paired with it in `queryEntities`;
   `a_name_typed_in_the_query_is_paired_with_its_alias` in
-  `src/privacy/pipeline.rs` tests that ([docs/todo.md](../todo.md), D8).
+  `src/privacy/pipeline.rs` tests that ([docs/todo.md](../todo.md), W8).
 - Guidance: present in exactly the cases R23 names. Built for a name typed
   in a query (`a_name_typed_in_the_query_is_paired_with_its_alias`). A
   result cut short or paged carries no `guidance`
-  ([docs/todo.md](../todo.md), B9).
+  ([docs/todo.md](../todo.md), B22).
 - No disk, in aliases mode: every tool runs with a throwaway home and temporary folder,
   compared before and after; any new file fails the test (shown to fail
   against the 2026-10-03 download folder). The helpers run with a cleared

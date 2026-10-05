@@ -103,6 +103,16 @@ keys, types and sizes only:
   failedItems, failures}` and prompts on a name conflict unless given `-f`
   and `-d` strategies; protonctl passes `skip`, an empty stdin and a new
   folder per download.
+- `download` writes each file straight to its place in the folder it is
+  given, through a Bun file writer that the SDK streams decrypted blocks
+  into, and deletes it if the download fails; neither the CLI nor the SDK
+  writes a copy anywhere else, the system's temporary folder included. So
+  in aliases mode a file read through the CLI touches only the memory
+  folder (R10). The CLI also keeps an encrypted SQLite cache of keys and
+  node metadata in its own cache folder (`proton-drive-cli` under
+  `~/Library/Caches` or `$XDG_CACHE_HOME`). Read in the CLI's and the SDK's
+  source at commit 28ac9cd on 2026-10-05 (`downloadOperations.ts`,
+  `fileDownloader.ts`, `cache/index.ts`).
 - The CLI reads `PROTON_DRIVE_BASE_URL` (its API host),
   `PROTON_DRIVE_CREDENTIALS_STORE` (`keychain`, `unsafe_file` or `pass`),
   `PROTON_DRIVE_UNSAFE_CACHE`, `PROTON_DRIVE_CACHE_DIR` and
