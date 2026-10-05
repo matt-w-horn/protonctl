@@ -16,6 +16,32 @@ static WORDS: LazyLock<Vec<&'static str>> =
 
 static SET: LazyLock<HashSet<&'static str>> = LazyLock::new(|| WORDS.iter().copied().collect());
 
+#[cfg(test)]
+thread_local! {
+    /// A list a test puts in place of this one on its own thread, short
+    /// enough for aliases to collide (RFC section 7, Collisions).
+    static SHORT: std::cell::Cell<Option<&'static [&'static str]>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The list aliases and digests are made from.
+fn list() -> &'static [&'static str] {
+    #[cfg(test)]
+    if let Some(short) = SHORT.get() {
+        return short;
+    }
+    &WORDS
+}
+
+/// `f`, with aliases and digests made from `short` on this thread.
+#[cfg(test)]
+pub fn with_list<T>(short: &'static [&'static str], f: impl FnOnce() -> T) -> T {
+    SHORT.set(Some(short));
+    let out = f();
+    SHORT.set(None);
+    out
+}
+
 /// Whether `w`, in lower case, is on the list: a common English word.
 pub fn contains(w: &str) -> bool {
     SET.contains(w)
@@ -23,12 +49,12 @@ pub fn contains(w: &str) -> bool {
 
 /// How many words there are, `N`.
 pub fn count() -> u64 {
-    WORDS.len() as u64
+    list().len() as u64
 }
 
 /// The word at `i`, which must be below `count()`.
 pub fn word(i: u64) -> &'static str {
-    WORDS[usize::try_from(i).expect("an index below count() fits in usize")]
+    list()[usize::try_from(i).expect("an index below count() fits in usize")]
 }
 
 /// `v` written as `n` words, most significant first, each a digit in base `N`.
