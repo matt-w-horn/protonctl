@@ -97,7 +97,9 @@ any step returns an error that names no content (R13).
    by mod-97; a URL; a domain name; an IP address; a US Social Security
    number by its format rules; a one-time code or password after a label
    such as "code", "password" or "PIN" on the same line; the local
-   account name in a path), the dictionary over all text with
+   account name in a path; a SHA-1 or SHA-256 digest in hex and a
+   Proton message ID, which become a keyed digest and a handle, as the
+   same values in fields do), the dictionary over all text with
    `aho-corasick`, and from Phase 5 GLiNER for people, organizations and
    locations. Street addresses have no Phase 2 detector.
 4. Resolve each mention to an entity (below).

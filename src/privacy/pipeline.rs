@@ -451,6 +451,7 @@ impl State<'_> {
                             self.reg.add(*t, &m.value, role);
                         }
                         Kind::Link => self.reg.link(&m.value),
+                        Kind::Digest(_) | Kind::MessageId => {}
                     }
                 }
                 None
@@ -465,6 +466,13 @@ impl State<'_> {
                     let replaced = match &m.kind {
                         Kind::Entity(t) => self.reg.alias(*t, &m.value).map(str::to_string),
                         Kind::Link => Some(self.reg.link_text(&m.value)),
+                        Kind::Digest(alg) => hex::decode(&m.value)
+                            .ok()
+                            .map(|raw| self.keys.keyed_digest(*alg, &raw)),
+                        Kind::MessageId => m
+                            .value
+                            .get(..pattern::MESSAGE_ID_SHOWN)
+                            .map(|id| self.keys.handle(ItemKind::Message, id)),
                     };
                     // A mention with no alias would leak; fail the call (R13).
                     out.push_str(&replaced?);
@@ -958,7 +966,7 @@ pub fn unlisted(tool: Tool, v: &Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::privacy::ident::TokenKind;
+    use crate::privacy::ident::{Algorithm, TokenKind};
     use crate::privacy::words;
 
     fn keys() -> Keys {
@@ -1780,6 +1788,26 @@ mod tests {
         changed[0] ^= 1;
         let (local, claimed) = keyed(&changed);
         assert_ne!(local, claimed);
+    }
+
+    /// B24: a digest or a Proton message ID written in free text leaves
+    /// as the same value in a field would: a keyed digest, and a handle
+    /// that opens to the messageId the mail tools take.
+    #[test]
+    fn digests_and_message_ids_in_text_are_rewritten() {
+        let sha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709";
+        let id = format!("{}==", "Qm3vT8pLx2NaK7cD".repeat(5) + "abcdef");
+        let v = json!({ "message": { "body": format!("Hash {sha1}; see {id}.") } });
+        let out = run_as(Tool::GetMessage, None, &Names::default(), v);
+        let body = out["message"]["body"].as_str().unwrap();
+        assert!(!body.contains(sha1) && !body.contains("Qm3v"), "{body}");
+        let digest = keys().keyed_digest(Algorithm::Sha1, &hex::decode(sha1).unwrap());
+        let handle = body.trim_end_matches('.').rsplit(' ').next().unwrap();
+        assert!(body.starts_with(&format!("Hash {digest}; see ")), "{body}");
+        assert_eq!(
+            keys().open_handle(ItemKind::Message, handle).unwrap(),
+            "Qm3vT8pLx2NaK7cD"
+        );
     }
 
     #[test]

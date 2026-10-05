@@ -63,7 +63,7 @@ New files, under `src/privacy/`:
 | `canon.rs` | canonical forms of names, addresses, phone numbers, domains, and of URLs for numbering them within a result | 2 |
 | `ident.rs` | aliases, refs, handles, sealed page tokens, keyed digests | 2 |
 | `detect/mod.rs` | the `Detector` trait, `Mention`, the detector registry | 2 |
-| `detect/pattern.rs` | regex with validators: email, phone, card (Luhn), IBAN (mod-97), URL, domain, IP, US Social Security number, a labelled one-time code or password, the local account name in a path (Q22) | 2 |
+| `detect/pattern.rs` | regex with validators: email, phone, card (Luhn), IBAN (mod-97), URL, domain, IP, US Social Security number, a labelled one-time code or password, the local account name in a path (Q22), a SHA-1 or SHA-256 digest in hex and a Proton message ID (R16, R17) | 2 |
 | `detect/dict.rs` | the call dictionary over `aho-corasick` | 2 |
 | `detect/gliner.rs` | GLiNER through `gline-rs` | 5 |
 | `resolve.rs` | mentions to entities: merge rules, `maybeSameAs` | 2, 5 |

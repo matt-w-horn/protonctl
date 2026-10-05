@@ -2,7 +2,7 @@
 
 # 7. Testing
 
-Built (on macOS on 2026-10-04, `cargo test` ran 240 tests: 231 unit, 9
+Built (on macOS on 2026-10-04, `cargo test` ran 242 tests: 233 unit, 9
 against the built binary, and 3 ignored. On Linux on 2026-10-05 it ran 217: 208 unit, 9
 against the built binary; 4 more are ignored by default: one lists Drive
 through the real CLI, two reach a Secret Service and run in
@@ -462,7 +462,14 @@ missing ones:
   `keyed_digests_still_compare` in `src/privacy/pipeline.rs`, with the
   claim in upper-case hex; and `digests_are_keyed` in
   `src/privacy/ident.rs`, where another key or another algorithm gives
-  another keyed digest.
+  another keyed digest. B24 (built 2026-10-04): a 40- or 64-hex digest
+  and a Proton message ID written in free text become a keyed digest
+  and a message handle, and a longer run of either is left alone. Built:
+  `digests_and_message_ids_in_text_are_found` in
+  `src/privacy/detect/pattern.rs` and
+  `digests_and_message_ids_in_text_are_rewritten` in
+  `src/privacy/pipeline.rs`, each shown to fail with the two patterns
+  matching nothing.
 - Canonical values: case, diacritics, honorifics and "Last, First" forms
   give one alias; canonicalizing twice changes nothing (property test). And
   the other way: names that differ only by a Devanagari or Thai mark, "M.
