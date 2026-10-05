@@ -566,7 +566,7 @@ missing ones:
   test binary again with a throwaway home and temporary folder, makes
   every call, and fails on a new file in either or on anything left in
   the memory folder after a call. It allows the Drive CLI's lock file
-  while the file is empty ([#26](https://github.com/matt-w-horn/protonctl/issues/26)). It
+  while the file is empty, and it stays in the cache folder (Q37). It
   does not watch the folders a reader finds through the system: on
   Linux the readers can write only to `/dev/null` (Landlock), and on macOS they run
   unconfined until Phase 4.

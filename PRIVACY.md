@@ -79,6 +79,7 @@ setting does not change results that Claude already has.
 | In off mode: files that `download_file` saves, and mail attachments that are neither text nor an image | a private folder for each server process, under `~/Library/Caches/protonctl/downloads/` | each is removed after an hour; the folder is removed when the server stops |
 | In off mode: files that you export (`export: true`, and `export_drive_manifest`) | the export folder, if you set one ([README](README.md#export-folder)) | until you delete them |
 | In aliases mode: Drive files that are only in the cloud, while protonctl reads them | a RAM disk that protonctl makes for itself, under `~/Library/Caches/protonctl/memory/` | each file is deleted once read; the RAM disk is removed when the process exits |
+| An empty lock file, which stops two protonctl processes from running Proton's Drive command-line tool at once; it holds nothing | `~/Library/Caches/protonctl/cli.lock` | until you delete it |
 | Files that you save with the commands `protonctl drive get` and `protonctl mail attachment` | the folder that `--out` names, or else the current folder | until you delete them |
 | The signing identity that `scripts/install.sh` makes: a certificate named `protonctl`, and its key | the login keychain | until you delete it |
 
