@@ -482,7 +482,12 @@ async fn repin_drive_cli(mut set: config::DriveConfig) -> Result<Value> {
     set.cli_sha256 = Some(found);
     let version = drive::cli::Cli::new(Some(&set)).check().await?;
     config::set_cli_pin(found)?;
-    Ok(json!({ "cli": path, "cliVersion": version, "cliSha256": found }))
+    Ok(json!({
+        "cli": path,
+        "cliVersion": version,
+        "cliSha256": found,
+        "next": "restart Claude Code and Claude Desktop so their servers use this pin",
+    }))
 }
 
 /// Pin Bridge's certificate on first contact, prove the login works, then

@@ -130,14 +130,16 @@ fn signed_by_proton(cli: &Path) -> Result<()> {
 fn matches_pin(cli: &Path, pin: Option<Sha256>) -> Result<()> {
     let Some(pin) = pin else {
         bail!(
-            "no SHA-256 is pinned for the Proton Drive CLI (cli_sha256 in [drive]); run `protonctl setup drive`"
+            "no SHA-256 is pinned for the Proton Drive CLI (cli_sha256 in [drive]); run \
+             `protonctl setup drive`, then restart Claude Code and Claude Desktop"
         );
     };
     let found = Sha256::of_file(cli)?;
     if found != pin {
         bail!(
             "{} has SHA-256 {found}, not the {pin} pinned at setup; if you updated the CLI \
-             from Proton, run `protonctl setup drive` to pin the new one",
+             from Proton, run `protonctl setup drive` to pin the new one, then restart \
+             Claude Code and Claude Desktop, whose servers keep the pin they started with",
             cli.display()
         );
     }
