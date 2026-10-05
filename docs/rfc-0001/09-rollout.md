@@ -163,9 +163,12 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
   synthetic mail search and events and on real Drive results; the policy
   coverage runs over every tool's results except `list_calendars` and
   `get_status`, which are checked through aliases mode instead. The leak
-  test over every tool is not built ([docs/todo.md](../todo.md), T1). No
-  input is known to make a stage panic, so the panic path to
-  `pipeline_failed` has no test ([docs/todo.md](../todo.md), T3).
+  test over every tool is not built ([docs/todo.md](../todo.md), T1). The
+  panic path to `pipeline_failed` is tested with a panic that test builds
+  plant in the rewrite stage. Building that test found a real one: text
+  shaped like an IBAN with a digit from another script panicked the
+  detectors, and so failed the whole result; the IBAN pattern now takes
+  ASCII digits only (2026-10-05).
 - M2.5 Inputs: `messageId`, `threadId`, `eventId`, `fileId` and
   `pageToken` take handles; name and address parameters take `ref`s;
   exclusions checked on each decrypted path. Exit: tampered handles and

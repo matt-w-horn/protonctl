@@ -180,9 +180,11 @@ flowchart TB
 - zbus's blocking calls start their own runtime, which tokio forbids on a
   thread running async code, so each call runs on a short-lived thread of
   its own.
-- A locked collection is unlocked through the desktop's prompt. With no
-  Secret Service running, every call fails with a message naming Q31, and
-  nothing is written to a file.
+- A locked collection is unlocked through the desktop's prompt, for a
+  write as for a read. When no prompt can show, as with no display, every
+  call fails at once ("prompt dismissed"), so a call answers
+  `privacy_mode_unreadable`. With no Secret Service running, every call
+  fails with a message naming Q31, and nothing is written to a file.
 - `scripts/check.sh` tests the store against a throwaway GNOME Keyring in
   a private D-Bus session, so the user's keyring is never touched; other
   unit tests refuse to reach any service but `protonctl-test`.

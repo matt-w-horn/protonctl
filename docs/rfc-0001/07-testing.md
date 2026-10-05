@@ -425,13 +425,18 @@ missing ones:
   T1).
 - Stability: the corpus, run in two processes under one key, gives the same
   aliases, references, handles and keyed digests; under another key, all
-  of them differ. Built in one process:
-  `aliases_are_stable_words_and_names_share_a_class` in
-  `src/privacy/ident.rs` and `subkeys_differ_and_are_stable` in
-  `src/privacy/key.rs`, each also under another key, and
+  of them differ. Built:
+  `identifiers_are_stable_under_one_key_and_all_differ_under_another` in
+  `src/privacy/pipeline.rs` runs a corpus of five results holding 19
+  kinds of identifier (an alias of each entity type, refs, each kind of
+  handle, page tokens and keyed digests) under keys derived again from the
+  same bytes, then in a second process that the test starts, and then
+  under another key, where none of the first run's identifiers appears.
+  At the parts: `aliases_are_stable_words_and_names_share_a_class` in
+  `src/privacy/ident.rs`, `subkeys_differ_and_are_stable` in
+  `src/privacy/key.rs`, and
   `the_same_value_has_the_same_alias_in_every_result` in
-  `src/privacy/pipeline.rs`. Two processes: not built
-  ([docs/todo.md](../todo.md), T4).
+  `src/privacy/pipeline.rs`.
 - Round trips: property tests that any value's `ref` decrypts to that value
   and any ID's handle to that ID, and that a changed byte, a foreign key or
   garbage is refused (R15, R16). Built with fixed values, not as property
@@ -455,9 +460,11 @@ missing ones:
   ([docs/todo.md](../todo.md), T16).
 - Collisions: with a word list of 4 words, two and three entities that
   share an alias in one result all get distinct aliases, in an order that
-  does not depend on the order of the input. Not built: the word list
-  cannot be swapped for a small one today ([docs/todo.md](../todo.md),
-  T5).
+  does not depend on the order of the input. Built:
+  `entities_sharing_three_words_get_distinct_aliases_in_any_order` in
+  `src/privacy/pipeline.rs` finds two addresses and three addresses that
+  share their first three words under a 4-word list, which test builds put
+  in place with `words::with_list`, and runs all five in ten orders.
 - Size: a result whose `entities` table holds 500 URLs stays under Claude
   Code's 25,000-token limit, its page shortened to fit. Replaced as built:
   URLs get no entity (Q19), and a result over the cap of 90,000
@@ -473,9 +480,14 @@ missing ones:
   `src/privacy/pipeline.rs`. Every error of every tool, and page tokens:
   not built ([docs/todo.md](../todo.md), T9).
 - Fail closed: a pipeline stage made to fail returns an error with none of
-  the planted values. Not built ([docs/todo.md](../todo.md), T3);
-  `Server::call` in `src/serve.rs` turns a stage's error or panic into
-  `pipeline_failed`.
+  the planted values. Built: in test builds, text holding
+  `pipeline::PLANTED_PANIC` panics the rewrite stage, after the names and
+  register stages have run, and
+  `a_pipeline_stage_that_panics_fails_closed` in `src/serve.rs` reads a
+  file holding it with an address and a phone number: the result is
+  exactly `pipeline_failed`, with none of them. A panic before the
+  pipeline, in the operation, is answered with `internal`
+  (`an_operation_that_panics_in_aliases_mode_is_answered`).
 - Page edges (built 2026-10-04, after the first live aliases-mode run): a
   file holding an address and a phone number, read 16 characters at a
   time in aliases mode, returns neither in part, and its last words
@@ -489,7 +501,10 @@ missing ones:
   aliases on its next call, and refuses the old handles. Built at the key:
   `a_rotated_key_is_picked_up_on_the_next_call` and
   `a_key_read_between_its_two_writes_is_used` in `src/privacy/key.rs`. At
-  the server: not built ([docs/todo.md](../todo.md), T6).
+  the server: `a_rotated_key_gives_new_aliases_and_refuses_old_handles`
+  in `src/serve.rs` lists and reads a file, changes the key under the
+  running server, and expects the new key's alias, a new `fileId`, and
+  the old `fileId` and ref refused.
 - Names in queries: a typed name is plaintext in that call's result and an
   alias in the next call's. As built, the result shows the typed name as
   its alias too, paired with it in `queryEntities`;
@@ -574,19 +589,24 @@ missing ones:
   are not checked ([docs/todo.md](../todo.md), T18); `--reveal` comes
   with Phase 3.
 
+R1 is tested for both services that reach the account. The stand-in
+`proton-drive` in `src/drive/mod.rs` and `tests/convert.rs` answers only
+the four calls protonctl makes, `filesystem list`, `filesystem info`,
+`filesystem download` and `--version`, in their exact shapes; any other
+call fails and is recorded, and the test fails on the record when it
+ends, even when the code went on past the failure. For Mail, R1 rests on
+the commands sent: mailboxes opened with EXAMINE, never SELECT, and bodies
+fetched with `BODY.PEEK`, which sets no `\Seen` flag. The scripted
+Bridge's test ends by checking every command it received against LOGIN,
+LIST, EXAMINE, STATUS, UID SEARCH, UID FETCH and LOGOUT, with no fetch of
+`BODY[` or an `RFC822` item; `commands_that_can_change_the_account_are_refused`
+in `src/mail/read.rs` pins that the check refuses the others.
+
 Not built, each in [docs/todo.md](../todo.md): a hermetic IMAP test
 against Dovecot in podman seeded with a synthetic Bridge-shaped mailbox
-(T11); a fake `proton-drive` that serves fixtures and
-fails the test on any call but `filesystem list`, `filesystem info`,
-`filesystem download` and `--version`, the four protonctl makes today,
-which guards R1 for Drive (T10); an optional prompt-injection
-drill (about 5 Claude runs), extended to check that injected text gets no
-raw content without Touch ID, and sends nothing out through the host's
-other tools (T12). For Mail, R1 rests on the commands sent: mailboxes opened
-with EXAMINE, never SELECT, and bodies fetched with `BODY.PEEK`, which sets
-no `\Seen` flag. The scripted Bridge's snapshots pin every command today;
-a test that refuses any IMAP verb outside LOGIN, LIST, EXAMINE, STATUS,
-UID SEARCH, UID FETCH and LOGOUT would state it, and is not built (T10).
+(T11); an optional prompt-injection drill (about 5 Claude runs), extended
+to check that injected text gets no raw content without Touch ID, and
+sends nothing out through the host's other tools (T12).
 The sandbox-only live write tests are withdrawn with the writes.
 
 ---

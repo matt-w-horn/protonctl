@@ -40,10 +40,12 @@ maintainer.
   was cut short or paged, and
   [section 6](rfc-0001/06-privacy.md#guidance) gives its text; no code
   adds it.
-
-- B6 (here) Creating a Secret Service item never unlocks a locked
-  collection, so a first `setup` fails with IsLocked instead of showing
-  the unlock prompt.
+- B23 (here) In aliases mode, a phone or card number written in another
+  script's digits passes raw: "+١ ٤١٥ ٥٥٥ ٠١٢٣" and "٤١١١ ١١١١ ١١١١ ١١١١"
+  (Arabic-Indic) are not found, while their ASCII forms are. `phone` in
+  `src/privacy/detect/pattern.rs` counts ASCII digits only, and the card
+  check reads digits with `char::to_digit`, which is ASCII only. An SSN in
+  such digits is found. A fix needs each script's digit values.
 
 ## Documentation that states something wrong
 
@@ -66,27 +68,14 @@ maintainer.
 - T1 (here) A leak test over every tool with a planted corpus; today one
   covers mail search, events and the Drive listing.
 - T2 (here) A test that calls every tool through the server (I9).
-- T3 (here) The fail-closed path: a pipeline panic becomes
-  `pipeline_failed`.
-- T4 (here) Aliases stable across two processes under one key, and
-  different under another.
-- T5 (here) Alias collisions, which need a word list small enough to
-  collide; the list cannot be swapped in today.
-- T6 (here) Key rotation at the server: new aliases, old handles refused.
 - T7 (here) No new file anywhere in the home folder after every tool runs
   in aliases mode.
 - T8 (here) No image, embedded resource or file bytes from any tool in
   aliases mode (R22).
 - T9 (here) Errors and page tokens carry no name, path or UID in any
   encoding.
-- T10 (here) The read-only guarantee (R1): a stand-in Drive CLI that fails
-  on any call but the four protonctl makes, and a test that refuses any
-  IMAP command outside LOGIN, LIST, EXAMINE, STATUS, UID SEARCH, UID FETCH
-  and LOGOUT.
 - T11 (here, larger) A hermetic IMAP test against Dovecot in podman.
 - T12 (later) A prompt-injection drill, about 5 Claude runs.
-- T13 (here) A locked Secret Service collection: what a read does when the
-  unlock prompt cannot be shown. The tests always run unlocked.
 - T14 (not testable here) The x32 seccomp rule, which needs unsafe code or
   a kernel built with x32; and that secrets are wiped on drop (R2), which
   needs a look at freed memory.
@@ -207,8 +196,16 @@ M2.1 recorded no check of this. Confirm it before M4 deletes the item.
 - L2 MP3's live check: Drive through the real CLI, signed in.
 - L3 Whether Claude Desktop's Linux beta loads local MCP servers, and how
   Cowork's VM reaches them (section 11).
-- L4 What a call does when the keyring locks while a server runs, since
-  every call reads the privacy setting.
+- L4 A locked keyring with the unlock prompt on screen. Without a display,
+  every read fails at once (`a_locked_keyring_fails_at_once_without_a_prompt`
+  in `src/platform/linux.rs`). With one, a read waits until the prompt is
+  answered: under a virtual display, one was still waiting at 60 s. A
+  call answers `timeout` at its 150 s, though its read waits on; the
+  server's read of the privacy setting at start (`Privacy::stored`, from `App::load` in
+  `src/main.rs`) has no limit, so the server answers nothing until then.
+  Check what Claude Code and Claude Desktop do with a server that waits
+  so at start, and whether a first `setup` shows the prompt; then decide
+  whether the start-up read needs a limit.
 - L5 Bridge's install path, which the README's unit file names.
 - L6 (any system) Whether the Drive CLI wants a backslash inside a name
   escaped (Appendix A).
