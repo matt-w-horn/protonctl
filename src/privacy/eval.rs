@@ -172,6 +172,13 @@ const CASES: &[Case] = &[
         true,
     ),
     case(
+        "organization short name",
+        "organization",
+        "Acme Billing",
+        "Acme",
+        true,
+    ),
+    case(
         "organization never in mail",
         "organization",
         "Globex Corporation",
@@ -215,7 +222,8 @@ fn address(full: &str) -> String {
     }
 }
 
-/// What the process knows (RFC Q22): every correspondent's display name.
+/// What the process knows (RFC Q22): every correspondent's display name,
+/// with their address.
 fn process_names() -> Names {
     Names::people(
         [
@@ -229,7 +237,7 @@ fn process_names() -> Names {
             "Notely",
             "Sam Okafor",
         ]
-        .map(String::from),
+        .map(|n| (n.to_string(), Some(address(n)))),
     )
 }
 

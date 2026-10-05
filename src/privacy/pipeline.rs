@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 use serde::Serialize;
 
 use super::canon;
-use super::detect::dict::{Dictionary, Names};
+use super::detect::dict::{Dictionary, Names, display_name_type};
 use super::detect::{self, Detector, Form, Kind, Mention, pattern};
 use super::fields::{Policy, policy};
 use super::ident::{AliasClass, EntityType, ItemKind};
@@ -255,17 +255,20 @@ impl Registry {
         (!canonical.is_empty()).then(|| (t.class(), canonical))
     }
 
+    /// An entity's first mention gives its type, except that a name seen
+    /// as an organization's anywhere in the result is one (D7): a header's
+    /// address can show it where the text cannot.
     fn add(&mut self, t: EntityType, raw: &str, role: Role) -> Option<EntityKey> {
         let key = Self::key(t, raw)?;
-        self.entities
-            .entry(key.clone())
-            .or_insert_with(|| Entity {
-                t,
-                roles: BTreeSet::new(),
-                emails: BTreeSet::new(),
-            })
-            .roles
-            .insert(role);
+        let e = self.entities.entry(key.clone()).or_insert_with(|| Entity {
+            t,
+            roles: BTreeSet::new(),
+            emails: BTreeSet::new(),
+        });
+        if e.t == EntityType::Person && t == EntityType::Organization {
+            e.t = t;
+        }
+        e.roles.insert(role);
         Some(key)
     }
 
@@ -555,8 +558,8 @@ impl State<'_> {
         match self.stage {
             Stage::Names => {
                 if has_name {
-                    self.names.add(name, EntityType::Person);
-                    self.local.add(name, EntityType::Person);
+                    self.names.add_sender(name, has_email.then_some(email));
+                    self.local.add_sender(name, has_email.then_some(email));
                 }
                 if has_email {
                     self.names.add_address(email);
@@ -567,8 +570,9 @@ impl State<'_> {
                 let e = has_email
                     .then(|| self.reg.add(EntityType::Email, email, role))
                     .flatten();
+                let t = display_name_type(name, has_email.then_some(email));
                 if has_name
-                    && let Some(p) = self.reg.add(EntityType::Person, name, role)
+                    && let Some(p) = self.reg.add(t, name, role)
                     && let Some(e) = e
                 {
                     self.reg
@@ -755,8 +759,8 @@ fn person_object(
     match st.stage {
         Stage::Names => {
             if let Some(n) = &name {
-                st.names.add(n, EntityType::Person);
-                st.local.add(n, EntityType::Person);
+                st.names.add_sender(n, email.as_deref());
+                st.local.add_sender(n, email.as_deref());
             }
             if let Some(e) = &email {
                 st.names.add_address(e);
@@ -768,7 +772,7 @@ fn person_object(
                 .and_then(|e| st.reg.add(EntityType::Email, e, role));
             if let Some(p) = name
                 .as_deref()
-                .and_then(|n| st.reg.add(EntityType::Person, n, role))
+                .and_then(|n| st.reg.add(display_name_type(n, email.as_deref()), n, role))
                 && let Some(e) = e
             {
                 st.reg
@@ -830,7 +834,7 @@ fn hints(e: &Entity, key: &EntityKey, you: Option<&str>) -> Vec<Hint> {
         .collect();
     let email = match e.t {
         EntityType::Email => Some(key.1.clone()),
-        EntityType::Person => e.emails.iter().next().cloned(),
+        EntityType::Person | EntityType::Organization => e.emails.iter().next().cloned(),
         _ => None,
     };
     let domain = match e.t {
@@ -1602,7 +1606,7 @@ mod tests {
             "to": ["John Lee <john@lee-family.example>"],
             "body": "Ruiz agreed, as did «DR». «Lee» and «Raman» too.",
         } });
-        let names = Names::people(["Jane Lee", "Priya Raman"].map(String::from));
+        let names = Names::people(["Jane Lee", "Priya Raman"].map(|n| (n.to_string(), None)));
         let out = run_as(Tool::GetMessage, None, &names, v);
         let alias_of = |header: &str| -> String { header.split_once(" <").unwrap().0.to_string() };
         let dana = alias_of(out["message"]["from"].as_str().unwrap());
@@ -1776,7 +1780,7 @@ mod tests {
             .flat_map(|f| LAST.iter().map(move |l| format!("{f} {l}")))
             .collect();
         assert_eq!(people.len(), 5_000);
-        let names = Names::people(people.clone());
+        let names = Names::people(people.iter().map(|n| (n.clone(), None)));
         let ctx = Context {
             tool: Tool::ReadFileContent,
             query: None,

@@ -31,7 +31,7 @@ use crate::drive::{
     TreeReq,
 };
 use crate::mail::read::{AttachmentReq, CountMessagesReq, MessageReq, SearchThreadsReq, ThreadReq};
-use crate::privacy::detect::{self, dict::Dictionary, dict::Names};
+use crate::privacy::detect::{self, dict::Correspondents, dict::Dictionary, dict::Names};
 use crate::privacy::error::{Param, Service};
 use crate::privacy::ident::{ItemKind, TokenKind, Unopened};
 use crate::privacy::key::Keys;
@@ -359,7 +359,7 @@ impl Server {
     /// sources that could not be read whole. Both sources are read at once,
     /// each within `PEOPLE_LIMIT`; a source cut short keeps what it read.
     async fn people(&self) -> (Names, Vec<NameSource>) {
-        let read = |r: Option<(Vec<String>, bool)>| match r {
+        let read = |r: Option<(Correspondents, bool)>| match r {
             Some((names, complete)) => (Names::people(names), complete),
             None => (Names::default(), false),
         };

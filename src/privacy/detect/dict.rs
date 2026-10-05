@@ -13,9 +13,20 @@ use crate::privacy::canon;
 use crate::privacy::ident::{AliasClass, EntityType};
 use crate::privacy::words;
 
-/// Names to look for, each with its type.
+/// Display names, each with the address it came with: the process
+/// dictionary's sources (RFC Q22).
+pub type Correspondents = Vec<(String, Option<String>)>;
+
+/// Names to look for, each with its type, and the short forms of the
+/// organizations among them.
 #[derive(Debug, Default, Clone)]
-pub struct Names(Vec<(String, EntityType)>);
+pub struct Names {
+    names: Vec<(String, EntityType)>,
+    /// An organization's short form beside its full name: the word that
+    /// begins the name and is its address's domain ("Acme" for "Acme
+    /// Billing" at acme.example).
+    organization_forms: Vec<(String, String)>,
+}
 
 impl Names {
     /// Add a name, unless it is too short or has no letter to be one: "Me"
@@ -29,23 +40,25 @@ impl Names {
             3
         };
         if text.chars().count() >= least && text.chars().any(char::is_alphabetic) {
-            self.0.push((text.to_string(), t));
+            self.names.push((text.to_string(), t));
         }
     }
 
-    /// Display names from mail and calendars, as people (RFC Q22). An
-    /// address given as its own name is left to the address detector, and a
-    /// one-word name on the alias word list ("Support", "Security") is left
-    /// out, or every use of the word would become an alias. The list is not
-    /// every common word: "Notifications" or "Admin" still joins.
-    pub fn people(names: impl IntoIterator<Item = String>) -> Self {
+    /// Display names from mail and calendars, each with the address it came
+    /// with, typed person or organization by `display_name_type` (RFC Q22).
+    /// An address given as its own name is left to the address detector,
+    /// and a one-word name on the alias word list ("Support", "Security")
+    /// is left out, or every use of the word would become an alias. The
+    /// list is not every common word: "Notifications" or "Admin" still
+    /// joins.
+    pub fn people(names: impl IntoIterator<Item = (String, Option<String>)>) -> Self {
         let mut out = Self::default();
-        for name in names {
+        for (name, email) in names {
             let name = name.trim();
             let common =
                 !name.contains(char::is_whitespace) && words::contains(&name.to_lowercase());
             if !common && !name.contains('@') {
-                out.add(name, EntityType::Person);
+                out.add_sender(name, email.as_deref());
             }
         }
         out
@@ -61,11 +74,82 @@ impl Names {
     }
 
     pub fn extend(&mut self, other: &Self) {
-        self.0.extend(other.0.iter().cloned());
+        self.names.extend(other.names.iter().cloned());
+        self.organization_forms
+            .extend(other.organization_forms.iter().cloned());
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &(String, EntityType)> {
-        self.0.iter()
+        self.names.iter()
+    }
+
+    /// A display name from a header, typed by the address it came with
+    /// (`display_name_type`), with an organization's short form.
+    pub fn add_sender(&mut self, name: &str, email: Option<&str>) {
+        let name = name.trim();
+        self.add(name, display_name_type(name, email));
+        if let Some(word) = domain_word(name, email).filter(|w| *w != name && usable(w)) {
+            self.organization_forms
+                .push((word.to_string(), name.to_string()));
+        }
+    }
+}
+
+/// The label of a domain that names who holds it: "github" in
+/// notifications.github.com, "acme" in acme.co.uk.
+fn holder(domain: &str) -> &str {
+    let labels: Vec<&str> = domain.split('.').filter(|l| !l.is_empty()).collect();
+    match labels.as_slice() {
+        [.., third, second, top]
+            if top.len() == 2
+                && ["co", "com", "org", "net", "ac", "gov", "edu"].contains(second) =>
+        {
+            third
+        }
+        [.., second, _] => second,
+        [only] => only,
+        [] => "",
+    }
+}
+
+/// The word of a display name that is its address's domain holder: the
+/// whole name, compared without spaces or punctuation, or its first word
+/// ("GitHub" from github.com, "Acme" in "Acme Billing" from acme.example).
+fn domain_word<'a>(name: &'a str, email: Option<&str>) -> Option<&'a str> {
+    let compact = |s: &str| -> String {
+        s.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let domain = email?.rsplit_once('@')?.1.to_lowercase();
+    let held = compact(holder(&domain));
+    if held.chars().count() < 3 {
+        return None;
+    }
+    let name = name.trim();
+    if compact(name) == held {
+        return Some(name);
+    }
+    let first = name
+        .split_whitespace()
+        .next()?
+        .trim_matches(|c: char| !c.is_alphanumeric());
+    (compact(first) == held).then_some(first)
+}
+
+/// Whether a display name, with the address it came with, is an
+/// organization's or a product's rather than a person's (D7): it names
+/// its own address's domain, whole or as its first word. The rule needs
+/// no list of words to keep up. A sender it misses stays `person` until
+/// Phase 5's model types it; that changes the type the `entities` table
+/// shows, never the alias, since people and organizations share an alias
+/// class (Q19).
+pub fn display_name_type(name: &str, email: Option<&str>) -> EntityType {
+    if domain_word(name, email).is_some() {
+        EntityType::Organization
+    } else {
+        EntityType::Person
     }
 }
 
@@ -332,7 +416,7 @@ impl Dictionary {
         // By folded text: a name as written wins over a form of another
         // name, and one form of several names stands for all of them.
         let mut by_text: BTreeMap<String, Entry> = BTreeMap::new();
-        for (name, t) in &names.0 {
+        for (name, t) in &names.names {
             by_text.entry(folded(name).0).or_insert_with(|| Entry {
                 text: name.clone(),
                 t: *t,
@@ -342,17 +426,23 @@ impl Dictionary {
             });
         }
         let forms = names
-            .0
+            .names
             .iter()
             .filter(|(_, t)| *t == EntityType::Person)
-            .flat_map(|(n, t)| short_forms(n).into_iter().map(move |f| (n, *t, f, false)));
+            .flat_map(|(n, t)| short_forms(n).into_iter().map(move |f| (n, *t, f, false)))
+            .chain(
+                names
+                    .organization_forms
+                    .iter()
+                    .map(|(f, n)| (n, EntityType::Organization, f.clone(), false)),
+            );
         let capitals = local
-            .0
+            .names
             .iter()
             .filter(|(_, t)| *t == EntityType::Person)
             .flat_map(|(n, t)| initials(n).into_iter().map(move |f| (n, *t, f, true)));
         for (full, t, text, capitals) in forms.chain(capitals) {
-            let is_local = local.0.iter().any(|(n, _)| n == full);
+            let is_local = local.names.iter().any(|(n, _)| n == full);
             let entry = by_text.entry(folded(&text).0).or_insert_with(|| Entry {
                 text,
                 t,
@@ -371,7 +461,7 @@ impl Dictionary {
         }
         let mut near = Vec::new();
         let mut near_index: HashMap<(usize, char), Vec<usize>> = HashMap::new();
-        for (full, t) in &names.0 {
+        for (full, t) in &names.names {
             let p = parts(full);
             let letters: usize = p.iter().map(|w| w.chars().count()).sum();
             if *t != EntityType::Person || !(2..=3).contains(&p.len()) || letters < 6 {
@@ -533,7 +623,7 @@ impl Dictionary {
 mod tests {
     use super::*;
 
-    /// RFC Q22: display names join as people, but not a common word or an address.
+    /// RFC Q22: display names join, but not a common word or an address.
     #[test]
     fn display_names_join_unless_a_common_word_or_an_address() {
         let names = Names::people(
@@ -544,11 +634,50 @@ mod tests {
                 "Okonkwo",
                 "dana@ruiz-events.example",
             ]
-            .map(String::from),
+            .map(|n| (n.to_string(), None)),
         );
-        let kept: Vec<&str> = names.0.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(kept, ["Dana Ruiz", "Billing Team", "Okonkwo"]);
-        assert!(names.0.iter().all(|(_, t)| *t == EntityType::Person));
+        let kept: Vec<(&str, EntityType)> =
+            names.names.iter().map(|(n, t)| (n.as_str(), *t)).collect();
+        assert_eq!(
+            kept,
+            [
+                ("Dana Ruiz", EntityType::Person),
+                ("Billing Team", EntityType::Person),
+                ("Okonkwo", EntityType::Person),
+            ]
+        );
+    }
+
+    /// B20 (D7): a sender that is an organization or a product is typed so
+    /// when its name is its own address's domain, whole or as its first
+    /// word, and that word is its short form; any other sender is a person,
+    /// one whose address is at a domain named for them too.
+    #[test]
+    fn organizations_that_send_mail_are_typed_organization() {
+        use EntityType::{Organization, Person};
+        for (name, email, t) in [
+            ("Acme Billing", Some("billing@acme.example"), Organization),
+            ("GitHub", Some("notifications@github.com"), Organization),
+            ("Notely", Some("no-reply@notely.example"), Organization),
+            ("Globex", Some("hi@mail.globex.co.uk"), Organization),
+            ("Dana Ruiz", Some("dana@ruiz-events.example"), Person),
+            ("John Smith", Some("john@smith.example"), Person),
+            ("Okonkwo", Some("info@okonkwo-law.example"), Person),
+            ("Initech, LLC", None, Person),
+        ] {
+            assert_eq!(display_name_type(name, email), t, "{name} {email:?}");
+        }
+        assert_eq!(
+            domain_word("Acme Billing", Some("billing@acme.example")),
+            Some("Acme")
+        );
+        let mut names = Names::default();
+        names.add_sender("Acme Billing", Some("billing@acme.example"));
+        names.add_sender("GitHub", Some("noreply@github.com"));
+        assert_eq!(
+            names.organization_forms,
+            [("Acme".to_string(), "Acme Billing".to_string())]
+        );
     }
 
     #[test]
