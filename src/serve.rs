@@ -102,7 +102,8 @@ const CALL_LIMIT: Duration = Duration::from_secs(150);
 /// data.
 async fn answered<R>(call: impl Future<Output = Result<R>>) -> Result<R> {
     use futures::FutureExt as _;
-    AssertUnwindSafe(call)
+    // Boxed, so every tool's answer does not carry the operation's state.
+    AssertUnwindSafe(Box::pin(call))
         .catch_unwind()
         .await
         .unwrap_or_else(|_| {
@@ -1065,10 +1066,12 @@ mod tests {
     #[tokio::test]
     async fn a_call_that_panics_is_still_answered() {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        // Always panics, with a message that quotes data.
         let call = async {
-            if deadline > tokio::time::Instant::now() {
-                panic!("planted: jane.doe@example.com");
-            }
+            assert!(
+                deadline <= tokio::time::Instant::now(),
+                "planted: jane.doe@example.com"
+            );
             Ok(serde_json::json!({}))
         };
         let out = reply::<Value>(deadline, call).await.unwrap();
