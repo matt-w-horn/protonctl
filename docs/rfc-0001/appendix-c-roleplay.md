@@ -82,7 +82,8 @@ How each run referred to people:
 
 Limits of this test: one run per cell, synthetic data written for the
 test, and Phase 5 tokenization assumed. M2.10's live check repeats it on
-real results in aliases mode.
+real results in aliases mode; that repeat has not run
+([docs/todo.md](../todo.md), M3).
 
 ## First real results (2026-10-04)
 
@@ -92,7 +93,7 @@ initials and a company that never sent mail came back raw; one person had
 two aliases; employers and services that send mail came back as person
 aliases, which hides what they are; and project names were not touched.
 OCR errors and misspellings are expected to pass too. These are defects
-D1 to D7 in [section 9](09-rollout.md#phase-2-defects-found-on-real-results-to-fix),
+D1 to D7 in [section 9](09-rollout.md#phase-2-defects-found-on-real-results),
 with the evaluation (D1) to measure them.
 
 ---

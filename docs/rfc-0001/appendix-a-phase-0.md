@@ -89,7 +89,8 @@ keys, types and sizes only:
   `/my-files` plus the same path (*live check*: three files fetched this
   way). `realpath(3)` returns names as stored, case and Unicode normalization
   included, so the resolved path carries the exact names. Whether the CLI
-  wants a backslash inside a name escaped is untested.
+  wants a backslash inside a name escaped is not tested
+  ([docs/todo.md](../todo.md), L6).
 - `-j` must follow the subcommand (`filesystem list -j PATH`); before it, the
   CLI prints usage and exits 1.
 - `list` prints an array of nodes and `info` one node: `uid`, `parentUid`,

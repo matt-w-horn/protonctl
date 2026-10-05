@@ -271,7 +271,7 @@ sequenceDiagram
 From Phase 2 until Phase 4, a scan or an image has no text to give, and
 `reveal_*` returns no images, so neither is readable through protonctl.
 Whether a reveal may return page images after Touch ID, as raw text is
-returned, is left to Phase 3.
+returned, is not decided ([docs/todo.md](../todo.md), Decisions).
 
 ### Guidance
 
@@ -295,7 +295,8 @@ Each line is under 200 characters:
 The helpers run with an empty environment, so they find the real home and
 per-user temporary folders through the system rather than `HOME` or
 `TMPDIR`; whether they write anything there is what the no-disk test
-watches ([section 7](07-testing.md)). Proton's own clients keep their caches (Bridge's
+watches ([section 7](07-testing.md)), which is not built
+([docs/todo.md](../todo.md), T7). Proton's own clients keep their caches (Bridge's
 encrypted store, the Drive app's folder, the CLI's cache), and the hosts
 keep their transcripts and logs ([section 5](05-security.md)); R10 covers neither.
 

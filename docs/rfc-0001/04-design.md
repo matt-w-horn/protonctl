@@ -65,6 +65,9 @@ presence (R18, R19).
 protonctl serve                                   MCP over stdio
 protonctl setup calendar --id ID [--name NAME]    share link on stdin; stored in the Keychain
 protonctl setup mail --address USER [--port N]    Bridge password on stdin; pins Bridge's certificate
+protonctl setup drive [--folder DIR] [--cli PATH] checks the Drive CLI and its sign-in; writes [drive]
+protonctl setup privacy [--off]                   sets the mode; without --off, makes the privacy key if there is none
+protonctl rotate-key                              replaces the privacy key; asks on a terminal
 protonctl doctor                                  check every service; exit 1 if any fails
 protonctl status                                  what protonctl reaches and every secret it holds
 protonctl logout                                  delete protonctl's Keychain items; print Proton-side revoke steps
@@ -75,14 +78,10 @@ protonctl mail attachment MESSAGE_ID INDEX [--out DIR]
 ```
 
 Output is JSON on stdout; logs go to stderr. Exit codes: 0 success, 1 failure,
-2 usage error. Writes are no longer planned. Still to build:
-`protonctl setup privacy` (makes the privacy key if there is none and sets
-the mode to aliases, R20, R26), `protonctl setup privacy --off`,
-`protonctl setup drive`, `protonctl rotate-key`, and `--raw` on every
-command that prints content in aliases mode (R19). `logout` will also
-delete the privacy key, after which no old reference or handle resolves;
-whether it keeps the key unless asked, so that aliases survive a sign-out
-and setup, is settled in M2.1.
+2 usage error. Writes are no longer planned. `logout` also deletes the
+privacy key and the setting, after which no old reference or handle
+resolves. `--raw` on every command that prints content in aliases mode
+(R19) is not built (Phase 3).
 
 ## Settings
 
@@ -119,15 +118,13 @@ flowchart TB
 | What Claude sees | `protonctl setup privacy`, or `protonctl setup privacy --off`; none until one runs | `off` or `aliases`, for every service and host on the machine, kept as the Keychain item `privacy-mode` |
 | What Claude never sees | `[drive] exclude` in the config | Drive paths |
 
-- **Services.** Mail and each calendar are on once set up, as built. Drive
-  is on today whenever the Proton Drive app's folder or the CLI is found
-  (`Drive::new` in `src/drive/mod.rs`), so it is the one service a user
-  cannot leave out, short of excluding `/`. From M1.4,
-  `protonctl setup drive` checks the CLI's signature and sign-in, finds
-  the app's folder and writes a `[drive]` table; Drive is on only when the
-  config has that table. A config that already has one keeps working; one
-  without it loses Drive until `setup drive` runs, and `doctor` and
-  `status` say so.
+- **Services.** Mail and each calendar are on once set up, as built.
+  Since M1.4 (2026-10-04), so is Drive: `protonctl setup drive` checks
+  the CLI (its signature on macOS; on Linux it pins its SHA-256) and its
+  sign-in, finds the app's folder and writes a `[drive]` table, and Drive
+  is on only when the config has that table.
+  A config that already has one keeps working; one without it loses
+  Drive until `setup drive` runs, and `doctor` and `status` say so.
 - **No mode yet (Q27).** Until `setup privacy` or `setup privacy --off`
   runs, every call answers with those two commands and `doctor` fails, on
   a new install and on one upgraded to Phase 2.
@@ -232,11 +229,12 @@ someone deletes them), so they stay on ask, and since M1.6 all three are
 marked `readOnlyHint: false`. The `reveal_*` tools match none of these, so they
 stay on ask; Touch ID gates them either way. Whether Claude Code matches a
 glob inside a tool name, rather than only a whole server or one tool, is
-checked in the Phase 1a Claude Code test (M1.1); if it does not, the rules
-list each tool by name. A rule for the whole server (`mcp__proton`) would
+not checked (M1.1 in [docs/todo.md](../todo.md), Not started); if it
+does not, the rules list each tool by name. A rule for the whole server (`mcp__proton`) would
 also allow `reveal_*`. Setting `_meta["anthropic/requiresUserInteraction"]`
 on `reveal_*` as well would add Claude Code's own prompt on every call;
-whether that second prompt is worth it is left to Phase 3.
+whether that second prompt is worth it is not decided
+([docs/todo.md](../todo.md), Decisions).
 
 ## Results and untrusted content
 

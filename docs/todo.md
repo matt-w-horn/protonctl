@@ -17,6 +17,34 @@ maintainer.
   2026-10-05). A server killed before it exits leaves its folder under
   `$XDG_RUNTIME_DIR` the same way, possibly with a file in it, until
   logout.
+- B2 (here) In aliases mode, short forms of a name pass raw
+  ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D2).
+- B3 (here) In aliases mode, initials pass raw
+  ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D3).
+- B4 (here) In aliases mode, misspelled names pass raw, from typing and
+  from OCR
+  ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D4).
+- B5 (here) In aliases mode, project names pass raw, in text and in Drive
+  paths and names
+  ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D5).
+  Projects need an entity type and a source of names.
+- B6 (here) In aliases mode, one entity gets several aliases
+  ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D6).
+  Forms of one name, one organization or one project should share an
+  alias, or be linked (`maybeSameAs`, M5.2).
+- B7 (here) In aliases mode, organizations and products are typed
+  `person`, or pass raw
+  ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D7).
+- B8 (Mac) A folder made online-only in the Drive app lists as empty, with
+  no note, in both modes
+  ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D8).
+  It should be listed through the CLI, or say that its contents are not
+  on this computer.
+- B9 (here) In aliases mode, `guidance` comes only after a name typed in a
+  query (`src/privacy/pipeline.rs`). R23 also asks for it when a result
+  was cut short or paged, and
+  [section 6](rfc-0001/06-privacy.md#guidance) gives its text; no code
+  adds it.
 
 ## Documentation that states something wrong
 
@@ -39,6 +67,19 @@ maintainer.
   Keychain only.
 - D7 (here) `07-testing.md`: the list of planned privacy-layer tests does
   not say which exist; the counts at the top are from 2026-10-04.
+- D8 (here) `02-requirements.md` R13 and `06-privacy.md` ("Names in the
+  chat") say that a name typed in a query appears as typed in that call's
+  result. As built, every field of the result shows its alias, and the
+  name as typed is only a key of `queryEntities`
+  (`a_name_typed_in_the_query_is_paired_with_its_alias` in
+  `src/privacy/pipeline.rs`).
+- D9 (here) `README.md`, "How it fits together": the diagram's store is
+  the macOS Keychain with the Bridge password and the calendar links only.
+  It lacks the privacy key and setting, and the Secret Service on Linux.
+- D10 (here) `04-design.md`: the components diagram and the MCP tools
+  table name only macOS's readers (PDFKit and `textutil`). On Linux,
+  poppler and pandoc run in `protonctl convert`'s sandbox
+  ([section 11](rfc-0001/11-platforms.md#the-document-readers-as-built-p4)).
 
 ## Tests the RFC plans that do not exist
 
@@ -69,6 +110,28 @@ maintainer.
 - T14 (not testable here) The x32 seccomp rule, which needs unsafe code or
   a kernel built with x32; and that secrets are wiped on drop (R2), which
   needs a look at freed memory.
+- T15 (here) An evaluation of the privacy layer
+  ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D1):
+  run aliases mode over a labeled synthetic corpus that holds each name,
+  organization and project in every form of B2 to B7, and report, per
+  form and per entity type, what came back raw, in part or whole, and
+  what was given two aliases. Each fix of B2 to B7 must move its number.
+- T16 (here) The rest of the identifier tests that section 7 plans:
+  property tests that any value's `ref` and any ID's handle open to that
+  value, and that a changed byte, another key or garbage is refused (R15,
+  R16); the canonical cases with no test (a Thai mark, "M. Chen" and
+  "Mme Chen", "Mr Chen" and "Ms Chen", "John Smith Sr." and "John
+  Smith"); and an intact file's keyed local SHA-1 equal to its keyed
+  claim, with one changed byte making them differ (R17).
+- T17 (here) Tests that `status`, `doctor` and the server's
+  `instructions` name the mode (R26); only `get_status` has one.
+- T18 (here) `scripts/live-check.py` in aliases mode does not check phone
+  numbers, that every `entities` entry has a `ref`, or that a second
+  server run gives the same aliases for the same search, as section 7
+  plans.
+- T19 (here) The pipeline's time on the largest fixture, which the
+  low-level design says M2.4 measures and records. No measurement is
+  recorded.
 
 ## Reviews
 
@@ -152,6 +215,12 @@ among the deleted items. The next call gives `privacy_mode_unset`.
 - Q15: whether a LocalAuthentication prompt appears under each host and
   inside Claude Code's sandbox (Phase 3).
 - Q17: the Claude Code sandbox settings (Phase 3).
+
+### M6. Before M4: the privacy key does not synchronize (R20)
+
+R20 expects the `privacy-key` item not to synchronize, because protonctl
+writes it to the file-based login keychain, which iCloud does not sync.
+M2.1 recorded no check of this. Confirm it before M4 deletes the item.
 
 ## Needs a Linux desktop
 

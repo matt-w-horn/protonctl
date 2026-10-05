@@ -20,7 +20,8 @@ flowchart TB
     Q23{{"Q23"}} -.-> P5
     PP1["Phase P1: builds and tests on Linux"] --> P2
     P1a --> PP1
-    P2 -.-> PP2["Phases P2 to P5: Linux backends,<br/>beside their macOS phases"]
+    P2 -.-> PP2["Phases P2 to P4: Linux backends,<br/>secrets, Drive, readers"]
+    P3 -.-> PP5["Phase P5: user presence<br/>on Linux"]
     subgraph key["key"]
         direction LR
         L1(["done"])
@@ -35,8 +36,8 @@ flowchart TB
     classDef gone fill:#F1F5F9,stroke:#94A3B8,color:#64748B,stroke-dasharray:4 3
     classDef q fill:#FFEDD5,stroke:#EA580C,color:#7C2D12
     class P0,PP1,D2,L1 done
-    class P1a,P2,L2 part
-    class P3,P4,P5,P6,P7,PP2,L3 todo
+    class P1a,P2,PP2,L2 part
+    class P3,P4,P5,P6,P7,PP5,L3 todo
     class P1b,L4 gone
     class Q13,Q15,Q23 q
 ```
@@ -44,15 +45,15 @@ flowchart TB
 | Phase | Contents | State |
 |---|---|---|
 | 0 | Install Bridge, log in, enable All Mail, IMAP over SSL; measure the `--noninteractive` cold start; record `X-Pm-*` headers, UIDPLUS, label-removal semantics on a sandbox message, BODY search on encoded parts; record the CLI's path format, JSON shapes and `fs info` fields; create a dedicated calendar link and note its caching headers. Findings go in [Appendix A](appendix-a-phase-0.md). | Recorded ([Appendix A](appendix-a-phase-0.md)), except the label-removal semantics, which moved to Phase 1b because measuring them writes to the mailbox; withdrawn with Phase 1b |
-| 1a | `serve`, `setup`, `doctor`, `status`, `logout`; read tools for Mail, Drive and Calendar; registration in both hosts; Cowork local and cloud test | Calendar, Drive and Mail reads built, `download_file` included, 18 tools; the 17 built by then passed `scripts/live-check.py` (2026-10-03), and `list_drive_tree` and PDF page images came after; a full live run and the Claude Code and Cowork tests to do (M1.1, M1.2) |
+| 1a | `serve`, `setup`, `doctor`, `status`, `logout`; read tools for Mail, Drive and Calendar; registration in both hosts; Cowork local and cloud test | Calendar, Drive and Mail reads built, `download_file` included, 18 tools; the 17 built by then passed `scripts/live-check.py` (2026-10-03), and `list_drive_tree` and PDF page images came after; the full live run and the Claude Code and Cowork tests have not run (M1.1, M1.2; [docs/todo.md](../todo.md), M3) |
 | 1b | The maintainer writes the policy table: a class for each write tool, and what the server does with each class; Mail and Drive write tools; sandbox write tests | withdrawn 2026-10-04: protonctl is read-only (Q5) |
-| 2 | The privacy setting (R26) and `setup drive`; then aliases mode: the privacy pipeline for all three services at once, at `reply()`, over results, errors and page tokens, failing closed: privacy key, aliases, references, handles, sealed page tokens, keyed digests, the `entities` table, `detectors` and `guidance`; regex with validators and the name dictionary; `download_file`, `export_drive_manifest`, the CLI's `drive manifest`, the `export` and `inline` options, the export and download folders, page images, image content and inline bytes absent in aliases mode and kept in off mode; a panic hook in both modes (R25); the leak test and the `live-check.py` checks. The CLI may be tokenized here too, ahead of Phase 3, since in Phase 2 it is the easy way around the pipeline in Claude Code | built and tested on Linux 2026-10-04, and M2.8 (cloud-only reads) on a Mac the same day, except M2.10 (live checks); the Keychain code and every live check wait for a Mac; the CLI is not tokenized |
+| 2 | The privacy setting (R26) and `setup drive`; then aliases mode: the privacy pipeline for all three services at once, at `reply()`, over results, errors and page tokens, failing closed: privacy key, aliases, references, handles, sealed page tokens, keyed digests, the `entities` table, `detectors` and `guidance`; regex with validators and the name dictionary; `download_file`, `export_drive_manifest`, the CLI's `drive manifest`, the `export` and `inline` options, the export and download folders, page images, image content and inline bytes absent in aliases mode and kept in off mode; a panic hook in both modes (R25); the leak test and the `live-check.py` checks. The CLI may be tokenized here too, ahead of Phase 3, since in Phase 2 it is the easy way around the pipeline in Claude Code | built and tested on Linux 2026-10-04; on a Mac the same day, M2.8 (cloud-only reads), the setup commands, signing (Q12) and the aliases-mode live run passed; the off-mode live run, the role-play on real results and the other Mac checks have not run ([docs/todo.md](../todo.md), M1 to M4); the defects below are open; the CLI is not tokenized |
 | 3 | In aliases mode, the `reveal_*` tools, and the CLI tokenized with `--raw` and `--out` behind user presence; Claude Code sandbox settings documented (Q17) | to do; answer Q15 first |
-| 4 | PDFKit and `textutil` under a sandbox profile, directly or behind `protonctl convert`, in both modes; Vision OCR for images and scans in aliases mode | to do; answer Q13 first |
+| 4 | PDFKit and `textutil` under a sandbox profile, directly or behind `protonctl convert`, in both modes; Vision OCR for images and scans in aliases mode; on Linux, poppler and pandoc in `protonctl convert` (MP4) and Tesseract for OCR | to do on macOS; answer Q13 first. On Linux the readers were built 2026-10-05, ahead of this phase (MP4); OCR is to do |
 | 5 | GLiNER (multilingual) through `gline-rs`; short forms within an item; `maybeSameAs`; recall measured on a labeled synthetic corpus | to do; answer Q23 first |
 | 6 | Summary and question views from a local model, written with aliases; finer domain types and titles from signatures as hints | to do; Q23 names the runtime |
 | 7 | A Linux VM helper for the riskiest formats; Privacy Filter as the second check; an optional allowlist of names kept in plaintext | to do |
-| P0 to P5 | Linux ([section 11](11-platforms.md)): P1 builds and tests on Linux before Phase 2; P2 Mail and Calendar; P3 Drive; P4 converters with Phase 4; P5 presence with Phase 3 | P1 done 2026-10-04; Q30 to Q35 decided the same day; the rest to do |
+| P0 to P5 | Linux ([section 11](11-platforms.md)): P1 builds and tests on Linux before Phase 2; P2 Mail and Calendar; P3 Drive; P4 converters with Phase 4; P5 presence with Phase 3 | P0 and P1 done 2026-10-04, with Q30 to Q35 decided; P2 to P4 built 2026-10-05, without OCR, and the live checks of P2 and P3 have not run ([docs/todo.md](../todo.md), L1, L2); P5 to do |
 
 ## Milestones
 
@@ -68,9 +69,10 @@ that question is answered in [section 10](10-open-questions.md).
   Check whether the allow rules' globs (`mcp__proton__get_*`) match, and
   record where each host keeps tool results and stderr. Exit: findings in
   [Appendix A](appendix-a-phase-0.md); the allow rules in [section 4](04-design.md) and the README corrected if the
-  globs do not match.
+  globs do not match. Not run ([docs/todo.md](../todo.md), M3).
 - M1.2 A full `scripts/live-check.py` run over all 18 tools, with
-  `list_drive_tree` and PDF page images. Exit: every check passes.
+  `list_drive_tree` and PDF page images. Exit: every check passes. Not
+  run ([docs/todo.md](../todo.md), M3).
 - M1.3 Say read-only where the model reads it: the server's
   `instructions` (`src/serve.rs`) and `get_status`'s `cannot`
   (`src/main.rs`) still list only send, share and permanent delete; the
@@ -85,8 +87,8 @@ that question is answered in [section 10](10-open-questions.md).
   `doctor` and `status` say how to turn Drive on; the README gains "Add
   Drive". Exit: Drive is off without the table and on with it. Built
   2026-10-04 (the exit test failed against the old automatic Drive); the
-  signature and sign-in steps run only on a Mac, so the first live
-  `setup drive` is part of the Mac check.
+  signature and sign-in steps run only on a Mac, where `setup drive`
+  passed the same day and refused a second run.
 - M1.5 R6 in Drive errors. `list_folder`'s "not a folder" error
   (`src/drive/mod.rs:540`, `format!("not a folder: {path}")`) shows a
   folder name's hidden characters raw, where every other message uses
@@ -109,7 +111,7 @@ that question is answered in [section 10](10-open-questions.md).
   `get_attachment` keeps true. Exit: the surface snapshot. Done
   2026-10-04 for off mode, the only mode built, with `idempotentHint`
   false too, since each saving call writes a new copy; aliases mode's
-  `true` comes with M2.11.
+  `true` came with M2.11.
 
 ### Before Phase 2: decisions
 
@@ -135,7 +137,10 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
   and `rotate-key` (the last two ask first, on a terminal only) and the
   reload by key ID, with the
   subkey, rotation and decoding tests in `src/privacy/key.rs`. The
-  Keychain calls compile in the macOS lint and run only on a Mac.
+  Keychain calls compile in the macOS lint and run only on a Mac. There,
+  on 2026-10-04, `setup privacy` made the key and then kept it, and
+  `rotate-key` refused without a terminal; a rotation under a running
+  server has not been checked there ([docs/todo.md](../todo.md), M2).
 - M2.2 Identifiers, in a new `src/privacy/` module: canonical form, alias,
   `ref`, handle, sealed page token, keyed digest, the curated word list
   compiled in. Settle `ring` or RustCrypto for HMAC and HKDF ([section 3](03-options.md)).
@@ -157,9 +162,10 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
   and a result over the cap fails at once. The leak tests run on a
   synthetic mail search and events and on real Drive results; the policy
   coverage runs over every tool's results except `list_calendars` and
-  `get_status`, which are checked through aliases mode instead. No input
-  is known to make a stage panic, so the panic path to
-  `pipeline_failed` is untested.
+  `get_status`, which are checked through aliases mode instead. The leak
+  test over every tool is not built ([docs/todo.md](../todo.md), T1). No
+  input is known to make a stage panic, so the panic path to
+  `pipeline_failed` has no test ([docs/todo.md](../todo.md), T3).
 - M2.5 Inputs: `messageId`, `threadId`, `eventId`, `fileId` and
   `pageToken` take handles; name and address parameters take `ref`s;
   exclusions checked on each decrypted path. Exit: tampered handles and
@@ -170,7 +176,8 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
   from `Message-Id`, the hosts and IP addresses in the
   `Authentication-Results` header that `raw: true` returns, and local
   paths in `get_status`. Exit: `live-check.py`'s pattern checks. Built
-  2026-10-04; the exit check is M2.10's live run.
+  2026-10-04; the exit check, M2.10's live run, passed in aliases mode on
+  a Mac the same day.
 - M2.7 Off mode only: `download_file` and `export_drive_manifest` are
   registered in `src/serve.rs` only in off mode; `src/export.rs` and
   `[export]` in `src/config.rs`, the download folder and its sweep
@@ -204,32 +211,33 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
   updated, for both modes; the role-play of [Appendix C](appendix-c-roleplay.md)
   repeated on real results in aliases mode, with only its findings
   recorded. Exit: a live run passes in each mode, counts only. The tool
-  descriptions and the README are updated; the live runs and the
-  role-play wait for a Mac.
+  descriptions and the README are updated. The aliases-mode live run
+  passed on a Mac on 2026-10-04, all 16 tools of that mode, after a fix
+  for page edges that cut an address in two (in `f0414dd`). The off-mode
+  live run and the role-play have not run
+  ([docs/todo.md](../todo.md), M3).
 - M2.11 The setting (R26): the Keychain item `privacy-mode` (Q28), and no
   mode until the user sets one (Q27); `setup privacy` and `setup privacy --off` in
   `src/main.rs`; the mode in `status`, `doctor`, `get_status` and the
   `instructions`; tools registered by mode in `src/serve.rs`; a running
   server refuses calls after a mode change, and aliases mode refuses
-  without its key. Exit: the settings tests. Done 2026-10-04 on Linux,
-  where the setting cannot be read, so every call gives
-  `privacy_mode_unreadable`; the settings tests use a stand-in store.
+  without its key. Exit: the settings tests. Done 2026-10-04 on Linux;
+  the settings tests use a stand-in store. Since MP2 (2026-10-05) Linux
+  reads the setting from the Secret Service, and every call gives
+  `privacy_mode_unreadable` only while no Secret Service runs.
 
-### Phase 2: defects found on real results, to fix
+### Phase 2: defects found on real results
 
 Found on 2026-10-04 by the first aliases-mode reads of the maintainer's
 own Drive, Mail and Calendar ([Appendix C](appendix-c-roleplay.md#first-real-results-2026-10-04)).
 Examples here are synthetic. Each is open until a test or the evaluation
-(D1) shows it fixed.
+(D1) shows it fixed: D1 is T15 in [docs/todo.md](../todo.md), and D2 to
+D8 are B2 to B8 there.
 
 - D1 No evaluation of the privacy layer. Nothing measures what passes
   raw: the leak test plants exact values, and Phase 5's recall
-  measurement (M5.2) comes after the gaps below. Build a harness that
-  runs aliases mode over a labeled synthetic corpus, with each name,
-  organization and project in every form below, and reports per form
-  and per entity type what came back raw, in part or whole, and what was
-  given two aliases. It measures D2 to D7, and each fix must move its
-  number.
+  measurement (M5.2) comes after the gaps below. Not built
+  ([docs/todo.md](../todo.md), T15).
 - D2 Short forms of a name pass raw. The dictionary holds correspondents'
   full display names, so a surname alone ("Lee v. Acme", "Dr. Lee") and a
   given name alone are not found. M5.2 planned short forms within an
@@ -240,12 +248,10 @@ Examples here are synthetic. Each is open until a test or the evaluation
   case and accent folding only.
 - D5 Project names pass raw ("the Falcon rewrite", a paper's title, a
   folder named for a project), in text and in Drive paths and names,
-  which run through the detectors only. Projects need an entity type and
-  a source of names.
+  which run through the detectors only. Projects have no entity type and
+  no source of names.
 - D6 One entity gets several aliases: a person's full name and another
-  form of it in one result each got their own alias. Forms of one name,
-  one organization or one project should share an alias, or be linked
-  (`maybeSameAs`, M5.2).
+  form of it in one result each got their own alias.
 - D7 Organizations and products are typed `person`, or pass raw.
   Correspondents' display names enter the dictionary as people, so an
   employer, a storage service or an assistant that sends mail becomes a
@@ -253,9 +259,8 @@ Examples here are synthetic. Each is open until a test or the evaluation
   never sent mail (an agency, a product's maker) is not found at all.
 - D8 A folder made online-only in the Drive app lists as empty, with no
   note, in both modes: its listing is not on the Mac, and `entries_in` in
-  `src/drive/mod.rs` returns nothing when `read_dir` gives nothing. It
-  should be listed through the CLI, or say its contents are not on this
-  Mac ([Appendix A](appendix-a-phase-0.md#memory-disk-m28)).
+  `src/drive/mod.rs` returns nothing when `read_dir` gives nothing
+  ([Appendix A](appendix-a-phase-0.md#memory-disk-m28)).
 
 ### Phase 3: raw reads
 
@@ -317,15 +322,17 @@ Examples here are synthetic. Each is open until a test or the evaluation
   binary `setup privacy`, `status`, `doctor`, `get_status` over MCP,
   `privacy_mode_changed` after a change, `rotate-key` and `logout` all
   worked against it. With no Secret Service, setup refuses and writes no
-  file. The live check needs a Linux desktop with Bridge signed in.
+  file. The live check, on a Linux desktop with Bridge signed in, has not
+  run ([docs/todo.md](../todo.md), L1).
 - MP3 Drive on Linux as Q33 decides. Exit: the Drive tests against the
   stand-in CLI, and a live check if the CLI exists for Linux. Built
   2026-10-05: `setup drive` pins the CLI's SHA-256 in `[drive]` and pins
   an updated CLI after asking; every run checks the pin under the CLI's
   lock, and macOS's signature check moved to every run too (Q24). The pin
   tests (a changed CLI never runs again, and one with no pin never runs)
-  and the Drive tests pass against stand-in CLIs. The live check needs a
-  Linux machine signed in to Proton.
+  and the Drive tests pass against stand-in CLIs. The live check, on a
+  Linux machine signed in to Proton, has not run
+  ([docs/todo.md](../todo.md), L2).
 - MP4 Converters and their sandbox on Linux (Q34), with Phase 4. Exit: the
   converter sandbox test on Linux. Built 2026-10-05, ahead of Phase 4
   ([section 11](11-platforms.md#the-document-readers-as-built-p4)):

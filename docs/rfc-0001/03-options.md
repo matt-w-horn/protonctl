@@ -103,8 +103,8 @@ only primitive the tree lacks. HMAC-SHA-256, HKDF-SHA-256 and SHA-256 are
 in `ring`, already a direct dependency for file digests (`src/digest.rs`),
 but `ring` does not wipe its keys on drop, which R20 asks for; RustCrypto's
 `hmac`, `hkdf` and `sha2` with their `zeroize` support do, at the cost of a
-second implementation of SHA-256. Which to use is settled in milestone
-M2.2. `zeroize` (through `secrecy`) and `aho-corasick` (through `regex`),
+second implementation of SHA-256. Milestone M2.2 chose `ring`
+([section 9](09-rollout.md)). `zeroize` (through `secrecy`) and `aho-corasick` (through `regex`),
 for the name dictionary, are already in `Cargo.lock`. New: `phonenumber`
 to validate phone numbers, a Unicode case-folding crate (the standard
 library lowercases but does not case fold), and from Phase 5 `gline-rs`

@@ -2,9 +2,12 @@
 
 # 7. Testing
 
-Built (203 tests on a Mac on 2026-10-04, `cargo test`: 197 unit, 6
-against the built binary; one more, ignored by default, lists Drive
-through the real CLI; the macOS-only tests do not run on Linux). Live,
+Built (217 tests on Linux on 2026-10-05, `cargo test`: 208 unit, 9
+against the built binary; 4 more are ignored by default: one lists Drive
+through the real CLI, two reach a Secret Service and run in
+`scripts/check.sh`, and one is the sandbox probe, which another test
+runs as a child. The macOS-only tests do not run on Linux, and the
+Linux-only tests do not run on a Mac). Live,
 `scripts/live-check.py` runs every tool once over MCP, as the Claude app
 does, against the real calendar link, Bridge and Drive, and prints counts
 only. On 2026-10-03 all 15 tools then built passed; its provenance check
@@ -13,7 +16,8 @@ that carried no `provenance` (R6), now fixed and covered below. Later that
 day all 17 passed again, with the checks added since: 16-character
 messageIds and no `encryption` in search rows, snippets, digests on saved
 files, `count_messages`, an export into the export folder, and a complete
-manifest with its SHA-256, each removed afterwards. The tests:
+manifest with its SHA-256, each removed afterwards. On 2026-10-04 it
+passed in aliases mode on a Mac, all 16 tools of that mode. The tests:
 
 - Calendar: feed parsing (folding, escapes, VALARM isolation, a VEVENT without
   UID skipped); a weekly series across the DST change with an EXDATE and a
@@ -372,7 +376,9 @@ The lint table rejected a planted `dbg!`, `println!`, `todo!` and an
 and the coverage floor failed when set to 99%.
 
 Planned for the privacy layer, each shown to fail on a constructed bad input
-before it is trusted:
+before it is trusted. Each item says which of its tests exist on
+2026-10-05, by function name; [docs/todo.md](../todo.md) lists the
+missing ones:
 
 - Settings (Phase 2): a `privacy-mode` item holding neither `off` nor
   `aliases` refuses every call; aliases mode with
@@ -383,7 +389,16 @@ before it is trusted:
   `status`, `doctor`, `get_status` and the `instructions` name the mode;
   off mode passes the 2026-10-03 tests unchanged; Drive is off without a
   `[drive]` table and on with one. Each shown to fail with its check
-  removed.
+  removed. Built: `no_mode_refuses_every_call`,
+  `a_mode_change_refuses_until_restart_even_when_changed_back`,
+  `aliases_mode_refuses_without_a_key_and_never_falls_back`,
+  `an_unreadable_key_is_not_a_missing_one` and
+  `an_unreadable_setting_refuses_in_either_mode` in `src/privacy/mod.rs`;
+  `calls_are_refused_without_a_mode_or_after_a_change` and
+  `get_status_in_aliases_mode_shows_no_local_path` in `src/serve.rs`;
+  `drive_is_on_only_once_set_up` in `src/main.rs`. No test checks that
+  `status`, `doctor` and the `instructions` name the mode
+  ([docs/todo.md](../todo.md), T17).
 - Leak test, end to end (Phase 2, in aliases mode): the scripted Bridge, the stand-in CLI and
   a synthetic calendar feed hold a planted corpus: names in headers and in
   bodies, in Latin and other scripts; email addresses; phone numbers from
@@ -400,53 +415,116 @@ before it is trusted:
   percent-escapes) are searched for too: they fail the test where a
   detector claims them, and are listed in the report otherwise. The
   report lists what each detector caught, so names that appear only in
-  free text show as the known Phase 2 gap.
+  free text show as the known Phase 2 gap. Built in part:
+  `a_search_result_keeps_no_name_id_or_number` and
+  `people_in_events_become_aliases` in `src/privacy/pipeline.rs` plant
+  values in a mail search and an event, and
+  `aliases_mode_returns_aliases_and_handles_only` in `src/serve.rs` runs
+  the Drive tools over a planted address and link. The test over every
+  tool with the planted corpus is not built ([docs/todo.md](../todo.md),
+  T1).
 - Stability: the corpus, run in two processes under one key, gives the same
   aliases, references, handles and keyed digests; under another key, all
-  of them differ.
+  of them differ. Built in one process:
+  `aliases_are_stable_words_and_names_share_a_class` in
+  `src/privacy/ident.rs` and `subkeys_differ_and_are_stable` in
+  `src/privacy/key.rs`, each also under another key, and
+  `the_same_value_has_the_same_alias_in_every_result` in
+  `src/privacy/pipeline.rs`. Two processes: not built
+  ([docs/todo.md](../todo.md), T4).
 - Round trips: property tests that any value's `ref` decrypts to that value
   and any ID's handle to that ID, and that a changed byte, a foreign key or
-  garbage is refused (R15, R16).
+  garbage is refused (R15, R16). Built with fixed values, not as property
+  tests: `refs_handles_and_tokens_round_trip_and_refuse_tampering` and
+  `padding_keeps_trailing_zeros` in `src/privacy/ident.rs`. The property
+  tests are not built ([docs/todo.md](../todo.md), T16).
 - Keyed digests: an intact file's keyed local SHA-1 equals its keyed claim,
-  and one changed byte makes them differ.
+  and one changed byte makes them differ. Built in part: `digests_are_keyed`
+  in `src/privacy/ident.rs` shows that another key or another algorithm
+  gives another keyed digest. The intact file is not tested
+  ([docs/todo.md](../todo.md), T16).
 - Canonical values: case, diacritics, honorifics and "Last, First" forms
   give one alias; canonicalizing twice changes nothing (property test). And
   the other way: names that differ only by a Devanagari or Thai mark, "M.
   Chen" and "Mme Chen", "Mr Chen" and "Ms Chen", and "John Smith Sr." and
   "John Smith" keep
-  different aliases.
+  different aliases. Built in part: `spellings_of_one_name_meet`,
+  `rules_never_merge_two_people` ("Mr Chen" and "Mme Chen", and a
+  Devanagari mark) and the property test `canonical_forms_are_fixed_points`
+  in `src/privacy/canon.rs`. The other cases above have no test
+  ([docs/todo.md](../todo.md), T16).
 - Collisions: with a word list of 4 words, two and three entities that
   share an alias in one result all get distinct aliases, in an order that
-  does not depend on the order of the input.
+  does not depend on the order of the input. Not built: the word list
+  cannot be swapped for a small one today ([docs/todo.md](../todo.md),
+  T5).
 - Size: a result whose `entities` table holds 500 URLs stays under Claude
-  Code's 25,000-token limit, its page shortened to fit.
+  Code's 25,000-token limit, its page shortened to fit. Replaced as built:
+  URLs get no entity (Q19), and a result over the cap of 90,000
+  characters is refused, not shortened
+  ([As built](lld-privacy-layer.md#as-built));
+  `a_result_over_the_cap_is_refused` in `src/privacy/pipeline.rs` tests
+  that.
 - Errors and tokens: every error a tool can return passes the pipeline,
   and a page token carries no name, path or UID in any encoding (R13, R16).
+  Built in part: `aliases_mode_errors_are_codes_without_the_path` and
+  `aliases_mode_refuses_a_value_that_is_not_a_handle` in `src/serve.rs`,
+  and `local_paths_and_errors_become_fixed_text` in
+  `src/privacy/pipeline.rs`. Every error of every tool, and page tokens:
+  not built ([docs/todo.md](../todo.md), T9).
 - Fail closed: a pipeline stage made to fail returns an error with none of
-  the planted values.
+  the planted values. Not built ([docs/todo.md](../todo.md), T3);
+  `Server::call` in `src/serve.rs` turns a stage's error or panic into
+  `pipeline_failed`.
 - Page edges (built 2026-10-04, after the first live aliases-mode run): a
   file holding an address and a phone number, read 16 characters at a
   time in aliases mode, returns neither in part, and its last words
   still come back (shown to fail with pages cut as before: the first page
   ended `jane.do`, raw). `truncate` in aliases mode moves its cut off a
   mention, back to its start or past its end (shown to fail with the old
-  `truncate`, which left `to ann`).
+  `truncate`, which left `to ann`). These are
+  `an_address_cut_by_a_page_edge_does_not_leak` in `src/serve.rs` and
+  `aliases_mode_truncates_beside_a_mention` in `src/content.rs`.
 - Rotation: a server running while `rotate-key` replaces the key gives new
-  aliases on its next call, and refuses the old handles.
+  aliases on its next call, and refuses the old handles. Built at the key:
+  `a_rotated_key_is_picked_up_on_the_next_call` and
+  `a_key_read_between_its_two_writes_is_used` in `src/privacy/key.rs`. At
+  the server: not built ([docs/todo.md](../todo.md), T6).
 - Names in queries: a typed name is plaintext in that call's result and an
-  alias in the next call's.
-- Guidance: present in exactly the cases R23 names.
+  alias in the next call's. As built, the result shows the typed name as
+  its alias too, paired with it in `queryEntities`;
+  `a_name_typed_in_the_query_is_paired_with_its_alias` in
+  `src/privacy/pipeline.rs` tests that ([docs/todo.md](../todo.md), D8).
+- Guidance: present in exactly the cases R23 names. Built for a name typed
+  in a query (`a_name_typed_in_the_query_is_paired_with_its_alias`). A
+  result cut short or paged carries no `guidance`
+  ([docs/todo.md](../todo.md), B9).
 - No disk, in aliases mode: every tool runs with a throwaway home and temporary folder,
   compared before and after; any new file fails the test (shown to fail
   against the 2026-10-03 download folder). The helpers run with a cleared
   environment, so they find the real home and the per-user folders
   (`getconf DARWIN_USER_TEMP_DIR` and `DARWIN_USER_CACHE_DIR`) through the
   system, not through `HOME`; the test also compares those, or runs each
-  tool under a sandbox profile that denies and reports file writes.
+  tool under a sandbox profile that denies and reports file writes. Built
+  in part: `aliases_mode_gets_no_download_folder` in `src/content.rs`, and
+  a cloud-only read through memory that leaves nothing behind,
+  `an_aliases_mode_read_fetches_into_memory_and_leaves_nothing` on Linux
+  and `an_aliases_mode_cloud_only_read_goes_through_the_memory_disk` on
+  macOS, in `src/drive/mod.rs`. The test over every tool is not built
+  ([docs/todo.md](../todo.md), T7).
 - No images or bytes, in aliases mode: no result carries image content, an
-  embedded resource or base64 file data (R22).
+  embedded resource or base64 file data (R22). Built in part:
+  `a_scan_in_aliases_mode_gives_a_reason_and_no_images` in
+  `src/extract.rs`, and `aliases_mode_offers_no_saving_and_no_paths` in
+  `src/serve.rs`, which finds no `inline` or `page` parameter. The test
+  over every tool is not built ([docs/todo.md](../todo.md), T8).
 - Logs: with `RUST_LOG=debug`, stderr holds none of the planted values
   (R25), and a panic planted on a slice of planted text prints none of it.
+  Built in another form: `results_stay_out_of_stderr_even_with_rust_log_set`
+  in `tests/serve_exit.rs` looks for a phrase of `get_status`'s result,
+  and `a_panic_prints_where_and_withholds_what` in `src/main.rs` and
+  `a_blocking_panic_withholds_its_message` in `src/content.rs` plant a
+  panic message.
 - Surface: one snapshot per mode. The forbidden names gain the withdrawn
   write tools in both modes, and `download_file` and
   `export_drive_manifest` in aliases mode. Since a name list misses a new
@@ -454,19 +532,32 @@ before it is trusted:
   set of tool names: in aliases mode every one with `readOnlyHint: true`;
   in off mode `readOnlyHint: false` on the three that can leave a file
   behind (`get_attachment`, `download_file`, `export_drive_manifest`;
-  M1.6) and true on the rest.
+  M1.6) and true on the rest. Built: `tool_surface_snapshot` and
+  `aliases_tool_surface_snapshot`, `registered_names_are_the_tool_enum`
+  (each mode's exact set), `aliases_mode_offers_no_saving_and_no_paths`
+  (no `download_file` or `export_drive_manifest`, and `readOnlyHint: true`
+  on every tool) and `no_tool_offers_a_forbidden_capability`, in
+  `src/serve.rs`; the off-mode hints are in the snapshot. The forbidden
+  names do not list the withdrawn write tools; the exact set keeps them
+  out.
 - User presence (Phase 3), through an injectable checker: a refusal returns
   nothing but `declined_by_user`; an approval covers one item for 10 minutes
   by wall clock, judged as R12 judges freshness; a prompt still open at the
   time limit is cancelled and a late approval covers nothing; a subject
   written as an instruction appears in the prompt last, cut and quoted; the
-  CLI's `--raw` and `--out` ask as the tools do.
+  CLI's `--raw` and `--out` ask as the tools do. Not built (Phase 3).
 - Converter sandbox (Phase 4): a test build of the helper that tries to
   open a socket, write a file and read a Keychain item fails at each;
   Vision returns the words of a synthetic page rendered as an image.
+  Built on Linux, ahead of Phase 4: `the_sandbox_confines_a_reader`, which
+  runs `sandbox_probe` as a child, in `src/platform/linux.rs`, and
+  `each_reader_runs_in_its_sandbox` and
+  `a_damaged_pdf_fails_in_the_reader_not_the_sandbox` in
+  `tests/convert.rs`. macOS and Vision: not built (Phase 4).
 - Recall (Phase 5): per entity type, on a labeled synthetic corpus in
   English, German, French and one non-Latin script. Results are recorded,
-  with no pass mark until there is a measured baseline.
+  with no pass mark until there is a measured baseline. Not built
+  (Phase 5).
 - `scripts/live-check.py` (Phase 2; real data, counts only): every result
   with aliases carries `entities`, and every entry a `ref`; no text field
   outside `entities` matches an email-address, phone-number or 40- or
@@ -475,21 +566,28 @@ before it is trusted:
   the same aliases for the same search; the `reveal_*` tools run only with
   `--reveal`, which needs Touch ID at the Mac. In off mode the checks of
   2026-10-03 stay, among them the export folder, `download_file`, raw
-  digests and 16-character messageIds.
+  digests and 16-character messageIds. Built in part: in aliases mode the
+  script counts addresses, links, local paths and 40- or 64-hex-digit
+  digests in every result, fails on a missing `detectors`, a `dropped`
+  field or content after the JSON, and searches again by a sender's
+  `ref`. Phone numbers, a `ref` in every entity and a second server run
+  are not checked ([docs/todo.md](../todo.md), T18); `--reveal` comes
+  with Phase 3.
 
-Still to build: a hermetic IMAP test against Dovecot in podman seeded with a
-synthetic Bridge-shaped mailbox; a fake `proton-drive` that serves fixtures and
+Not built, each in [docs/todo.md](../todo.md): a hermetic IMAP test
+against Dovecot in podman seeded with a synthetic Bridge-shaped mailbox
+(T11); a fake `proton-drive` that serves fixtures and
 fails the test on any call but `filesystem list`, `filesystem info`,
 `filesystem download` and `--version`, the four protonctl makes today,
-which guards R1 for Drive; an optional prompt-injection
+which guards R1 for Drive (T10); an optional prompt-injection
 drill (about 5 Claude runs), extended to check that injected text gets no
 raw content without Touch ID, and sends nothing out through the host's
-other tools. For Mail, R1 rests on the commands sent: mailboxes opened
+other tools (T12). For Mail, R1 rests on the commands sent: mailboxes opened
 with EXAMINE, never SELECT, and bodies fetched with `BODY.PEEK`, which sets
 no `\Seen` flag. The scripted Bridge's snapshots pin every command today;
 a test that refuses any IMAP verb outside LOGIN, LIST, EXAMINE, STATUS,
-UID SEARCH, UID FETCH and LOGOUT would state it. The sandbox-only live
-write tests are withdrawn with the writes.
+UID SEARCH, UID FETCH and LOGOUT would state it, and is not built (T10).
+The sandbox-only live write tests are withdrawn with the writes.
 
 ---
 

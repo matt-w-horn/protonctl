@@ -22,7 +22,7 @@
 | Q15 | Reaching LocalAuthentication | open | Phase 3 |
 | Q16 | Token cost of words and base64url | decided 2026-10-04 |  |
 | Q17 | Claude Code sandbox settings | open | Phase 3 |
-| Q18 | Word list licence and curation | decided 2026-10-04; licence text to check in M2.2 |  |
+| Q18 | Word list licence and curation | decided 2026-10-04; licence checked 2026-10-04 |  |
 | Q19 | Alias input, word count, URLs, what a `ref` holds | decided 2026-10-04 |  |
 | Q20 | Drive handles: path or node UID | decided 2026-10-04 |  |
 | Q21 | Pairing names with aliases | decided 2026-10-04 |  |
@@ -222,7 +222,8 @@
     authentication agent runs, as in a desktop session; elsewhere Linux
     has no `reveal_*` tools.
 
-- Open, to check before the phase that depends on each:
+- Open, to check before the phase that depends on each
+  ([docs/todo.md](../todo.md), M5 and Decisions):
   - Q13 (Phase 4): `sandbox-exec` is marked deprecated in its man page.
     Check that it still enforces a profile on the current macOS, and that
     Vision, PDFKit through `osascript`, and `textutil` run under a profile

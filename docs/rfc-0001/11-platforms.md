@@ -6,9 +6,10 @@ Proposed 2026-10-04. Q29 records the decision to support Linux; Q30 to
 Q35, decided the same day, adopt the choices this section recommends
 ([section 10](10-open-questions.md) gives each reason). Phase P1 is built
 (2026-10-04): protonctl builds and passes its gates on Linux. Phases P2
-and P3 are built (2026-10-05): the Secret Service holds its secrets, and
-the Drive CLI is pinned by its SHA-256; their live checks need a Linux
-desktop signed in to Proton.
+to P4 are built (2026-10-05): the Secret Service holds its secrets, the
+Drive CLI is pinned by its SHA-256, and poppler and pandoc read documents
+in a sandbox. The live checks of P2 and P3, on a Linux desktop signed in
+to Proton, have not run ([docs/todo.md](../todo.md), L1, L2).
 
 ## Why
 
@@ -45,8 +46,8 @@ What these facts meant for Q31 to Q33 and the hosts:
   found, pinning its SHA-256 at `setup drive` stays the proposal; the
   CLI-only mode stays the default until a Linux Drive app ships.
 - Hosts: Claude Desktop and Cowork reach Linux. Whether they start a local
-  MCP server there, and how Cowork's VM reaches it, is a live check in
-  MP2, as M1.1 is on macOS.
+  MCP server there, and how Cowork's VM reaches it, is not checked
+  ([docs/todo.md](../todo.md), L3).
 
 ## What is macOS-specific
 
@@ -65,7 +66,9 @@ records. After P1:
 | Bridge on demand (Q2) | `/usr/bin/open -g -j -b com.protonmail.bridge` | `src/mail/mod.rs` | never started; when Bridge is not running, the error says to run it as a systemd user unit, which the README shows (Q32) |
 | PDF text and page images; Word, RTF, OpenDocument | `/usr/bin/osascript` with PDFKit; `/usr/bin/textutil` | `src/extract.rs`, `src/convert.rs` | poppler (`pdftotext`, `pdfinfo`, `pdftoppm`) and pandoc, each in `protonctl convert`'s sandbox (Q34, built 2026-10-05); text and images read as on macOS |
 | Cache folder | `~/Library/Caches/protonctl` | `src/platform/macos.rs` | `$XDG_CACHE_HOME/protonctl`, else `~/.cache/protonctl` |
-| Planned | LocalAuthentication (R18), `sandbox-exec` (R21), Vision (R21, R22), a RAM disk (R10, Q14), a Keychain attribute for the key ID (R20) | | |
+| Content off disk (R10, Q14) | a RAM disk, made with `diskutil` and `newfs_hfs` (M2.8) | `src/platform/macos.rs`, `src/platform/linux.rs` | a 0700 folder under `$XDG_RUNTIME_DIR` (built 2026-10-05) |
+| Key ID (R20) | the Keychain item's comment | `src/platform/macos.rs`, `src/platform/linux.rs` | the item's `comment` attribute |
+| Planned | LocalAuthentication (R18), `sandbox-exec` (R21), Vision (R21, R22) | | |
 
 Already portable: IMAP over rustls, the certificate pin, calendar parsing,
 the MCP server (rmcp over stdio), tokio's process handling and Unix
@@ -221,8 +224,8 @@ flowchart TB
 | Host | macOS | Linux |
 |---|---|---|
 | Claude Code | yes | yes |
-| Claude Desktop | yes | beta, Ubuntu and Debian (MP0); local MCP servers to check in MP2 |
-| Cowork | yes, through Claude Desktop | through Claude Desktop's beta, in a QEMU/KVM virtual machine; to check in MP2 |
+| Claude Desktop | yes | beta, Ubuntu and Debian (MP0); whether it loads local MCP servers is not checked ([docs/todo.md](../todo.md), L3) |
+| Cowork | yes, through Claude Desktop | through Claude Desktop's beta, in a QEMU/KVM virtual machine; not checked ([docs/todo.md](../todo.md), L3) |
 
 On Linux the model usually has a shell, in Claude Code or Claude
 Desktop's Code tab: the residual risk that it runs `proton-drive`, reads
@@ -262,8 +265,8 @@ more.
 |---|---|---|
 | P0 | Answer Q30 to Q35; confirm the Linux availability of Claude Desktop, Bridge's core and the Drive CLI. Done 2026-10-04 | P1 |
 | P1 | Builds and tests on Linux: `src/platform/`; target-specific dependencies; Linux implementations that report "not available on Linux"; the macOS-only tests behind `cfg`; download expiry by the time in the folder name; `deny.toml` targets; `scripts/check.sh` on Linux, with the macOS build checked from there. Done 2026-10-04 | Phase 2, so the privacy layer is built and tested in Linux containers |
-| P2 | Mail and Calendar on Linux: the secret store (Q31), Bridge started by the user (Q32), `setup`, `doctor` and `status`. Built 2026-10-05; the live check waits for a Linux desktop | alongside Phase 2 |
-| P3 | Drive on Linux, as Q33 decides. Built 2026-10-05; the live check waits for a Linux machine signed in to Proton | after P2 |
+| P2 | Mail and Calendar on Linux: the secret store (Q31), Bridge started by the user (Q32), `setup`, `doctor` and `status`. Built 2026-10-05; the live check, on a Linux desktop, has not run ([docs/todo.md](../todo.md), L1) | alongside Phase 2 |
+| P3 | Drive on Linux, as Q33 decides. Built 2026-10-05; the live check, on a Linux machine signed in to Proton, has not run ([docs/todo.md](../todo.md), L2) | after P2 |
 | P4 | Converters and their sandbox on Linux (Q34). Built 2026-10-05, before Phase 4; OCR waits for it | with Phase 4 |
 | P5 | User presence on Linux (Q35), or no `reveal_*` there | with Phase 3 |
 
