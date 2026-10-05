@@ -1,0 +1,34 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Every local gate, on Linux: scripts/check.sh, as the pre-commit hook runs
+  # it. On Linux it also lints the macOS build and runs the Secret Service
+  # tests against a throwaway GNOME Keyring (RFC section 11).
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The document readers' tests, and the Secret Service tests.
+      - run: sudo apt-get update && sudo apt-get install -y poppler-utils pandoc dbus gnome-keyring
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-llvm-cov
+      - run: scripts/check.sh
