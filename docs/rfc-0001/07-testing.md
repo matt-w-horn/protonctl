@@ -416,14 +416,25 @@ missing ones:
   percent-escapes) are searched for too: they fail the test where a
   detector claims them, and are listed in the report otherwise. The
   report lists what each detector caught, so names that appear only in
-  free text show as the known Phase 2 gap. Built in part:
-  `a_search_result_keeps_no_name_id_or_number` and
-  `people_in_events_become_aliases` in `src/privacy/pipeline.rs` plant
-  values in a mail search and an event, and
-  `aliases_mode_returns_aliases_and_handles_only` in `src/serve.rs` runs
-  the Drive tools over a planted address and link. The test over every
-  tool with the planted corpus is not built ([docs/todo.md](../todo.md),
-  T1).
+  free text show as the known Phase 2 gap. Built:
+  `no_planted_value_leaves_any_tool` in `src/serve_every_tool.rs` plants
+  names in four scripts, addresses, phone numbers from four countries,
+  cards, IBANs, links, Proton and IMAP IDs and digests in the scripted
+  Bridge, a calendar feed, the Drive app's folder and a stand-in Drive
+  CLI, makes 75 calls over all 16 aliases-mode tools through two servers,
+  and searches every key and string of every result, as text and as what
+  each base64 or hex run decodes to, for each value whole, in parts and
+  in canonical form. A name typed in a query may stand only as a key of
+  `queryEntities`. Two values it knows pass are listed, and asserted to
+  still pass, so the test fails when the gap closes: a name only in free
+  text, and a street address. Its first run found two leaks, both fixed:
+  a Chinese one-word name was never found, and a page asked to start
+  inside a name showed its tail.
+  `every_aliases_tool_is_called_through_the_server` checks that those
+  calls cover every tool each server lists (I9). Smaller tests plant
+  values in one result: `a_search_result_keeps_no_name_id_or_number` and
+  `people_in_events_become_aliases` in `src/privacy/pipeline.rs`, and
+  `aliases_mode_returns_aliases_and_handles_only` in `src/serve.rs`.
 - Stability: the corpus, run in two processes under one key, gives the same
   aliases, references, handles and keyed digests; under another key, all
   of them differ. Built:
@@ -475,11 +486,17 @@ missing ones:
   that.
 - Errors and tokens: every error a tool can return passes the pipeline,
   and a page token carries no name, path or UID in any encoding (R13, R16).
-  Built in part: `aliases_mode_errors_are_codes_without_the_path` and
+  Built: `errors_and_page_tokens_carry_no_name_path_or_uid` in
+  `src/serve_every_tool.rs` makes 20 calls built to fail, across the
+  tools, and checks that each error is exactly a code, its fixed message
+  and `detectors`, and that every page token holds no planted value,
+  decoded or not, and opens as its tool's sealed kind; opened, a mail
+  cursor holds an IMAP UID and a tree token a folder named after a
+  person, so the sealing is what keeps them out. Also
+  `aliases_mode_errors_are_codes_without_the_path` and
   `aliases_mode_refuses_a_value_that_is_not_a_handle` in `src/serve.rs`,
   and `local_paths_and_errors_become_fixed_text` in
-  `src/privacy/pipeline.rs`. Every error of every tool, and page tokens:
-  not built ([docs/todo.md](../todo.md), T9).
+  `src/privacy/pipeline.rs`.
 - Fail closed: a pipeline stage made to fail returns an error with none of
   the planted values. Built: in test builds, text holding
   `pipeline::PLANTED_PANIC` panics the rewrite stage, after the names and
@@ -527,14 +544,25 @@ missing ones:
   a cloud-only read through memory that leaves nothing behind,
   `an_aliases_mode_read_fetches_into_memory_and_leaves_nothing` on Linux
   and `an_aliases_mode_cloud_only_read_goes_through_the_memory_disk` on
-  macOS, in `src/drive/mod.rs`. The test over every tool is not built
-  ([docs/todo.md](../todo.md), T7).
+  macOS, in `src/drive/mod.rs`. Over every tool:
+  `aliases_mode_writes_no_file` in `src/serve_every_tool.rs` runs the
+  test binary again with a throwaway home and temporary folder, makes
+  every call, and fails on a new file in either or on anything left in
+  the memory folder after a call. It allows the Drive CLI's lock file
+  while the file is empty ([docs/todo.md](../todo.md), Decisions). It
+  does not watch the folders a reader finds through the system: on
+  Linux the readers can write only to `/dev/null` (Landlock), and on macOS they run
+  unconfined until Phase 4.
 - No images or bytes, in aliases mode: no result carries image content, an
   embedded resource or base64 file data (R22). Built in part:
   `a_scan_in_aliases_mode_gives_a_reason_and_no_images` in
   `src/extract.rs`, and `aliases_mode_offers_no_saving_and_no_paths` in
-  `src/serve.rs`, which finds no `inline` or `page` parameter. The test
-  over every tool is not built ([docs/todo.md](../todo.md), T8).
+  `src/serve.rs`, which finds no `inline` or `page` parameter. Over every
+  tool: `no_tool_returns_images_or_file_bytes_in_aliases_mode` in
+  `src/serve_every_tool.rs` checks that every block is text, that no
+  result has structured content, and that no string decodes to a file
+  signature or a planted file's bytes; an image file, a scan and an image
+  or binary attachment each come back as a `reason`.
 - Logs: with `RUST_LOG=debug`, stderr holds none of the planted values
   (R25), and a panic planted on a slice of planted text prints none of it.
   Built in another form: `results_stay_out_of_stderr_even_with_rust_log_set`

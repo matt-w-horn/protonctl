@@ -41,18 +41,18 @@ maintainer.
   `src/privacy/detect/pattern.rs` counts ASCII digits only, and the card
   check reads digits with `char::to_digit`, which is ASCII only. An SSN in
   such digits is found. A fix needs each script's digit values.
+- B24 (here) In aliases mode, a 40- or 64-hex digest or a Proton message
+  ID written in free text passes raw: no detector in
+  `src/privacy/detect/pattern.rs` covers them. R16 and R17 cover them in
+  fields, which the leak test checks. `scripts/live-check.py` flags any
+  such run in any text, so a live run and the pipeline disagree.
+- B25 (here) In aliases mode, a Chinese or Japanese name inside running
+  text in that script is not found: a dictionary match must have a
+  character that is not a letter or digit on each side (`bounded` in
+  `src/privacy/detect/mod.rs`), and such text has no spaces.
 
 ## Tests the RFC plans that do not exist
 
-- T1 (here) A leak test over every tool with a planted corpus; today one
-  covers mail search, events and the Drive listing.
-- T2 (here) A test that calls every tool through the server (I9).
-- T7 (here) No new file anywhere in the home folder after every tool runs
-  in aliases mode.
-- T8 (here) No image, embedded resource or file bytes from any tool in
-  aliases mode (R22).
-- T9 (here) Errors and page tokens carry no name, path or UID in any
-  encoding.
 - T11 (here, larger) A hermetic IMAP test against Dovecot in podman.
 - T12 (later) A prompt-injection drill, about 5 Claude runs.
 - T14 (not testable here) The x32 seccomp rule, which needs unsafe code or
@@ -61,9 +61,10 @@ maintainer.
 - T15 (here) An evaluation of the privacy layer
   ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D1):
   run aliases mode over a labeled synthetic corpus that holds each name,
-  organization and project in every form of B2 to B7, and report, per
+  organization and project in every form of B15 to B20, and report, per
   form and per entity type, what came back raw, in part or whole, and
-  what was given two aliases. Each fix of B2 to B7 must move its number.
+  what was given two aliases. Each fix of B15 to B20 must move its
+  number.
 - T16 (here) The rest of the identifier tests that section 7 plans:
   property tests that any value's `ref` and any ID's handle open to that
   value, and that a changed byte, another key or garbage is refused (R15,
@@ -192,6 +193,11 @@ M2.1 recorded no check of this. Confirm it before M4 deletes the item.
   (`04-design.md`), and whether a reveal may return page images
   (`06-privacy.md`).
 - Whether to open a pull request for the Linux branch.
+- Aliases mode's first Drive CLI run creates an empty
+  `~/.cache/protonctl/cli.lock` (`lock_path` in `src/drive/cli.rs`): no
+  content, so R10 holds, but a new file in the home folder. Keep it, or
+  move the lock into the memory folder. The no-disk test allows it while
+  it is empty.
 
 ## Not started
 

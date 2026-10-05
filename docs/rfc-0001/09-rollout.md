@@ -163,7 +163,9 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
   synthetic mail search and events and on real Drive results; the policy
   coverage runs over every tool's results except `list_calendars` and
   `get_status`, which are checked through aliases mode instead. The leak
-  test over every tool is not built ([docs/todo.md](../todo.md), T1). The
+  test over every tool (2026-10-05) found two leaks, both fixed: a
+  Chinese one-word name was never found, and a page asked to start inside
+  a name showed its tail. The
   panic path to `pipeline_failed` is tested with a panic that test builds
   plant in the rewrite stage. Building that test found a real one: text
   shaped like an IBAN with a digit from another script panicked the
