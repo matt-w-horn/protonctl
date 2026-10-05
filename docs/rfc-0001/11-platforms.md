@@ -63,7 +63,7 @@ records. After P1:
 | Drive folder discovery | `~/Library/CloudStorage/ProtonDrive-*` | `src/platform/macos.rs` | no place to look: the CLI-only mode |
 | Drive CLI check (R9) | `/usr/bin/codesign` and Apple Team ID `2SB5Z68H26`, before every run (Q24) | `src/drive/cli.rs` | the SHA-256 pinned at `setup drive`, before every run (Q33, built 2026-10-05) |
 | Bridge on demand (Q2) | `/usr/bin/open -g -j -b com.protonmail.bridge` | `src/mail/mod.rs` | never started; when Bridge is not running, the error says to run it as a systemd user unit, which the README shows (Q32) |
-| PDF text and page images; Word, RTF, OpenDocument | `/usr/bin/osascript` with PDFKit; `/usr/bin/textutil` | `src/extract.rs` | "no reader for PDF, Word, RTF or OpenDocument files yet" (Q34); text and images read as on macOS |
+| PDF text and page images; Word, RTF, OpenDocument | `/usr/bin/osascript` with PDFKit; `/usr/bin/textutil` | `src/extract.rs`, `src/convert.rs` | poppler (`pdftotext`, `pdfinfo`, `pdftoppm`) and pandoc, each in `protonctl convert`'s sandbox (Q34, built 2026-10-05); text and images read as on macOS |
 | Cache folder | `~/Library/Caches/protonctl` | `src/platform/macos.rs` | `$XDG_CACHE_HOME/protonctl`, else `~/.cache/protonctl` |
 | Planned | LocalAuthentication (R18), `sandbox-exec` (R21), Vision (R21, R22), a RAM disk (R10, Q14), a Keychain attribute for the key ID (R20) | | |
 
@@ -151,8 +151,8 @@ flowchart TB
 | Bridge on demand | Q2 | `open` the Bridge app hidden | start Bridge's core with `--noninteractive`; a systemd user unit the user enables; or require Bridge running | require it running, and print how to enable the unit | Q32 |
 | Drive CLI check | R9 | `codesign`, Team ID, version | the CLI ships for Linux (MP0); no release signature or checksum found: a SHA-256 pinned at `setup drive`, as Bridge's certificate is pinned; Proton's signature if one is published; a path the user cannot write | pin at setup, checked before every run | Q33 |
 | Drive folder | the namespace, cloud-only files | the Drive app's folder, `SF_DATALESS` | no Proton Drive app for Linux yet (MP0): the CLI-only mode built for Macs without the app, with search off | CLI only | Q33 |
-| Converters | R21 | `osascript` (PDFKit), `textutil`, Vision | poppler-utils (`pdftotext`, `pdftoppm`); pandoc or LibreOffice for documents; Tesseract for OCR; or Rust crates (`pdf-extract`, `lopdf`) inside the sandboxed helper | external tools when installed; otherwise the result says the file cannot be read on this machine, and why | Q34 |
-| Sandbox | R21 | a `sandbox-exec` profile (Q13) | Landlock (files from Linux 5.13, network from 6.7) through the `landlock` crate, with a seccomp filter; or bubblewrap | Landlock and seccomp in `protonctl convert` | Q34 |
+| Converters | R21 | `osascript` (PDFKit), `textutil`, Vision | poppler-utils (`pdftotext`, `pdftoppm`); pandoc or LibreOffice for documents; Tesseract for OCR; or Rust crates (`pdf-extract`, `lopdf`) inside the sandboxed helper | external tools when installed; otherwise the result names the package to install. Built 2026-10-05 with poppler and pandoc; OCR waits for Phase 4 | Q34 |
+| Sandbox | R21 | a `sandbox-exec` profile (Q13) | Landlock (files from Linux 5.13, network from 6.7) through the `landlock` crate, with a seccomp filter; or bubblewrap | Landlock and seccomp in `protonctl convert` (built 2026-10-05) | Q34 |
 | User presence | R18 | LocalAuthentication: Touch ID or the login password | polkit (`pkcheck --allow-user-interaction`, needs an authentication agent, so a desktop session); fprintd; a FIDO2 security key's touch (works on both systems); none | polkit where an agent runs; otherwise no `reveal_*` tools | Q35 |
 | Content off disk | R10, Q14 | a RAM disk | `memfd_create`, which never touches a filesystem; `/dev/shm`; `$XDG_RUNTIME_DIR`, a per-user memory file system | `$XDG_RUNTIME_DIR`, since the CLI writes into a folder, which a `memfd_create` file is not (Q14); used only when it is tmpfs, the user's own with mode 0700, and every swap is zram or dm-crypt (built 2026-10-05) | Q14 |
 | Download expiry | R10 | the time in the folder's name, since MP1 | the same | the time in the name (built) | MP1 |
@@ -183,6 +183,38 @@ flowchart TB
 - `scripts/check.sh` tests the store against a throwaway GNOME Keyring in
   a private D-Bus session, so the user's keyring is never touched; other
   unit tests refuse to reach any service but `protonctl-test`.
+
+## The document readers as built (P4)
+
+- `protonctl convert <job>` is a hidden command. The server starts it as
+  `/proc/self/exe`, so a binary replaced while the server runs still
+  converts, with an empty environment, the document on stdin and a 60 s
+  limit. It reads no config, secret or session: it enters the sandbox,
+  then `exec`s the reader, which inherits the sandbox.
+- The jobs: `pdf-text` (`pdftotext -enc UTF-8 - -`, one form feed after
+  each page), `pdf-info` (`pdfinfo -`, for the page count), `pdf-page`
+  (`pdftoppm -singlefile -jpeg -scale-to 2000`, one page per run) and
+  `document` (`pandoc --sandbox -t plain`, for `.docx`, `.odt` and `.rtf`).
+  pandoc cannot read `.doc`.
+- The sandbox: Landlock lets the reader read and run what is under `/usr`,
+  `/lib`, `/lib64` and `/bin`, read `/etc/ld.so.cache`, `/etc/fonts` and
+  `/var/cache/fontconfig`, and open `/dev/null`; nothing else, so not the
+  home folder, `/tmp`, `/proc` or the rest of `/etc`. It also refuses TCP
+  (Linux 6.7 and later), abstract Unix sockets and signals to processes
+  outside (6.12 and later). A seccomp filter refuses `socket` and
+  `io_uring_setup` on every kernel. A kernel that does not enforce Landlock
+  refuses to read documents rather than read them unconfined.
+- A reader that cannot read the document (a damaged PDF, one that needs a
+  password) gives a `reason` in the result. A sandbox that cannot be set up
+  exits with code 70, which no reader uses, and the call fails; `doctor`
+  runs `convert check` to say why.
+- A reader taken over by a hostile document can still print what it may
+  read, which reaches the result: the system's programs, libraries and
+  font configuration, nothing of the user's.
+- Tests: the sandbox probe (in `src/platform/linux.rs`) checks every denial
+  above from a child process, and fails without the seccomp filter or with
+  all of `/etc` readable; `tests/convert.rs` runs each job through the
+  built binary and reads a PDF and a Word file through `drive cat`.
 
 ## Hosts by platform
 
@@ -228,7 +260,7 @@ more.
 | P1 | Builds and tests on Linux: `src/platform/`; target-specific dependencies; Linux implementations that report "not available on Linux"; the macOS-only tests behind `cfg`; download expiry by the time in the folder name; `deny.toml` targets; `scripts/check.sh` on Linux, with the macOS build checked from there. Done 2026-10-04 | Phase 2, so the privacy layer is built and tested in Linux containers |
 | P2 | Mail and Calendar on Linux: the secret store (Q31), Bridge started by the user (Q32), `setup`, `doctor` and `status`. Built 2026-10-05; the live check waits for a Linux desktop | alongside Phase 2 |
 | P3 | Drive on Linux, as Q33 decides. Built 2026-10-05; the live check waits for a Linux machine signed in to Proton | after P2 |
-| P4 | Converters and their sandbox on Linux (Q34) | with Phase 4 |
+| P4 | Converters and their sandbox on Linux (Q34). Built 2026-10-05, before Phase 4; OCR waits for it | with Phase 4 |
 | P5 | User presence on Linux (Q35), or no `reveal_*` there | with Phase 3 |
 
 Milestones MP0 to MP5 in [section 9](09-rollout.md#phase-p-platforms)

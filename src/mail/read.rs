@@ -2634,11 +2634,9 @@ mod tests {
             "{}",
             saved.json
         );
-        if !crate::platform::DOCUMENT_READERS {
-            // Without the readers, the note says why, not that it is no PDF.
-            let note = saved.json["note"].as_str().unwrap();
-            assert!(note.contains("no reader for PDF"), "{note}");
-        }
+        // The note gives the reader's own reason, not that it is no PDF.
+        let note = saved.json["note"].as_str().unwrap();
+        assert!(note.contains("could not"), "{note}");
         let inline = mail
             .get_attachment(&attach(true), None, no_export())
             .await

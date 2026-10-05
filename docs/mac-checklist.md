@@ -7,7 +7,10 @@ delete this file. Milestone states live in [RFC section 9](rfc-0001/09-rollout.m
 ## 1. Build and gates
 
 1. Run `scripts/check.sh`. It adds what Linux skips: the PDFKit and
-   `textutil` tests, and coverage through Homebrew's `llvm`.
+   `textutil` tests, and coverage through Homebrew's `llvm`. The PDFKit
+   page rendering moved into `pdfkit_pages` in `src/extract.rs` without a
+   run on a Mac; `pdf_pages_come_as_images_and_a_scan_s_without_asking`
+   checks it.
 2. Run `cargo install --path . --locked --root ~/.cargo`.
 
 ## 2. Before a mode is chosen (Q27)

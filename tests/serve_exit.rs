@@ -29,6 +29,8 @@ fn start(
     let mut child = Command::new(env!("CARGO_BIN_EXE_protonctl"))
         .arg("serve")
         .env("HOME", home)
+        // No D-Bus session, so a Linux run never reaches the user's keyring.
+        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
         .env_remove("XDG_CACHE_HOME")
         .env("PROTONCTL_CONFIG", &config)
         .envs(env.iter().copied())
@@ -122,6 +124,7 @@ fn closing_stdin_before_initialize_is_a_clean_stop() {
     let out = Command::new(env!("CARGO_BIN_EXE_protonctl"))
         .arg("serve")
         .env("HOME", home.path())
+        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
         .env("PROTONCTL_CONFIG", &config)
         .stdin(Stdio::null())
         .output()

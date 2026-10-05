@@ -15,7 +15,6 @@ use security_framework::passwords;
 use crate::config::home;
 
 pub const SECRET_STORE: &str = "Keychain";
-pub const DOCUMENT_READERS: bool = true;
 /// `errSecItemNotFound`.
 const NOT_FOUND: i32 = -25300;
 /// `st_flags` bit for a cloud-only (dataless) File Provider placeholder.
@@ -135,6 +134,14 @@ pub fn cloud_storage() -> Option<PathBuf> {
 
 pub fn cloud_only(meta: &Metadata) -> bool {
     meta.st_flags() & SF_DATALESS != 0
+}
+
+/// macOS runs PDFKit and `textutil` directly until Phase 4 picks their
+/// sandbox (Q13), so `protonctl convert` is not used here yet.
+pub fn sandbox() -> Result<()> {
+    Err(anyhow!(
+        "the sandbox for macOS's document readers is Phase 4's work (RFC-0001 Q13)"
+    ))
 }
 
 /// The per-process RAM disk is M2.8's work on a Mac (Q14).

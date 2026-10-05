@@ -66,7 +66,8 @@ Content comes back in the tool result wherever it can, so no folder is
 needed to read it. Text pages by `offset` and `maxChars` (20,000 characters
 unless asked otherwise), and each result says where the next page starts.
 PDF text comes from macOS's PDFKit and Word, RTF and OpenDocument text from
-`textutil`, both part of macOS, so there is nothing more to install. A
+`textutil`, both part of macOS, so there is nothing more to install (on
+Linux, see [On Linux](#on-linux)). A
 scanned PDF, which has no text, comes back as images of its pages, a few
 per call, and any PDF's pages can be asked for that way. Images come back
 as image content. A file saved by `download_file`, or an
@@ -252,8 +253,12 @@ The steps above apply, with these differences:
   which must be in memory (tmpfs) and yours alone, and any swap must be
   encrypted or zram, so the file never reaches a disk in clear; `doctor`
   checks this.
-- **Not yet on Linux**: the text of PDF, Word, RTF and OpenDocument files
-  (Phase P4).
+- **Documents** are read by poppler (`pdftotext`, `pdfinfo`, `pdftoppm`)
+  and pandoc: install `poppler-utils` and `pandoc`. Each runs in a sandbox
+  (Landlock and seccomp) that lets it read only the system's programs and
+  libraries, write nothing, and reach no network; the kernel must enforce
+  Landlock, and `doctor` checks that it does. pandoc cannot read the old
+  binary Word format (`.doc`); a copy saved as `.docx` can be read.
 
 ## Configuration
 
@@ -302,7 +307,8 @@ readers run only on a Mac. With `clang` installed and
 macOS build, so changes to macOS-only code are checked there too. With
 `dbus-run-session` and `gnome-keyring-daemon` installed (Debian and Ubuntu:
 `dbus` and `gnome-keyring`), it also tests the Secret Service store against
-a throwaway keyring in a private D-Bus session.
+a throwaway keyring in a private D-Bus session. The tests of the Linux
+document readers need `poppler-utils` and `pandoc`, and fail without them.
 Inside Claude Code's Bash sandbox `~/.cargo` is not writable, so point Cargo
 elsewhere first:
 

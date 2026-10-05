@@ -230,7 +230,9 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   an empty environment, a 60 s limit and a 32 MiB cap on output:
   PDFKit through a fixed script in `/usr/bin/osascript`, and
   `/usr/bin/textutil`. Phase 4 either starts those under the profile or
-  moves them behind `protonctl convert`, whichever Q13 shows works.
+  moves them behind `protonctl convert`, whichever Q13 shows works. On
+  Linux, poppler and pandoc already run behind `protonctl convert`, under
+  Landlock and seccomp (Q34).
   Bytes go in on stdin and UTF-8 text comes out on stdout. The parent
   process tokenizes the text (R13).
 - R22. In aliases mode, from Phase 2, results MUST NOT contain image

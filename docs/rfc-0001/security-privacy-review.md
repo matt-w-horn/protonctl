@@ -162,7 +162,7 @@ runs.
 | I15 | In aliases mode protonctl writes no content to disk (R10) | aliases | no download or export folder; a RAM disk for cloud-only Drive files (Q14), on Linux `$XDG_RUNTIME_DIR` when it is tmpfs, private, and every swap is encrypted | the no-disk test | built on Linux; the Mac's RAM disk is planned (M2.8) |
 | I16 | Logs and panics carry no content (R25) | both | WARN-level logs; a panic hook | the stderr test; a planted panic | logs built; the panic hook planned |
 | I18 | A feature on Linux meets the same requirement as on macOS, or is absent ([section 11](11-platforms.md)) | both | tools registered per platform; `get_status` names what is absent and why | a surface snapshot per platform and mode | planned (Phase P) |
-| I17 | Converters reach no network, Keychain or file writes (R21) | both | a sandbox profile | the converter sandbox test | planned (Phase 4, Q13) |
+| I17 | Converters reach no network, Keychain or file writes (R21) | both | a sandbox profile; on Linux, Landlock and seccomp in `protonctl convert` (Q34) | the converter sandbox test | built on Linux; macOS planned (Phase 4, Q13) |
 
 ## 3. Threats
 

@@ -20,10 +20,6 @@ use macos as imp;
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 compile_error!("protonctl builds on macOS and Linux only (RFC section 11)");
 
-/// Whether this system has the document readers `extract` runs: PDFKit,
-/// through `/usr/bin/osascript`, and `/usr/bin/textutil`.
-pub const DOCUMENT_READERS: bool = imp::DOCUMENT_READERS;
-
 /// The secret store's name, for messages.
 pub const SECRET_STORE: &str = imp::SECRET_STORE;
 
@@ -82,4 +78,11 @@ pub fn cloud_only(meta: &Metadata) -> bool {
 /// lets the Drive CLI write a file it reads (R10, Q14), or why there is none.
 pub fn memory_dir() -> Result<PathBuf> {
     imp::memory_dir()
+}
+
+/// Confine this process, and every program it runs, as a document reader
+/// (R21): no file writes, no network, reads of the system's own programs
+/// and libraries only. It cannot be undone.
+pub fn sandbox() -> Result<()> {
+    imp::sandbox()
 }

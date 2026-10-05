@@ -5,6 +5,7 @@
 mod calendar;
 mod config;
 mod content;
+mod convert;
 mod digest;
 mod drive;
 mod export;
@@ -214,6 +215,9 @@ enum Cmd {
     /// Read Proton Mail.
     #[command(subcommand)]
     Mail(MailCmd),
+    /// Run one document reader on stdin, in a sandbox; the server starts this.
+    #[command(subcommand, hide = true)]
+    Convert(convert::Job),
 }
 
 #[derive(Subcommand)]
@@ -523,6 +527,10 @@ async fn doctor(app: &App) -> bool {
     };
     check("config", Ok(config::path().display().to_string()));
     check("privacy", app.privacy.diagnose().map(str::to_string));
+    // macOS runs its readers without a sandbox until Phase 4 (Q13).
+    if cfg!(target_os = "linux") {
+        check("document readers", convert::check().await);
+    }
     if matches!(&app.drive, Err(e) if e == DRIVE_NOT_SET_UP) {
         println!("skip  drive: not set up (protonctl setup drive)");
     } else {
@@ -642,6 +650,15 @@ fn main() -> Result<()> {
         .with_max_level(tracing_subscriber::filter::LevelFilter::WARN)
         .init();
     let cli = Cli::parse();
+    // Before anything else is read: a reader's sandbox holds no config,
+    // secret or session (R21).
+    if let Cmd::Convert(job) = cli.command {
+        if let Err(e) = convert::run(job) {
+            eprintln!("protonctl convert: {e:#}");
+            std::process::exit(convert::SANDBOX_FAILED);
+        }
+        std::process::exit(0);
+    }
     if matches!(cli.command, Cmd::Logout) {
         confirm("Logging out deletes every secret protonctl holds, the privacy key among them")?;
         let out = logout();
@@ -679,7 +696,9 @@ fn main() -> Result<()> {
             },
             Cmd::Doctor => std::process::exit(i32::from(!doctor(&app).await)),
             Cmd::Status => app.status(),
-            Cmd::Logout => unreachable!("handled before the config is loaded"),
+            Cmd::Logout | Cmd::Convert(_) => {
+                unreachable!("handled before the config is loaded")
+            }
             Cmd::RotateKey => rotate_key()?,
             Cmd::Calendar(cmd) => match cmd {
                 CalendarCmd::List => app.calendars.list_calendars().await?,

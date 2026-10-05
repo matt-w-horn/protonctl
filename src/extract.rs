@@ -1,12 +1,14 @@
 //! Text out of a file's bytes, for the tools that return content inline, and
 //! pages of that text. Text is read as UTF-8 or, with a byte-order mark,
-//! UTF-16, and otherwise as Windows-1252, flagged as a guess. PDF text comes
-//! from macOS's PDFKit through `/usr/bin/osascript`, and Word, RTF and
-//! OpenDocument text from `/usr/bin/textutil`: both are part of macOS, read
-//! the document from stdin, and run as their own processes, so a hostile
-//! document can crash only them. Images are named for the host to show, and
-//! a PDF's pages are rendered to images by PDFKit too: a scan has no text
-//! layer, and Claude reads a page image as it reads any other.
+//! UTF-16, and otherwise as Windows-1252, flagged as a guess. On macOS, PDF
+//! text comes from PDFKit through `/usr/bin/osascript`, and Word, RTF and
+//! OpenDocument text from `/usr/bin/textutil`, both part of macOS. On Linux
+//! they come from poppler and pandoc, each run by `protonctl convert` in a
+//! sandbox (R21, Q34). Every reader takes the document on stdin and runs as
+//! its own process, so a hostile document can crash only it. Images are
+//! named for the host to show, and a PDF's pages are rendered to images by
+//! the same readers: a scan has no text layer, and Claude reads a page image
+//! as it reads any other.
 
 use std::fmt::Write as _;
 use std::process::Stdio;
@@ -19,7 +21,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use base64::Engine as _;
 
 use crate::content::{Attached, clean};
-use crate::platform;
+use crate::convert::{Format, Job, Outcome};
 
 /// Largest file read for its text or shown as an image.
 pub const MAX_SOURCE: u64 = 64 << 20;
@@ -42,11 +44,6 @@ const PAGE_IMAGES: usize = 4;
 /// have once a request holds over 20, and between the 1568 that older
 /// models scale down to and the 2576 that current ones read.
 const PAGE_EDGE: u32 = 2000;
-
-/// Why a PDF, Word, RTF or OpenDocument file is not read on a system without
-/// the readers above.
-const NO_READERS: &str =
-    "this system has no reader for PDF, Word, RTF or OpenDocument files yet (RFC-0001 Q34)";
 
 /// What a file's bytes hold, as far as the tools can return it inline.
 pub enum Content {
@@ -71,6 +68,8 @@ pub enum TextFrom {
     Pdf,
     #[serde(rename = "textutil")]
     Textutil,
+    #[serde(rename = "pandoc")]
+    Pandoc,
     /// A mail body, already decoded by the mail parser.
     #[serde(rename = "message")]
     Message,
@@ -205,18 +204,19 @@ pub async fn content(bytes: &[u8], name: &str) -> Result<Content> {
         return Ok(Content::Image { mime });
     }
     if bytes.starts_with(b"%PDF-") {
-        if !platform::DOCUMENT_READERS {
-            return Ok(Content::Other(NO_READERS));
-        }
-        return pdf(bytes).await;
+        return if cfg!(target_os = "macos") {
+            pdf(bytes).await
+        } else {
+            poppler_pdf(bytes).await
+        };
     }
     let ext = name.rsplit_once('.').map(|(_, x)| x.to_ascii_lowercase());
     if let Some(format) = ext
         .as_deref()
         .filter(|x| ["docx", "doc", "rtf", "odt"].contains(x))
     {
-        if !platform::DOCUMENT_READERS {
-            return Ok(Content::Other(NO_READERS));
+        if !cfg!(target_os = "macos") {
+            return pandoc_document(bytes, format).await;
         }
         let out = helper(
             "/usr/bin/textutil",
@@ -295,6 +295,63 @@ async fn pdf(bytes: &[u8]) -> Result<Content> {
     Ok(Content::Text(doc))
 }
 
+/// Why a reader that is not installed reads nothing.
+fn missing(package: &str) -> &'static str {
+    if package == "pandoc" {
+        "reading Word, RTF and OpenDocument files here needs pandoc; install it (RFC-0001 Q34)"
+    } else {
+        "reading PDFs here needs poppler-utils; install it (RFC-0001 Q34)"
+    }
+}
+
+/// A PDF's text from `pdftotext`, which ends every page with a form feed.
+async fn poppler_pdf(bytes: &[u8]) -> Result<Content> {
+    let out = match crate::convert::read(Job::PdfText, bytes).await? {
+        Outcome::Read(out) => out,
+        Outcome::Unreadable => {
+            return Ok(Content::Other(
+                "poppler could not read the PDF; it may be damaged or need a password",
+            ));
+        }
+        Outcome::Missing(package) => return Ok(Content::Other(missing(package))),
+    };
+    let text = String::from_utf8(out).context("pdftotext did not return UTF-8")?;
+    let mut doc = Document::new(&pages_of(&text), TextFrom::Pdf);
+    doc.pdf = Some(bytes.to_vec());
+    Ok(Content::Text(doc))
+}
+
+/// The pages of `pdftotext`'s output, without the form feed after the last
+/// one or the blank lines it puts at the end of each.
+fn pages_of(text: &str) -> Vec<String> {
+    let text = text.strip_suffix('\u{C}').unwrap_or(text);
+    text.split('\u{C}')
+        .map(|page| page.trim_end_matches('\n').to_string())
+        .collect()
+}
+
+/// A Word, OpenDocument or RTF document's text from pandoc, which cannot
+/// read the old binary Word format.
+async fn pandoc_document(bytes: &[u8], extension: &str) -> Result<Content> {
+    let format = match extension {
+        "docx" => Format::Docx,
+        "odt" => Format::Odt,
+        "rtf" => Format::Rtf,
+        _ => {
+            return Ok(Content::Other(
+                "pandoc cannot read the old Word format (.doc); a copy saved as .docx can be read",
+            ));
+        }
+    };
+    let out = match crate::convert::read(Job::Document { format }, bytes).await? {
+        Outcome::Read(out) => out,
+        Outcome::Unreadable => return Ok(Content::Other("pandoc could not read the document")),
+        Outcome::Missing(package) => return Ok(Content::Other(missing(package))),
+    };
+    let text = String::from_utf8(out).context("pandoc did not return UTF-8")?;
+    Ok(Content::Text(Document::new(&[text], TextFrom::Pandoc)))
+}
+
 /// Up to `argv[1]` pages from page `argv[0]` (counted from 0), each
 /// rendered with its long edge `argv[2]` pixels and saved as JPEG, printed
 /// as JSON with the page count.
@@ -318,15 +375,11 @@ function run(argv) {
   return JSON.stringify({ pages: Number(doc.pageCount), images: images });
 }"#;
 
-/// Pages of the PDF `bytes` from `first` (counted from 1) as JPEG images,
-/// `PAGE_IMAGES` at most, each after a "Page N:" label, and the JSON that
-/// says which pages they are and where the next call starts.
-async fn page_images(bytes: &[u8], first: usize) -> Result<(Value, Vec<Attached>)> {
-    if first == 0 {
-        bail!("page counts from 1");
-    }
+/// The PDF's page count and up to `PAGE_IMAGES` pages from `first` as
+/// JPEGs, rendered by PDFKit.
+async fn pdfkit_pages(bytes: &[u8], first: usize) -> Result<(usize, Vec<Vec<u8>>)> {
     let args = [
-        (first - 1).to_string(),
+        first.saturating_sub(1).to_string(),
         PAGE_IMAGES.to_string(),
         PAGE_EDGE.to_string(),
     ];
@@ -337,22 +390,76 @@ async fn page_images(bytes: &[u8], first: usize) -> Result<(Value, Vec<Attached>
     let total = read["pages"]
         .as_u64()
         .map_or(0, |n| usize::try_from(n).unwrap_or(0));
+    let mut jpegs = Vec::new();
+    for data in read["images"].as_array().into_iter().flatten() {
+        jpegs.push(
+            base64::engine::general_purpose::STANDARD
+                .decode(data.as_str().unwrap_or_default())
+                .context("PDFKit returned an image that is not base64")?,
+        );
+    }
+    Ok((total, jpegs))
+}
+
+/// The PDF's page count from `pdfinfo`, and up to `PAGE_IMAGES` pages from
+/// `first` as JPEGs from `pdftoppm`, one sandboxed run each.
+async fn poppler_pages(bytes: &[u8], first: usize) -> Result<(usize, Vec<Vec<u8>>)> {
+    let read = async |job| match crate::convert::read(job, bytes).await? {
+        Outcome::Read(out) => Ok(out),
+        Outcome::Unreadable => bail!("poppler could not read the PDF"),
+        Outcome::Missing(package) => bail!("{}", missing(package)),
+    };
+    let info = read(Job::PdfInfo).await?;
+    let total =
+        page_count(&String::from_utf8_lossy(&info)).context("pdfinfo gave no page count")?;
+    let mut jpegs = Vec::new();
+    for page in first..=total.min(first + PAGE_IMAGES - 1) {
+        let jpeg = read(Job::PdfPage {
+            page,
+            edge: PAGE_EDGE,
+        })
+        .await?;
+        if !jpeg.starts_with(b"\xFF\xD8\xFF") {
+            bail!("pdftoppm did not return a JPEG for page {page}");
+        }
+        jpegs.push(jpeg);
+    }
+    Ok((total, jpegs))
+}
+
+/// The "Pages:" line of `pdfinfo`'s output.
+fn page_count(info: &str) -> Option<usize> {
+    info.lines()
+        .find_map(|l| l.strip_prefix("Pages:"))
+        .and_then(|n| n.trim().parse().ok())
+}
+
+/// Pages of the PDF `bytes` from `first` (counted from 1) as JPEG images,
+/// `PAGE_IMAGES` at most, each after a "Page N:" label, and the JSON that
+/// says which pages they are and where the next call starts.
+async fn page_images(bytes: &[u8], first: usize) -> Result<(Value, Vec<Attached>)> {
+    if first == 0 {
+        bail!("page counts from 1");
+    }
+    let (total, jpegs) = if cfg!(target_os = "macos") {
+        pdfkit_pages(bytes, first).await?
+    } else {
+        poppler_pages(bytes, first).await?
+    };
     if first > total {
         bail!("page {first} is past the PDF's {total} pages");
     }
-    let mut images = Vec::new();
-    for (i, data) in read["images"].as_array().into_iter().flatten().enumerate() {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(data.as_str().unwrap_or_default())
-            .context("PDFKit returned an image that is not base64")?;
-        images.push(Attached::Image {
+    let images: Vec<Attached> = jpegs
+        .into_iter()
+        .enumerate()
+        .map(|(i, bytes)| Attached::Image {
             mime: "image/jpeg",
             bytes,
             label: Some(format!("Page {}:", first + i)),
-        });
-    }
+        })
+        .collect();
     if images.is_empty() {
-        bail!("PDFKit rendered no page");
+        bail!("the PDF reader rendered no page");
     }
     let last = first + images.len() - 1;
     let next = (last < total).then_some(last + 1);
@@ -370,10 +477,24 @@ async fn page_images(bytes: &[u8], first: usize) -> Result<(Value, Vec<Attached>
     Ok((v, images))
 }
 
-/// Run one of macOS's own helpers on `input` with an empty environment and
-/// return what it prints, at most `MAX_TEXT` bytes, within `HELPER_LIMIT`.
-/// `kill_on_drop` ends it when the call is cut off.
+/// Run one of macOS's own helpers on `input` and return what it prints;
+/// any exit but success is an error.
 async fn helper(program: &str, args: &[&str], input: &[u8]) -> Result<Vec<u8>> {
+    let (status, out) = pipe(program, args, input).await?;
+    if !status.success() {
+        bail!("{program} could not read the document ({status})");
+    }
+    Ok(out)
+}
+
+/// Run `program` on `input` with an empty environment, and return how it
+/// exited and what it printed, at most `MAX_TEXT` bytes, within
+/// `HELPER_LIMIT`. `kill_on_drop` ends it when the call is cut off.
+pub async fn pipe<S: AsRef<std::ffi::OsStr>>(
+    program: &str,
+    args: &[S],
+    input: &[u8],
+) -> Result<(std::process::ExitStatus, Vec<u8>)> {
     let mut child = tokio::process::Command::new(program)
         .args(args)
         .env_clear()
@@ -401,11 +522,7 @@ async fn helper(program: &str, args: &[&str], input: &[u8]) -> Result<Vec<u8>> {
                 MAX_TEXT >> 20
             );
         }
-        let status = child.wait().await?;
-        if !status.success() {
-            bail!("{program} could not read the document ({status})");
-        }
-        Ok(out)
+        Ok((child.wait().await?, out))
     };
     tokio::time::timeout(HELPER_LIMIT, work)
         .await
@@ -730,21 +847,78 @@ pub(crate) mod tests {
         );
     }
 
+    /// A fixture of `tests/fixtures`, which `tests/convert.rs` describes.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn fixture(name: &str) -> Vec<u8> {
+        std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(name),
+        )
+        .unwrap()
+    }
+
+    /// The two-page PDF fixture: "Hello from page one.\nCafé — accents."
+    /// and "Page two here.".
+    #[cfg(target_os = "linux")]
+    pub(crate) fn sample_pdf() -> Vec<u8> {
+        fixture("two-pages.pdf")
+    }
+
+    #[test]
+    fn poppler_output_splits_into_pages() {
+        assert_eq!(pages_of("one\n\n\u{C}two\n\n\u{C}"), ["one", "two"]);
+        assert_eq!(pages_of("\u{C}\u{C}"), ["", ""]);
+        assert_eq!(pages_of(""), [""]);
+        assert_eq!(
+            page_count("Producer: x\nPages:           12\nEncrypted: no\n"),
+            Some(12)
+        );
+        assert_eq!(page_count("Pages: many"), None);
+    }
+
+    /// The readers run here directly (`convert::read` under test); the
+    /// sandboxed runs are in `tests/convert.rs`.
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn without_the_readers_documents_say_why_they_are_not_read() {
-        for (bytes, name) in [
-            (&b"%PDF-1.4 a page"[..], "a.pdf"),
-            (b"PK\x03\x04 a document", "t.docx"),
-            (b"{\\rtf1 text}", "t.rtf"),
+    async fn poppler_and_pandoc_read_pdfs_and_documents() {
+        let pdf = text(content(&sample_pdf(), "a.pdf").await.unwrap());
+        assert_eq!(
+            pdf.text,
+            "Hello from page one.\nCafé — accents.\u{C}Page two here."
+        );
+        assert_eq!(
+            (pdf.from, pdf.page_starts.clone()),
+            (TextFrom::Pdf, vec![0, 37])
+        );
+        let (v, images) = pdf.read(None, None, Some(2)).await.unwrap();
+        assert_eq!(
+            (v["pdfPages"].clone(), v["pagesShown"].clone(), images.len()),
+            (json!(2), json!([2, 2]), 1),
+            "{v}"
+        );
+        assert!(pdf.read(None, None, Some(3)).await.is_err());
+        for format in ["docx", "odt", "rtf"] {
+            let name = format!("text.{format}");
+            let doc = text(content(&fixture(&name), &name).await.unwrap());
+            assert_eq!(
+                doc.text, "Word text, Café.\n\nSecond paragraph.\n",
+                "{format}"
+            );
+            assert_eq!(doc.from, TextFrom::Pandoc);
+        }
+        for (bytes, name, why) in [
+            (&b"%PDF-1.4 damaged"[..], "a.pdf", "poppler could not read"),
+            (b"\xD0\xCF\x11\xE0 old Word", "t.doc", "old Word format"),
+            (b"PK\x03\x04 damaged", "t.docx", "pandoc could not read"),
         ] {
             let read = content(bytes, name).await.unwrap();
             assert!(
-                matches!(read, Content::Other(why) if why == NO_READERS),
+                matches!(read, Content::Other(w) if w.contains(why)),
                 "{name}"
             );
         }
-        // Text and images do not need them.
+        // Text and images need no reader.
         assert!(matches!(
             content(b"plain", "t.txt").await.unwrap(),
             Content::Text(_)

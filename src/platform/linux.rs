@@ -16,8 +16,6 @@ use secret_service::blocking::{Item, SecretService};
 use crate::config::home;
 
 pub const SECRET_STORE: &str = "Secret Service";
-/// Linux readers wait for Phase P4 (RFC Q34).
-pub const DOCUMENT_READERS: bool = false;
 
 /// Every protonctl value is text.
 const CONTENT_TYPE: &str = "text/plain";
@@ -207,6 +205,61 @@ pub fn cloud_storage() -> Option<PathBuf> {
 /// Without the app there are no File Provider placeholders.
 pub fn cloud_only(_meta: &Metadata) -> bool {
     false
+}
+
+/// What a document reader may read: programs, libraries, the loader's cache
+/// and font configuration, and nothing of the user's or the machine's own.
+const READER_READS: [&str; 7] = [
+    "/usr",
+    "/lib",
+    "/lib64",
+    "/bin",
+    "/etc/ld.so.cache",
+    "/etc/fonts",
+    "/var/cache/fontconfig",
+];
+
+/// Landlock first, which also sets no-new-privileges, which seccomp needs.
+/// Landlock confines files, TCP, abstract Unix sockets and signals as far
+/// as this kernel supports, and must hold at least for files; seccomp
+/// refuses every new socket and `io_uring`, whose requests seccomp cannot
+/// see, so no network is reached on kernels whose Landlock has no network
+/// rules (before 6.7).
+pub fn sandbox() -> Result<()> {
+    use landlock::{
+        ABI, Access as _, AccessFs, AccessNet, Ruleset, RulesetAttr as _, RulesetCreatedAttr as _,
+        RulesetStatus, Scope, path_beneath_rules,
+    };
+    use seccompiler::{BpfProgram, SeccompAction, SeccompFilter};
+
+    let abi = ABI::V9;
+    let reads = READER_READS.iter().filter(|p| Path::new(p).exists());
+    let status = Ruleset::default()
+        .handle_access(AccessFs::from_all(abi))?
+        .handle_access(AccessNet::from_all(abi))?
+        .scope(Scope::from_all(abi))?
+        .create()?
+        .add_rules(path_beneath_rules(reads, AccessFs::from_read(abi)))?
+        // Readers open it for their own output.
+        .add_rules(path_beneath_rules(["/dev/null"], AccessFs::from_all(abi)))?
+        .restrict_self()?;
+    ensure!(
+        status.ruleset != RulesetStatus::NotEnforced,
+        "this kernel does not enforce Landlock, which the document readers need (RFC-0001 R21)"
+    );
+    let refused = [libc::SYS_socket, libc::SYS_io_uring_setup]
+        .into_iter()
+        .map(|call| (call, Vec::new()))
+        .collect();
+    let filter: BpfProgram = SeccompFilter::new(
+        refused,
+        SeccompAction::Allow,
+        SeccompAction::Errno(libc::EACCES.unsigned_abs()),
+        std::env::consts::ARCH.try_into()?,
+    )?
+    .try_into()?;
+    seccompiler::apply_filter(&filter)?;
+    Ok(())
 }
 
 /// `statfs`'s type for tmpfs, a file system in memory and swap.
@@ -484,6 +537,74 @@ mod tests {
         std::fs::set_permissions(disk.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let err = private_memory(disk.path()).unwrap_err().to_string();
         assert!(err.contains("not on tmpfs"), "{err}");
+    }
+
+    /// Set in the child that `the_sandbox_confines_a_reader` starts.
+    const PROBE: &str = "PROTONCTL_SANDBOX_PROBE";
+
+    /// MP4's exit (R21): a process in the readers' sandbox reaches no network
+    /// and no other process, writes nothing, and reads only the system's
+    /// programs and libraries, yet can still run a reader. The sandbox cannot
+    /// be undone, so the probe runs in a child: this test binary again, with
+    /// only `sandbox_probe` selected.
+    #[test]
+    fn the_sandbox_confines_a_reader() {
+        let out = std::process::Command::new("/proc/self/exe")
+            .args(["platform::linux::tests::sandbox_probe", "--exact"])
+            .args(["--include-ignored", "--nocapture", "--test-threads=1"])
+            .env(PROBE, "1")
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{said}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(said.contains("1 passed"), "{said}");
+    }
+
+    #[test]
+    #[ignore = "runs only as the child of the_sandbox_confines_a_reader"]
+    fn sandbox_probe() {
+        if std::env::var_os(PROBE).is_none() {
+            return;
+        }
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+        let tmp = std::env::temp_dir();
+        let before = tempfile::NamedTempFile::new_in(&tmp).unwrap();
+        sandbox().unwrap();
+        let denied = |what: &str, r: std::io::Result<()>| {
+            let e = r.expect_err(what);
+            assert_eq!(
+                e.kind(),
+                std::io::ErrorKind::PermissionDenied,
+                "{what}: {e}"
+            );
+        };
+        denied("TCP", std::net::TcpStream::connect("127.0.0.1:9").map(drop));
+        denied("UDP", std::net::UdpSocket::bind("127.0.0.1:0").map(drop));
+        denied(
+            "a Unix socket",
+            std::os::unix::net::UnixDatagram::unbound().map(drop),
+        );
+        denied("a write to /tmp", std::fs::write(tmp.join("probe"), "x"));
+        denied("a read of /tmp", std::fs::read(before.path()).map(drop));
+        denied(
+            "a read of the home folder",
+            std::fs::read_dir(&home).map(drop),
+        );
+        denied("a read of /etc", std::fs::read("/etc/hostname").map(drop));
+        denied("a read of /proc", std::fs::read("/proc/1/status").map(drop));
+        denied("a write to /usr", std::fs::write("/usr/probe", "x"));
+        // What a reader needs still works.
+        std::fs::read("/etc/ld.so.cache").unwrap();
+        assert!(
+            std::process::Command::new("/usr/bin/true")
+                .status()
+                .unwrap()
+                .success()
+        );
     }
 
     #[test]

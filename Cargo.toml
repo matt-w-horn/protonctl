@@ -49,6 +49,11 @@ secret-service = { version = "5.2", default-features = false, features = ["rt-to
 # statfs and device numbers for the memory folder's checks (R10, Q14); in
 # the tree already, through tempfile.
 rustix = { version = "1", default-features = false, features = ["fs", "std"] }
+# The document readers' sandbox (RFC R21, Q34): Landlock for files, the
+# network and other processes, and a seccomp filter for sockets.
+landlock = "0.4.7"
+seccompiler = "0.5"
+libc = "0.2"
 
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }

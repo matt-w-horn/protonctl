@@ -282,7 +282,11 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
   and the Drive tests pass against stand-in CLIs. The live check needs a
   Linux machine signed in to Proton.
 - MP4 Converters and their sandbox on Linux (Q34), with Phase 4. Exit: the
-  converter sandbox test on Linux.
+  converter sandbox test on Linux. Built 2026-10-05, ahead of Phase 4
+  ([section 11](11-platforms.md#the-document-readers-as-built-p4)):
+  poppler and pandoc in `protonctl convert` under Landlock and seccomp. The
+  sandbox test passes, and fails without the seccomp filter or with all of
+  `/etc` readable. OCR (Tesseract) waits for Phase 4's M4.2.
 - MP5 User presence on Linux (Q35), with Phase 3, or no `reveal_*` there.
   Exit: the user-presence tests, or the surface snapshot without
   `reveal_*` on Linux.

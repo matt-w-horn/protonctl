@@ -3210,11 +3210,7 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         });
         std::fs::write(t.path().join("Projects/long.txt"), &long).unwrap();
         std::fs::write(t.path().join("Projects/old.txt"), b"Caf\xE9").unwrap();
-        #[cfg(target_os = "macos")]
         let pdf = crate::extract::tests::sample_pdf();
-        // Without macOS's readers, any PDF is unreadable; these bytes suffice.
-        #[cfg(not(target_os = "macos"))]
-        let pdf = b"%PDF-1.4 a page".to_vec();
         std::fs::write(t.path().join("Projects/doc.pdf"), pdf).unwrap();
         let png = b"\x89PNG\r\n\x1a\nnot a real image".to_vec();
         std::fs::write(t.path().join("Projects/pic.png"), &png).unwrap();
@@ -3244,17 +3240,11 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
             "{old}"
         );
         let doc = read("/Projects/doc.pdf", None).await.json;
-        if crate::platform::DOCUMENT_READERS {
-            assert!(
-                doc["content"].as_str().unwrap().contains("Café — accents."),
-                "{doc}"
-            );
-            assert_eq!(doc["textFrom"], "pdf");
-        } else {
-            assert_eq!(doc["content"], Value::Null);
-            let why = doc["reason"].as_str().unwrap();
-            assert!(why.contains("no reader for PDF"), "{doc}");
-        }
+        assert!(
+            doc["content"].as_str().unwrap().contains("Café — accents."),
+            "{doc}"
+        );
+        assert_eq!(doc["textFrom"], "pdf");
         let pic = read("/Projects/pic.png", None).await;
         assert!(matches!(
             pic.attached.as_slice(),

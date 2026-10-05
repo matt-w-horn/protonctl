@@ -290,7 +290,7 @@ Each line is under 200 characters:
 | Mail and attachments | Bridge's IMAP into memory |
 | Drive files the app has synced | read from the app's folder, which adds no copy |
 | Drive files not on this Mac | a per-process RAM disk, since `proton-drive` writes downloads only into a folder (Q14); on Linux, `$XDG_RUNTIME_DIR` |
-| Conversion | bytes to `osascript` (PDFKit) or `textutil` on stdin today, text back on stdout; under a sandbox profile from Phase 4 (R21) |
+| Conversion | bytes to `osascript` (PDFKit) or `textutil` on stdin today, text back on stdout; under a sandbox profile from Phase 4 (R21). On Linux, poppler or pandoc inside `protonctl convert`, under Landlock and seccomp (Q34) |
 
 The helpers run with an empty environment, so they find the real home and
 per-user temporary folders through the system rather than `HOME` or
