@@ -858,8 +858,8 @@ the reference.
   comment (the mode, read without the secret) and compares it with the
   mode at start; there is no check of the item's modification date.
   A setting that cannot be read gives `privacy_mode_unreadable`, a code
-  the draft did not have; on Linux, which has no secret store yet, every
-  call gives it.
+  the draft did not have; on Linux, every call gives it while no Secret
+  Service runs.
 - **Errors.** An operation's error reaches aliases mode only by its type:
   `content::Missing` gives `not_found`; `content::Invalid` carries the
   fault (`invalid_argument` with fixed text, or `invalid_page_token`) and

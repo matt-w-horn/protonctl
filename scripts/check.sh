@@ -23,6 +23,17 @@ if [ "$(uname -s)" = Linux ]; then
     else
         echo "check.sh: skipped the macOS build check (needs clang and \`rustup target add aarch64-apple-darwin\`)" >&2
     fi
+    # The Secret Service store (RFC Q31), against a throwaway GNOME Keyring in
+    # a private D-Bus session, so the user's own keyring is never touched.
+    if command -v dbus-run-session >/dev/null && command -v gnome-keyring-daemon >/dev/null; then
+        keyring=$(mktemp -d)
+        trap 'rm -rf "$keyring"' EXIT
+        dbus-run-session -- sh -c '
+            printf test | XDG_DATA_HOME="$1" gnome-keyring-daemon --unlock --components=secrets >/dev/null &&
+                cargo test --locked --bin protonctl platform::linux -- --ignored' sh "$keyring"
+    else
+        echo "check.sh: skipped the Secret Service tests (needs dbus-run-session and gnome-keyring-daemon)" >&2
+    fi
 fi
 
 # Line coverage may not fall below the floor: the 2026-10-03 figure, 62.99%,

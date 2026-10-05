@@ -3,8 +3,9 @@
 A local MCP server and CLI that lets Claude (Claude Code, Claude Desktop and
 Cowork) read Proton Mail, Calendar and Drive through Proton's own apps. It is
 read-only: it cannot send, share, draft, label, move or delete. It holds no
-Proton password or keys, and keeps its secrets in the macOS Keychain. Design
-and requirements: [docs/rfc-0001.md](docs/rfc-0001.md).
+Proton password or keys, and keeps its secrets in the macOS Keychain, or on
+Linux in the Secret Service (see [On Linux](#on-linux)). Design and
+requirements: [docs/rfc-0001.md](docs/rfc-0001.md).
 
 ![Illustration in three chapters: protonctl answering from synthetic mail and calendar data; where that data goes once Claude reads it; and aliases mode, where the same answers come from results that hold aliases instead of names](docs/demo/protonctl-demo.gif)
 
@@ -212,6 +213,43 @@ the Proton web app. The Proton Drive CLI has its own session, which this ends:
 proton-drive auth logout
 ```
 
+## On Linux
+
+protonctl runs on Linux too ([RFC section 11](docs/rfc-0001/11-platforms.md)).
+The steps above apply, with these differences:
+
+- **Secrets** go to the Secret Service over D-Bus: GNOME Keyring or KWallet,
+  which Bridge and the Drive CLI also need. Items carry the attributes
+  `service` `protonctl` and `account`, as the Keychain items do. With no
+  Secret Service running, setup refuses; protonctl never writes a secret to
+  a file. A locked keyring shows the desktop's unlock prompt.
+- **Pasting**: use `wl-paste` (Wayland) or `xclip -selection clipboard -o`
+  (X11) where the steps above use `pbpaste`.
+- **Bridge**: protonctl never starts it on Linux. Set Bridge up once in its
+  window (sign in, **Show All Mail** on, **Connection mode** SSL), quit it,
+  then keep it running with no window as a systemd user unit. Save this as
+  `~/.config/systemd/user/protonmail-bridge.service`, with the path that
+  `command -v protonmail-bridge` prints:
+
+  ```ini
+  [Unit]
+  Description=Proton Mail Bridge
+
+  [Service]
+  ExecStart=/usr/bin/protonmail-bridge --noninteractive
+  Restart=on-failure
+
+  [Install]
+  WantedBy=default.target
+  ```
+
+  Then run `systemctl --user enable --now protonmail-bridge`.
+- **Drive** goes through the CLI only, since there is no Proton Drive app
+  for Linux, so search is off. `setup drive` pins the CLI's SHA-256; after
+  you update the CLI, run `setup drive` again to pin the new one.
+- **Not yet on Linux**: the text of PDF, Word, RTF and OpenDocument files
+  (Phase P4).
+
 ## Configuration
 
 `~/.config/protonctl/config.toml` holds no secrets. The format is documented
@@ -250,14 +288,16 @@ the tests, `cargo deny check`, and a line-coverage floor through
 which prints coverage per file. Unused dependencies are checked by hand, now
 and then, with `cargo machete` (`cargo install cargo-machete --locked`).
 
-The gates also run on Linux, as in a cloud container, where protonctl builds
-but serves nothing yet: it has no secret store there
+The gates also run on Linux, as in a cloud container
 ([RFC section 11](docs/rfc-0001/11-platforms.md)). Install the tools with
 `cargo install cargo-deny cargo-llvm-cov --locked` and
 `rustup component add llvm-tools-preview`. The tests of macOS's PDF and Word
 readers run only on a Mac. With `clang` installed and
 `rustup target add aarch64-apple-darwin`, `check.sh` on Linux also lints the
-macOS build, so changes to macOS-only code are checked there too.
+macOS build, so changes to macOS-only code are checked there too. With
+`dbus-run-session` and `gnome-keyring-daemon` installed (Debian and Ubuntu:
+`dbus` and `gnome-keyring`), it also tests the Secret Service store against
+a throwaway keyring in a private D-Bus session.
 Inside Claude Code's Bash sandbox `~/.cargo` is not writable, so point Cargo
 elsewhere first:
 

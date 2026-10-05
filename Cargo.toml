@@ -42,6 +42,11 @@ zeroize = "1.9.0"
 core-foundation = "0.10"
 security-framework = "3"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# RFC Q31. The tokio runtime is ours already; crypto-rust encrypts each
+# secret on the D-Bus session with a pure-Rust Diffie-Hellman exchange.
+secret-service = { version = "5.2", default-features = false, features = ["rt-tokio-crypto-rust"] }
+
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }
 proptest = { version = "1.11", default-features = false, features = ["std"] }

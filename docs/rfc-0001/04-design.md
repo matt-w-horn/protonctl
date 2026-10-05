@@ -297,7 +297,7 @@ send on whatever protonctl returned ([section 5](05-security.md)).
 | Downloads | `~/Library/Caches/protonctl/downloads/<pid>/<drive or mail>-<Unix seconds>-<random>/` (mail attachments and Drive files; the sweep reads each folder's age from its name); off mode only from Phase 2 |
 | Cloud-only Drive files | in aliases mode, from Phase 2, a per-process RAM disk, since `proton-drive` cannot stream to stdout (Q14) |
 | Exports | the folder `[export] folder` names: `drive/<Drive path>`, `mail/<messageId>/<index>-<name>`, `manifests/drive-<UTC time>.jsonl`; off mode only from Phase 2 |
-| On Linux | the same names under XDG folders: `$XDG_CACHE_HOME/protonctl` (else `~/.cache/protonctl`), and from Phase P2 `$XDG_STATE_HOME/protonctl`; no secret store until Phase P2, which Q31 picks ([section 11](11-platforms.md)) |
+| On Linux | the cache under `$XDG_CACHE_HOME/protonctl` (else `~/.cache/protonctl`); secrets in the Secret Service, with the attributes `service` and `account` (Q31, [section 11](11-platforms.md)) |
 | Not protonctl's, but holding its results | Claude Code's transcripts under `~/.claude/projects/`; Claude Desktop's logs under `~/Library/Logs/Claude/` ([section 5](05-security.md)) |
 
 ---

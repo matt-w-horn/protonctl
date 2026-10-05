@@ -310,7 +310,7 @@ JSON:
 | `privacy_key_missing` | R26 | The privacy key is missing; the user can run `protonctl setup privacy`. |
 | `privacy_key_unreadable` | the key is stored but cannot be read, or does not match its ID | The privacy key cannot be read; the user can run `protonctl doctor`. |
 | `privacy_mode_unset` | no mode is set (Q27) | No privacy mode is set; the user can run `protonctl setup privacy`, or `protonctl setup privacy --off`. |
-| `privacy_mode_unreadable` | the `privacy-mode` item cannot be read (R26), and always on Linux until it has a secret store | The privacy setting cannot be read; the user can run `protonctl doctor`. |
+| `privacy_mode_unreadable` | the `privacy-mode` item cannot be read (R26), as on Linux while no Secret Service runs | The privacy setting cannot be read; the user can run `protonctl doctor`. |
 | `pipeline_failed` | R13 | protonctl could not tokenize this result, so it returns nothing. |
 | `internal` | anything else | The call failed inside protonctl; `protonctl doctor` shows more. |
 
@@ -408,8 +408,8 @@ Service `protonctl`, generic passwords, in the login keychain:
 | `privacy-key` | 32 random bytes, as base64url text; the key ID in the item's comment | `setup privacy`, `rotate-key` | aliases |
 
 On Linux the same accounts live in the Secret Service, under the
-attributes `service = protonctl` and `account = …` (Q31,
-[section 11](11-platforms.md)).
+attributes `service = protonctl` and `account = …`, with the comment in a
+`comment` attribute (Q31, [section 11](11-platforms.md)).
 
 ## Wire formats
 

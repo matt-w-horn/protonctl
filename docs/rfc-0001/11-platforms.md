@@ -5,8 +5,10 @@
 Proposed 2026-10-04. Q29 records the decision to support Linux; Q30 to
 Q35, decided the same day, adopt the choices this section recommends
 ([section 10](10-open-questions.md) gives each reason). Phase P1 is built
-(2026-10-04): protonctl builds and passes its gates on Linux, where it
-serves nothing until Phase P2 gives it a secret store.
+(2026-10-04): protonctl builds and passes its gates on Linux. Phases P2
+and P3 are built (2026-10-05): the Secret Service holds its secrets, and
+the Drive CLI is pinned by its SHA-256; their live checks need a Linux
+desktop signed in to Proton.
 
 ## Why
 
@@ -55,12 +57,12 @@ records. After P1:
 
 | Area | macOS mechanism | Where | On Linux |
 |---|---|---|---|
-| Secrets (R2) | Keychain through `security-framework`, a macOS-only dependency | `src/platform/macos.rs` | refused: "no secret store on Linux yet" (Q31) |
+| Secrets (R2) | Keychain through `security-framework`, a macOS-only dependency | `src/platform/macos.rs`, `src/platform/linux.rs` | the Secret Service through the `secret-service` crate, a Linux-only dependency (Q31, built 2026-10-05) |
 | Cloud-only files | `st_flags() & SF_DATALESS` | `src/platform/macos.rs` | none, since no Drive app makes placeholders |
 | Download expiry (R10) | the time in each download folder's name, on both systems | `src/content.rs` | the same |
 | Drive folder discovery | `~/Library/CloudStorage/ProtonDrive-*` | `src/platform/macos.rs` | no place to look: the CLI-only mode |
 | Drive CLI check (R9) | `/usr/bin/codesign` and Apple Team ID `2SB5Z68H26`, before every run (Q24) | `src/drive/cli.rs` | the SHA-256 pinned at `setup drive`, before every run (Q33, built 2026-10-05) |
-| Bridge on demand (Q2) | `/usr/bin/open -g -j -b com.protonmail.bridge` | `src/mail/mod.rs` | refused when Bridge is not running, naming Q32 |
+| Bridge on demand (Q2) | `/usr/bin/open -g -j -b com.protonmail.bridge` | `src/mail/mod.rs` | never started; when Bridge is not running, the error says to run it as a systemd user unit, which the README shows (Q32) |
 | PDF text and page images; Word, RTF, OpenDocument | `/usr/bin/osascript` with PDFKit; `/usr/bin/textutil` | `src/extract.rs` | "no reader for PDF, Word, RTF or OpenDocument files yet" (Q34); text and images read as on macOS |
 | Cache folder | `~/Library/Caches/protonctl` | `src/platform/macos.rs` | `$XDG_CACHE_HOME/protonctl`, else `~/.cache/protonctl` |
 | Planned | LocalAuthentication (R18), `sandbox-exec` (R21), Vision (R21, R22), a RAM disk (R10, Q14), a Keychain attribute for the key ID (R20) | | |
@@ -154,7 +156,33 @@ flowchart TB
 | User presence | R18 | LocalAuthentication: Touch ID or the login password | polkit (`pkcheck --allow-user-interaction`, needs an authentication agent, so a desktop session); fprintd; a FIDO2 security key's touch (works on both systems); none | polkit where an agent runs; otherwise no `reveal_*` tools | Q35 |
 | Content off disk | R10, Q14 | a RAM disk | `memfd_create`, which never touches a filesystem; `/dev/shm`; `$XDG_RUNTIME_DIR`, a per-user memory file system | `$XDG_RUNTIME_DIR`, since the CLI writes into a folder, which a `memfd_create` file is not (Q14) | Q14 |
 | Download expiry | R10 | the time in the folder's name, since MP1 | the same | the time in the name (built) | MP1 |
-| Paths | | `~/Library/Caches`, `~/Library/Logs` | `$XDG_CACHE_HOME`, `$XDG_STATE_HOME`; the config path is already XDG | XDG | |
+| Paths | | `~/Library/Caches` | `$XDG_CACHE_HOME`; the config path is already XDG | XDG | |
+
+## The Secret Service as built (P2)
+
+- The `secret-service` crate 5.2, over zbus on tokio, with its pure-Rust
+  encryption: about 38 crates, all under licences `deny.toml` allows.
+- Each item has the label `protonctl/<account>` and the attributes
+  `service`, `account` and, where macOS has the item's comment,
+  `comment`. Two items for one account are an error, not a choice.
+- A call that carries a secret uses an encrypted session, as libsecret
+  does by default; one that reads or deletes by attributes uses a plain
+  session. The per-call reads of the privacy setting are attribute reads,
+  so a call costs about 3 ms in a debug build instead of about 94 ms.
+  Any program of the user can call the Secret Service itself, so the
+  encryption guards only against a program watching the session bus.
+- The Secret Service cannot change a secret and its attributes in one
+  call, so `rotate-key` writes the key first and its ID second, and a
+  reader that sees a new key under the old ID reads the ID once more.
+- zbus's blocking calls start their own runtime, which tokio forbids on a
+  thread running async code, so each call runs on a short-lived thread of
+  its own.
+- A locked collection is unlocked through the desktop's prompt. With no
+  Secret Service running, every call fails with a message naming Q31, and
+  nothing is written to a file.
+- `scripts/check.sh` tests the store against a throwaway GNOME Keyring in
+  a private D-Bus session, so the user's keyring is never touched; other
+  unit tests refuse to reach any service but `protonctl-test`.
 
 ## Hosts by platform
 
@@ -198,7 +226,7 @@ more.
 |---|---|---|
 | P0 | Answer Q30 to Q35; confirm the Linux availability of Claude Desktop, Bridge's core and the Drive CLI. Done 2026-10-04 | P1 |
 | P1 | Builds and tests on Linux: `src/platform/`; target-specific dependencies; Linux implementations that report "not available on Linux"; the macOS-only tests behind `cfg`; download expiry by the time in the folder name; `deny.toml` targets; `scripts/check.sh` on Linux, with the macOS build checked from there. Done 2026-10-04 | Phase 2, so the privacy layer is built and tested in Linux containers |
-| P2 | Mail and Calendar on Linux: the secret store (Q31), Bridge started by the user (Q32), `setup`, `doctor` and `status` | alongside Phase 2 |
+| P2 | Mail and Calendar on Linux: the secret store (Q31), Bridge started by the user (Q32), `setup`, `doctor` and `status`. Built 2026-10-05; the live check waits for a Linux desktop | alongside Phase 2 |
 | P3 | Drive on Linux, as Q33 decides. Built 2026-10-05; the live check waits for a Linux machine signed in to Proton | after P2 |
 | P4 | Converters and their sandbox on Linux (Q34) | with Phase 4 |
 | P5 | User presence on Linux (Q35), or no `reveal_*` there | with Phase 3 |

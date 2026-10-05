@@ -177,7 +177,8 @@ pub async fn login(tls: TlsStream<TcpStream>, user: &str, password: &str) -> Res
 }
 
 /// A logged-in session with the stored password, over the pinned connection.
-/// If nothing answers on Bridge's port, the Bridge app is opened hidden first.
+/// If nothing answers on Bridge's port, the Bridge app is opened hidden
+/// first on macOS; on Linux the error says how to keep Bridge running.
 pub async fn open(cfg: &MailConfig) -> Result<Session> {
     let pinned = cfg.cert_sha256;
     let account = secret::Account::Bridge(cfg.address.clone());
@@ -197,11 +198,15 @@ pub async fn open(cfg: &MailConfig) -> Result<Session> {
         login(tls, &cfg.address, password.expose_secret()).await
     };
     match attempt().await {
+        // Q32: on Linux, Bridge runs as the user's own service.
+        Err(e) if e.downcast_ref::<NotListening>().is_some() && !cfg!(target_os = "macos") => {
+            return Err(e.context(
+                "protonctl does not start Bridge on Linux (RFC-0001 Q32); run it as a systemd \
+                 user unit, as the README's \"On Linux\" section shows",
+            ));
+        }
         Err(e) if e.downcast_ref::<NotListening>().is_some() => {}
         result => return result,
-    }
-    if !cfg!(target_os = "macos") {
-        bail!("nothing answers on Bridge's port; start Proton Mail Bridge first (RFC-0001 Q32)");
     }
     // Until Bridge has loaded the account it refuses logins ("no such user"),
     // so every failure is retried until the deadline.

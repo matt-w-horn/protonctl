@@ -197,7 +197,8 @@
   - Q31: the Secret Service over D-Bus (GNOME Keyring, KDE Wallet). Bridge
     and the Drive CLI need it on Linux anyway ([section 11](11-platforms.md#linux-availability-mp0-findings-2026-10-04)).
     With none running, protonctl refuses to store secrets and never writes
-    them to a file. The crate is chosen in MP2.
+    them to a file. MP2 chose the `secret-service` crate
+    ([section 11](11-platforms.md#the-secret-service-as-built-p2)).
   - Q32: Bridge runs before protonctl does; protonctl never starts it on
     Linux, and `doctor` says how to run it as a systemd user unit.
   - Q33: the CLI's SHA-256 is pinned at `setup drive` and checked before

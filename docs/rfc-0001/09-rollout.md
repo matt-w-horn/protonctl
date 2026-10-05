@@ -260,7 +260,13 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
   ([section 11](11-platforms.md#how-rust-projects-handle-platform-differences)).
 - MP2 Mail and Calendar on Linux: the secret store (Q31), Bridge started
   as Q32 decides, `setup`, `doctor`, `status`. Exit: a live check on a
-  Linux machine, counts only.
+  Linux machine, counts only. Built 2026-10-05
+  ([section 11](11-platforms.md#the-secret-service-as-built-p2)): the
+  store's tests pass against a throwaway GNOME Keyring, and with the built
+  binary `setup privacy`, `status`, `doctor`, `get_status` over MCP,
+  `privacy_mode_changed` after a change, `rotate-key` and `logout` all
+  worked against it. With no Secret Service, setup refuses and writes no
+  file. The live check needs a Linux desktop with Bridge signed in.
 - MP3 Drive on Linux as Q33 decides. Exit: the Drive tests against the
   stand-in CLI, and a live check if the CLI exists for Linux. Built
   2026-10-05: `setup drive` pins the CLI's SHA-256 in `[drive]` and pins

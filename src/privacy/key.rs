@@ -104,8 +104,6 @@ fn decode(text: &str) -> Result<Zeroizing<[u8; 32]>> {
     Ok(key)
 }
 
-/// A new key from the system's random source, stored with its ID in one
-/// update; returns the ID.
 /// That the stored key can be read and matches its ID.
 pub fn check_stored() -> Result<()> {
     KeyWatch::new(Box::new(StoredKey)).current().map(|_| ()).map_err(|e| {
@@ -113,6 +111,8 @@ pub fn check_stored() -> Result<()> {
     })
 }
 
+/// A new key from the system's random source, stored with its ID; returns
+/// the ID.
 pub fn create() -> Result<String> {
     use ring::rand::SecureRandom as _;
     let mut key = Zeroizing::new([0u8; 32]);
@@ -154,10 +154,13 @@ impl KeyWatch {
             return Ok(None);
         };
         let keys = Arc::new(Keys::derive(&key));
-        // The key and its ID are written in one update, so they disagree
-        // only when the item was changed by hand or damaged.
+        // The Keychain writes the key and its ID in one update. The Secret
+        // Service writes the key first and the ID second, so a read between
+        // them sees the new key under the old ID: read the ID once more.
+        // Beyond that, they disagree only when the item was changed by hand
+        // or damaged.
         anyhow::ensure!(
-            keys.id == id,
+            keys.id == id || self.source.key_id()?.as_deref() == Some(keys.id.as_str()),
             "the privacy key does not match the key ID in its comment"
         );
         *self
@@ -217,6 +220,29 @@ pub mod tests {
         let second = watch.current().unwrap().unwrap();
         assert_ne!(first.id, second.id);
         assert_eq!(second.id, Keys::derive(&[2; 32]).id);
+    }
+
+    /// The Secret Service writes a rotated key before its ID, so a call
+    /// that reads the old ID and then the new key reads the ID again.
+    #[test]
+    fn a_key_read_between_its_two_writes_is_used() {
+        /// Reports the old key's ID first, then the new one's, as a read
+        /// between the two writes and the read after them would.
+        struct Midway(Mutex<Vec<String>>);
+        impl KeySource for Midway {
+            fn key_id(&self) -> Result<Option<String>> {
+                Ok(self.0.lock().unwrap().pop())
+            }
+            fn load(&self) -> Result<Option<Zeroizing<[u8; 32]>>> {
+                Ok(Some(Zeroizing::new([2; 32])))
+            }
+        }
+        let ids = vec![Keys::derive(&[2; 32]).id, Keys::derive(&[1; 32]).id];
+        let keys = KeyWatch::new(Box::new(Midway(Mutex::new(ids))))
+            .current()
+            .unwrap()
+            .unwrap();
+        assert_eq!(keys.id, Keys::derive(&[2; 32]).id);
     }
 
     /// A stored key that cannot be read, or that does not match its ID, is
