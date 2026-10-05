@@ -1651,7 +1651,7 @@ fn entries_in(dir: &Path, base: &str, exclude: &[String]) -> Vec<(PathBuf, Entry
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::digest::tests::{HELLO_SHA1, HELLO_SHA256};
     use proptest::prelude::*;
@@ -1761,7 +1761,7 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
     }
 
     /// What the fake CLI prints for `sub` (list or info) of the Drive path `path`.
-    fn answer(bin: &Path, sub: &str, path: &str, body: &Value) {
+    pub(crate) fn answer(bin: &Path, sub: &str, path: &str, body: &Value) {
         let file = format!("{sub}{}.json", cli_path(path).unwrap().replace('/', "_"));
         std::fs::write(bin.join(file), body.to_string()).unwrap();
     }
@@ -1832,7 +1832,7 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
 
     /// A Drive without the app's folder. Built directly, because `Drive::new`
     /// would find the real folder on a Mac that has the app.
-    fn cli_drive(exclude: &[&str]) -> Drive {
+    pub(crate) fn cli_drive(exclude: &[&str]) -> Drive {
         Drive {
             root: None,
             exclude: exclude

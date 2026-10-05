@@ -168,6 +168,11 @@ impl Document {
                 .nth(n)
                 .map_or(self.text.len(), |(i, _)| i)
         };
+        // A caller can ask for any offset: aliases mode moves a start inside
+        // a name or address back to where it begins (RFC R13).
+        let offset = self.text[..crate::content::start_at(&self.text, byte(offset))]
+            .chars()
+            .count();
         let mut end = offset.saturating_add(max).min(self.chars);
         if end < self.chars {
             // Aliases mode moves the edge off a name or address (RFC R13).
@@ -704,6 +709,25 @@ pub(crate) mod tests {
             v["reason"].as_str().unwrap().contains("no text layer"),
             "{v}"
         );
+    }
+
+    /// RFC R13: in aliases mode a page asked to start inside a mention
+    /// starts where the mention does, so it never shows the mention's tail
+    /// alone; off mode starts where asked.
+    #[tokio::test]
+    async fn aliases_mode_starts_a_page_at_a_mention_s_start() {
+        let d = Document::new(&["to ann@x.io now".to_string()], TextFrom::Utf8);
+        // A stand-in detector: the mention is bytes 3 to 11.
+        let cut: crate::content::Cut =
+            std::sync::Arc::new(|_, at| (3 < at && at < 11).then_some((3, 11)));
+        let page = crate::content::restricted(cut, async { d.page(Some(6), Some(20)) })
+            .await
+            .unwrap();
+        assert_eq!(
+            (page["offset"].clone(), page["content"].clone()),
+            (json!(3), json!("ann@x.io now"))
+        );
+        assert_eq!(d.page(Some(6), Some(20)).unwrap()["content"], "@x.io now");
     }
 
     #[test]

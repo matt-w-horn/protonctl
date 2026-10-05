@@ -732,6 +732,15 @@ impl Mail {
         &self.cfg
     }
 
+    /// Use `session`, logged in already, for the next call: how tests reach
+    /// a scripted Bridge, since `open` reads the password from the secret
+    /// store.
+    #[cfg(test)]
+    pub(crate) async fn use_session(&self, session: Session) -> Result<()> {
+        *self.conn.lock().await = Some(Conn::listing(session).await?);
+        Ok(())
+    }
+
     /// Run `op` on the shared session, opened on first use (see `with_cached`).
     async fn with_conn<T>(&self, op: impl AsyncFnOnce(&mut Conn) -> Result<T>) -> Result<T> {
         with_cached(
@@ -1679,7 +1688,7 @@ fn merge_copies(rendered: Vec<Rendered>) -> (Vec<Value>, usize) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use proptest::prelude::*;
     use std::fmt::Write as _;
@@ -2209,22 +2218,22 @@ mod tests {
     }
 
     /// A message the fake Bridge holds: its flags, INTERNALDATE and text.
-    struct Stored {
-        flags: &'static str,
-        date: &'static str,
-        raw: String,
+    pub(crate) struct Stored {
+        pub(crate) flags: &'static str,
+        pub(crate) date: &'static str,
+        pub(crate) raw: String,
     }
 
     /// A mailbox the fake Bridge lists: its attributes, UIDVALIDITY, and
     /// (UID, index into the messages) for each message it holds. With
     /// `status` false it answers STATUS with "no such mailbox", as Bridge
     /// does for the Labels parent.
-    struct FakeBox {
-        name: &'static str,
-        attrs: &'static str,
-        uidvalidity: u32,
-        status: bool,
-        held: Vec<(u32, usize)>,
+    pub(crate) struct FakeBox {
+        pub(crate) name: &'static str,
+        pub(crate) attrs: &'static str,
+        pub(crate) uidvalidity: u32,
+        pub(crate) status: bool,
+        pub(crate) held: Vec<(u32, usize)>,
     }
 
     /// A raw message whose `X-Pm-Internal-Id` repeats `id` to 88 characters.
@@ -2525,7 +2534,7 @@ mod tests {
 
     /// A scripted Bridge serving `boxes` over one TLS session, and the
     /// commands it was sent, without their tags.
-    async fn fake_imap(
+    pub(crate) async fn fake_imap(
         boxes: Vec<FakeBox>,
         messages: Vec<Stored>,
     ) -> (

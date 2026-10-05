@@ -1029,6 +1029,10 @@ pub async fn run(app: Arc<App>) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "serve_every_tool.rs"]
+mod every_tool;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::privacy::tests::privacy;
