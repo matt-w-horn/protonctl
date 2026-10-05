@@ -14,9 +14,11 @@ Chapter 1 (what it does) shows what is built. Chapter 2 explains where your
 data goes once Claude reads it. Chapter 3 shows aliases mode and
 `setup privacy`, built in Phase 2, and `reveal_message`, which is planned
 for Phase 3 ([RFC-0001](docs/rfc-0001.md)).
-[Full-resolution video (MP4)](docs/demo/protonctl-demo.mp4), rendered from
+[Full-resolution video (MP4)](https://github.com/matt-w-horn/protonctl/blob/f0414ddc9515df3b0941e76fb6351864e4b80e6d/docs/demo/protonctl-demo.mp4), rendered from
 [`docs/demo/storyboard.html`](docs/demo/storyboard.html) by
 [`docs/demo/render.mjs`](docs/demo/render.mjs).*
+
+protonctl is unofficial and not affiliated with Proton AG.
 
 ## How it fits together
 
@@ -75,6 +77,90 @@ attachment that is neither text nor an image, goes to a private folder and
 is removed after an hour, or when the server stops. With `export: true` it
 goes to the export folder instead (see Configuration). With `inline: true`
 its bytes come back in the result, base64, which not every host accepts yet.
+
+## Example prompts
+
+Three prompts to try, each with the tools that answer it:
+
+- "Which threads this week mention the invoice, and who sent them?"
+  Tools: `search_threads`, then `get_thread`.
+- "What is on my calendar next Tuesday, and does anything overlap?"
+  Tool: `list_events`.
+- "Find the lease PDF in my Drive and summarize its renewal terms."
+  Tools: `search_files`, then `read_file_content`. `search_files` needs the
+  Proton Drive app (see [Add Drive](#add-drive)).
+
+## Install as a Claude Code plugin
+
+The plugin adds protonctl's server, `proton`, to Claude Code and Cowork.
+The plugin contains no protonctl binary. Its launcher, `scripts/serve`, runs
+`~/.cargo/bin/protonctl serve`, so you install protonctl itself as well.
+If `~/.cargo/bin/protonctl` is missing, the server does not start, and the
+launcher's error message names `scripts/install.sh`.
+
+1. If you added the `proton` server by hand before (see
+   [Connect Claude](#connect-claude)), remove it first, so that its tools do
+   not appear twice:
+
+   ```sh
+   claude mcp remove proton
+   ```
+
+2. Add the plugin. In Claude Code 2.1.287 or later, run
+   `/plugin directory` and choose protonctl, once Anthropic's plugin
+   directory lists it. Or add it from the `protonctl` marketplace in this
+   repository:
+
+   ```text
+   /plugin marketplace add matt-w-horn/protonctl
+   /plugin install protonctl@protonctl
+   ```
+
+   For Cowork, add it in the Claude desktop app, under
+   **Customize > Plugins**: from **Discover** once the directory lists it,
+   or from the marketplace `matt-w-horn/protonctl`.
+3. Install protonctl from a clone at a release tag. Replace `TAG` with the
+   newest tag on the repository's
+   [tags page](https://github.com/matt-w-horn/protonctl/tags):
+
+   ```sh
+   git clone --branch TAG https://github.com/matt-w-horn/protonctl.git
+   cd protonctl
+   scripts/install.sh
+   ```
+
+   This needs Rust 1.99 or later and the Xcode command line tools.
+   [Install](#install) explains the prompts that `install.sh` shows.
+4. Choose the privacy setting (see
+   [Choose the privacy setting](#choose-the-privacy-setting)). Then add each
+   service you want: [a calendar](#add-a-calendar), [mail](#add-mail) and
+   [Drive](#add-drive).
+5. Restart Claude Code and Claude Desktop.
+
+The plugin takes the place of the `claude mcp add` command in
+[Connect Claude](#connect-claude). The permission rules there have a form
+for the plugin.
+
+protonctl runs on a Mac with Apple silicon. There, the plugin runs in:
+
+- Claude Code.
+- Cowork, in sessions that run on your Mac. A Cowork session that runs
+  elsewhere does not start protonctl.
+
+Chat does not start a plugin's local server, on claude.ai or in the Claude
+apps. For Claude Desktop's chat, use the manual configuration in
+[Connect Claude](#connect-claude).
+
+Updating the plugin changes only the launcher, not protonctl. To update
+protonctl itself, run `scripts/install.sh` again from a clone at the new
+tag, then restart Claude Code and Claude Desktop. In the clone, with the
+new tag as `TAG`:
+
+```sh
+git fetch --tags
+git checkout TAG
+scripts/install.sh
+```
 
 ## Install
 
@@ -213,6 +299,18 @@ prompt, and leave the three that can save files in off mode
 `mcp__proton__get_thread`, `mcp__proton__list_*`, `mcp__proton__search_*`,
 `mcp__proton__count_*`, `mcp__proton__read_*`.
 
+With the plugin, the tools' names start with
+`mcp__plugin_protonctl_proton__` in place of `mcp__proton__`, so the same
+rules are: `mcp__plugin_protonctl_proton__get_status`,
+`mcp__plugin_protonctl_proton__get_event`,
+`mcp__plugin_protonctl_proton__get_file_metadata`,
+`mcp__plugin_protonctl_proton__get_message`,
+`mcp__plugin_protonctl_proton__get_thread`,
+`mcp__plugin_protonctl_proton__list_*`,
+`mcp__plugin_protonctl_proton__search_*`,
+`mcp__plugin_protonctl_proton__count_*`,
+`mcp__plugin_protonctl_proton__read_*`.
+
 ## Check, and revoke
 
 ```sh
@@ -303,6 +401,18 @@ would upload to Proton) and outside `~/Library/Caches/protonctl`. Pick one no
 sync service mirrors, unless you want that, and connect it to Cowork to give
 agents there the files.
 
+## Privacy
+
+protonctl sends nothing to its developer, and the developer runs no server
+for it. [PRIVACY.md](PRIVACY.md) says what protonctl reads, where its
+results go, what it keeps on your Mac, and how to remove all of it.
+
+## Support
+
+Ask for help, or report a bug, in
+[GitHub issues](https://github.com/matt-w-horn/protonctl/issues). Report a
+vulnerability privately, as [SECURITY.md](SECURITY.md) describes.
+
 ## Development
 
 ```sh
@@ -355,3 +465,8 @@ by Joseph Bonneau for the Electronic Frontier Foundation, used under
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). protonctl drops
 644 of its 7,776 words; `src/privacy/words-dropped.txt` lists them with the
 reason for each.
+
+## License
+
+protonctl is under the Apache License 2.0; see [LICENSE](LICENSE). The word
+list stays under CC BY 4.0, as [Credits](#credits) says.

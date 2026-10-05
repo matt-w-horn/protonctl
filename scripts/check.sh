@@ -8,6 +8,7 @@ cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 cargo deny check
+scripts/plugin-check.sh
 
 # On Linux, also lint the macOS build (RFC section 11), so the macOS platform
 # file cannot drift unseen. Nothing built here is linked or run: ring's C code

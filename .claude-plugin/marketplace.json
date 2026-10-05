@@ -1,0 +1,14 @@
+{
+  "name": "protonctl",
+  "description": "The protonctl plugin, which gives Claude read-only access to Proton Mail, Calendar and Drive on a Mac. Unofficial; not affiliated with Proton AG.",
+  "owner": {
+    "name": "Matt Horn",
+    "url": "https://github.com/matt-w-horn"
+  },
+  "plugins": [
+    {
+      "name": "protonctl",
+      "source": "./"
+    }
+  ]
+}

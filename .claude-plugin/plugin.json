@@ -1,0 +1,31 @@
+{
+  "name": "protonctl",
+  "displayName": "protonctl",
+  "version": "0.1.0",
+  "description": "Gives Claude read-only access to Proton Mail, Calendar and Drive through Proton's own apps on a Mac. Unofficial; not affiliated with Proton AG.",
+  "author": {
+    "name": "Matt Horn",
+    "url": "https://github.com/matt-w-horn"
+  },
+  "repository": "https://github.com/matt-w-horn/protonctl",
+  "license": "Apache-2.0",
+  "keywords": [
+    "proton",
+    "proton-mail",
+    "proton-calendar",
+    "proton-drive",
+    "email",
+    "calendar",
+    "read-only",
+    "macos"
+  ],
+  "documentationUrl": "https://github.com/matt-w-horn/protonctl#readme",
+  "supportUrl": "https://github.com/matt-w-horn/protonctl/blob/main/SECURITY.md",
+  "privacyPolicyUrl": "https://github.com/matt-w-horn/protonctl/blob/main/PRIVACY.md",
+  "mcpServers": {
+    "proton": {
+      "type": "stdio",
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/serve"
+    }
+  }
+}
