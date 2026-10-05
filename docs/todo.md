@@ -44,9 +44,6 @@ maintainer.
 - B6 (here) Creating a Secret Service item never unlocks a locked
   collection, so a first `setup` fails with IsLocked instead of showing
   the unlock prompt.
-- B10 (here) A panic in an aliases-mode tool's operation leaves the call
-  unanswered (R8): only the pipeline runs under `catch_unwind` there. Off
-  mode answers since 6631570.
 
 ## Documentation that states something wrong
 

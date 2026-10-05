@@ -94,25 +94,32 @@ data can lag Proton by up to 8 hours.";
 /// RFC R8: every tool call finishes within this, inside Claude Desktop's 180 s.
 const CALL_LIMIT: Duration = Duration::from_secs(150);
 
-/// A call's result as MCP content: its JSON as text, then the file it
-/// carries, base64, as image content or an embedded resource.
-/// `call`, or an error when it panics: a panic would otherwise end the
+/// A panic in a call, in place of its message, which can quote data.
+#[derive(Debug)]
+struct Panicked;
+
+impl std::fmt::Display for Panicked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("internal error: the call failed inside protonctl; its message is withheld")
+    }
+}
+
+impl std::error::Error for Panicked {}
+
+/// `call`, or `Panicked` when it panics: a panic would otherwise end the
 /// task that answers, and leave the call with no answer at all (R8). The
-/// panic hook has printed where; the message is withheld, as it can quote
-/// data.
+/// panic hook has printed where.
 async fn answered<R>(call: impl Future<Output = Result<R>>) -> Result<R> {
     use futures::FutureExt as _;
     // Boxed, so every tool's answer does not carry the operation's state.
     AssertUnwindSafe(Box::pin(call))
         .catch_unwind()
         .await
-        .unwrap_or_else(|_| {
-            Err(anyhow!(
-                "internal error: the call failed inside protonctl; its message is withheld"
-            ))
-        })
+        .unwrap_or_else(|_| Err(Panicked.into()))
 }
 
+/// A call's result as MCP content: its JSON as text, then the file it
+/// carries, base64, as image content or an embedded resource.
 async fn reply<R: Into<Reply>>(
     deadline: tokio::time::Instant,
     call: impl Future<Output = Result<R>>,
@@ -166,7 +173,9 @@ fn fault_of(e: &anyhow::Error, tool: Tool) -> Fault {
     if let Some(m) = e.chain().find_map(|c| c.downcast_ref::<Missing>()) {
         return Fault::NotFound(m.param.unwrap_or(tool.missing()));
     }
-    if is(&|c| c.is::<crate::drive::cli::NotFound>()) {
+    if is(&|c| c.is::<Panicked>()) {
+        Fault::Internal
+    } else if is(&|c| c.is::<crate::drive::cli::NotFound>()) {
         Fault::NotFound(tool.missing())
     } else if is(&|c| c.is::<DiskForbidden>()) {
         Fault::InvalidArgument(
@@ -408,19 +417,22 @@ impl Server {
         let Some(keys) = session.keys.clone() else {
             return Ok(fault(&Fault::PrivacyKeyMissing, self.mode));
         };
-        let result = tokio::time::timeout_at(deadline, async {
-            let (mut names, incomplete) = self.people().await;
-            if let Some(q) = &query {
-                names.extend(&ref_names(&keys, q));
-            }
-            // The operation cuts text into pages before the pipeline sees
-            // it, so it cuts with the pipeline's detectors (R13).
-            let dict = Dictionary::new(&names)?;
-            let cut: content::Cut = Arc::new(move |text, at| detect::around(&dict, text, at));
-            content::restricted(cut, op(session))
-                .await
-                .map(|r| ((names, incomplete), r))
-        })
+        let result = tokio::time::timeout_at(
+            deadline,
+            answered(async {
+                let (mut names, incomplete) = self.people().await;
+                if let Some(q) = &query {
+                    names.extend(&ref_names(&keys, q));
+                }
+                // The operation cuts text into pages before the pipeline sees
+                // it, so it cuts with the pipeline's detectors (R13).
+                let dict = Dictionary::new(&names)?;
+                let cut: content::Cut = Arc::new(move |text, at| detect::around(&dict, text, at));
+                content::restricted(cut, op(session))
+                    .await
+                    .map(|r| ((names, incomplete), r))
+            }),
+        )
         .await;
         let ((names, incomplete), value) = match result {
             Err(_) => return Ok(fault(&Fault::Timeout, self.mode)),
@@ -1558,6 +1570,29 @@ mod tests {
         for leak in ["Jane", "jane", "example", "415", pipeline::PLANTED_PANIC] {
             assert!(!text(&out).contains(leak), "{leak} in {}", text(&out));
         }
+    }
+
+    /// R8 in aliases mode: a call whose operation panics, before the
+    /// pipeline runs, is answered with `internal`, not `unavailable`, and
+    /// withholds the panic's message.
+    #[tokio::test]
+    async fn an_operation_that_panics_in_aliases_mode_is_answered() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = Server::new(aliases_app(dir.path()));
+        let out = server
+            .call(Tool::SearchThreads, None, |_| async {
+                assert!(
+                    dir.path().as_os_str().is_empty(),
+                    "planted: jane.doe@example.com"
+                );
+                Ok(Value::Null)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            json_of(&out),
+            Fault::Internal.json(Some(Mode::Aliases), &pipeline::DETECTORS)
+        );
     }
 
     /// RFC R20 and section 7, Rotation: a running server whose key is
