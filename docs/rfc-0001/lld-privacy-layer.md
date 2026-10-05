@@ -560,8 +560,10 @@ lists every rule. Two rules keep the list honest:
    the result differs (past the 32 bytes of one HMAC, more bytes come from
    the HMAC over the same input and a counter). The order of the input
    does not matter (the collision row in [section 5](05-security.md)).
-6. Phase 5: short forms join a full name when exactly one candidate fits;
-   similar names get `maybeSameAs` instead of merging.
+6. Short forms (`detect/dict.rs`, built 2026-10-04): a short form or
+   initials join a full name when exactly one known name fits and the
+   result's own headers hold it; otherwise the form is its own entity,
+   and both rows carry `maybeSameAs`.
 
 ### Replacement
 
@@ -850,7 +852,7 @@ the reference.
   aliases mode's Drive tools, which take handles, and its `get_attachment`,
   which saves nothing. Off mode's surface snapshot is unchanged.
 - **No `resolve.rs`.** Mentions become entities in the pipeline's registry
-  (`src/privacy/pipeline.rs`); `maybeSameAs` waits for Phase 5.
+  (`src/privacy/pipeline.rs`), which also records `maybeSameAs`.
 - **Field policies by name.** `src/privacy/fields.rs` gives a policy per
   member name, with the few differences by tool, not JSON pointer
   patterns. A test runs the coverage check over the mail snapshots, the

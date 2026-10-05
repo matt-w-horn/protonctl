@@ -29,6 +29,18 @@ pub enum Detector {
     Regex,
 }
 
+/// What a mention stands for (RFC section 6, Canonical values): the value
+/// as written, or another form of known names.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Form {
+    /// A name as written, or any detector's value.
+    #[default]
+    Whole,
+    /// A short form of these full names: a given name, a surname, the name
+    /// without its middle names, or initials.
+    Short(Vec<String>),
+}
+
 /// A span of one text, in byte offsets, and the value it holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mention {
@@ -39,15 +51,18 @@ pub struct Mention {
     pub value: String,
     /// Which detector found it.
     pub source: Detector,
+    pub form: Form,
 }
 
 /// Keep the longest of overlapping mentions; on a tie, the one from the
-/// earlier detector. The result is sorted by start.
+/// earlier detector, then a name as written over another form of a name.
+/// The result is sorted by start.
 pub fn settle(mut found: Vec<Mention>) -> Vec<Mention> {
     found.sort_by(|a, b| {
         (b.end - b.start)
             .cmp(&(a.end - a.start))
             .then(a.source.cmp(&b.source))
+            .then((a.form != Form::Whole).cmp(&(b.form != Form::Whole)))
             .then(a.start.cmp(&b.start))
     });
     let mut kept: Vec<Mention> = Vec::new();
@@ -110,6 +125,7 @@ mod tests {
             kind: Kind::Link,
             value: String::new(),
             source,
+            form: Form::Whole,
         }
     }
 

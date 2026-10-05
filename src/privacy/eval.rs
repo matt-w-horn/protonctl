@@ -259,11 +259,20 @@ struct Row {
     mistyped: usize,
 }
 
-/// A word of `name` (two letters or more) standing alone in `text`.
-fn has_word_of(text: &str, name: &str) -> bool {
-    name.split_whitespace()
+/// A word that carries a name, of the full name or of the planted form
+/// (so a misspelled word counts too), standing alone in `text`: two
+/// letters or more, and neither a common word from the alias list nor an
+/// honorific.
+fn has_word_of(text: &str, c: &Case) -> bool {
+    c.full
+        .split_whitespace()
+        .chain(c.text.split_whitespace())
         .map(|w| w.trim_matches('.'))
-        .filter(|w| w.chars().count() >= 2)
+        .filter(|w| {
+            w.chars().count() >= 2
+                && !super::words::contains(&w.to_lowercase())
+                && !super::canon::is_honorific(w)
+        })
         .any(|w| {
             Regex::new(&format!(
                 r"(?i)(^|[^\p{{L}}\p{{N}}]){}($|[^\p{{L}}\p{{N}}])",
@@ -275,7 +284,8 @@ fn has_word_of(text: &str, name: &str) -> bool {
 }
 
 /// The table, one row per form: how many mentions, and of those how many
-/// came back whole (`raw`), with a word of the name left (`part`), with an
+/// came back whole (`raw`), with a word of the name, or of the form as
+/// planted, left (`part`), with an
 /// alias other than the one the name's full form has in the same result
 /// (`split`), of those how many name that alias in `maybeSameAs`
 /// (`linked`), and how many carry another entity type (`mistyped`).
@@ -307,7 +317,7 @@ fn report() -> String {
             row.raw += 1;
             continue;
         }
-        if has_word_of(&between, c.full) {
+        if has_word_of(&between, c) {
             row.part += 1;
         }
         let entities = &out["entities"];

@@ -102,7 +102,7 @@ members it carries these:
 }
 ```
 
-`maybeSameAs` appears from Phase 5. `name` appears only in `reveal_*`
+`maybeSameAs` appears when a short form of a name was not joined to it (Phase 2). `name` appears only in `reveal_*`
 results, where it pairs the alias with the text it stands for (Q21). A
 `ref` holds the canonical value only (Q19). URLs are not entities: each
 is written as `link N` with its domain's alias in parentheses, such as
