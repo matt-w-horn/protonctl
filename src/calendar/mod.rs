@@ -20,6 +20,7 @@ use tokio::sync::Mutex;
 
 use crate::config::CalendarConfig;
 use crate::content::{Invalid, Missing, tokens, truncate, unquote};
+use crate::privacy::detect::dict::Correspondents;
 use crate::privacy::error::Param;
 use crate::secret;
 use ics::{Feed, Occurrence, Zone};
@@ -261,10 +262,10 @@ impl Calendars {
         }
     }
 
-    /// Every organizer's and attendee's name in the calendars that can be
-    /// read, for aliases mode's name dictionary (RFC Q22), and whether every
-    /// calendar could be.
-    pub async fn people(&self) -> (Vec<String>, bool) {
+    /// Every organizer's and attendee's name, with their address, in the
+    /// calendars that can be read, for aliases mode's name dictionary (RFC
+    /// Q22), and whether every calendar could be.
+    pub async fn people(&self) -> (Correspondents, bool) {
         let mut names = HashSet::new();
         let mut complete = true;
         for cal in &self.configs {
@@ -273,7 +274,7 @@ impl Calendars {
                     e.organizer
                         .iter()
                         .chain(&e.attendees)
-                        .filter_map(|p| p.name.clone())
+                        .filter_map(|p| Some((p.name.clone()?, p.email.clone())))
                 })),
                 Err(_) => complete = false,
             }

@@ -26,6 +26,7 @@ use crate::config::MailConfig;
 use crate::content::{Attached, Invalid, Missing, Reply, clean, download_folder, escape_hidden};
 use crate::export::Export;
 use crate::extract::{self, Content, Document, MAX_IMAGE, TextFrom};
+use crate::privacy::detect::dict::Correspondents;
 use crate::privacy::error::Param;
 
 const PROVENANCE: &str = "subject, names and addresses, body, snippet, attachment names and text, threadId and \
@@ -971,11 +972,12 @@ impl Mail {
         .await
     }
 
-    /// Every correspondent's display name in All Mail, for aliases mode's
-    /// name dictionary (RFC Q22): about 2 s for 20,000 messages, held in
+    /// Every correspondent's display name in All Mail, with the address it
+    /// came with, for aliases mode's name dictionary (RFC Q22), which types
+    /// a name by its address too (D7): about 2 s for 20,000 messages, held in
     /// memory only. Past `NAMES_BUDGET` the names read so far are returned.
     /// Whether every message was read comes beside the names.
-    pub async fn correspondents(&self) -> Result<(Vec<String>, bool)> {
+    pub async fn correspondents(&self) -> Result<(Correspondents, bool)> {
         let deadline = Instant::now() + NAMES_BUDGET;
         self.with_conn(async |conn| {
             let all = conn.name(&Mailbox::All)?;
@@ -999,11 +1001,10 @@ impl Mail {
                         continue;
                     };
                     for a in [m.from(), m.to(), m.cc()].into_iter().flatten() {
-                        names.extend(
-                            a.iter()
-                                .filter_map(|addr| addr.name())
-                                .map(|n| clean(n, &mut 0)),
-                        );
+                        names.extend(a.iter().filter_map(|addr| {
+                            let name = clean(addr.name()?, &mut 0);
+                            Some((name, addr.address().map(str::to_lowercase)))
+                        }));
                     }
                 }
             }

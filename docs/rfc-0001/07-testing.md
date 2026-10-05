@@ -2,7 +2,7 @@
 
 # 7. Testing
 
-Built (on macOS on 2026-10-04, `cargo test` ran 245 tests: 236 unit, 9
+Built (on macOS on 2026-10-04, `cargo test` ran 246 tests: 237 unit, 9
 against the built binary, and 3 ignored. On Linux on 2026-10-05 it ran 217: 208 unit, 9
 against the built binary; 4 more are ignored by default: one lists Drive
 through the real CLI, two reach a Secret Service and run in
@@ -628,7 +628,12 @@ missing ones:
   a run in lower case is not. Built:
   `misspelled_names_are_found_as_near_their_name` in
   `src/privacy/detect/dict.rs`, shown to fail with the misspelling pass
-  off.
+  off. B20, first half (built 2026-10-04): a sender that is an
+  organization or a product is typed so when its name is its own
+  address's domain, whole or as its first word, which is then its short
+  form, and a person stays a person. Built: `organizations_that_send_mail_are_typed_organization` in
+  `src/privacy/detect/dict.rs`, shown to fail with every name typed
+  person.
 - Evaluation (Phase 2, defect D1 in [section 9](09-rollout.md#phase-2-defects-found-on-real-results)):
   aliases mode over a labeled synthetic corpus that plants each person,
   organization and project in every form D2 to D7 name (surname, given

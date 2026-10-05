@@ -909,7 +909,15 @@ the reference.
   feed. A source that fails or is cut short keeps what it read, and every
   result names it in `dictionaryIncomplete` until the server restarts. A
   one-word name on the alias word list ("Support") is left out; the list
-  is not every common word, so "Notifications" still joins. Names match in
+  is not every common word, so "Notifications" still joins. Each name
+  comes with its address, which types it (`display_name_type` in
+  `detect/dict.rs`): an organization when it names its own address's
+  domain, whole or as its first word ("GitHub" from github.com, "Acme
+  Billing" from acme.example), else a person. No list of words is kept:
+  a sender the rule misses stays `person` until Phase 5's model types
+  it, which changes the type shown, never the alias, since people and
+  organizations share an alias class. A name the result types an
+  organization anywhere is one in its `entities` table. Names match in
   any case, with Unicode case folding, and each address's domain joins the
   result's dictionary, so a domain whose top-level domain is not on the
   pattern's short list is still found beside its address.

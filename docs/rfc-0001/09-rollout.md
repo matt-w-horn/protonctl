@@ -280,6 +280,13 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
   employer, a storage service or an assistant that sends mail becomes a
   person alias, and the model cannot tell what it is; a company that
   never sent mail (an agency, a product's maker) is not found at all.
+  The first half fixed 2026-10-04: a display name is typed `organization`
+  when it names its own address's domain, whole or as its first word,
+  which is then its short form ("Acme" for "Acme Billing" at
+  acme.example); no list of words is kept
+  ([#6](https://github.com/matt-w-horn/protonctl/issues/6)). The second
+  half, names in no header, moved to Phase 5's model
+  ([#43](https://github.com/matt-w-horn/protonctl/issues/43)).
 - D8 A folder made online-only in the Drive app lists as empty, with no
   note, in both modes: its listing is not on the Mac, and `entries_in` in
   `src/drive/mod.rs` returns nothing when `read_dir` gives nothing
