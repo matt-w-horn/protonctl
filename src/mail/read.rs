@@ -2523,6 +2523,61 @@ mod tests {
         format!("UID FETCH {} {items}", uid_set(&uids))
     }
 
+    /// The IMAP commands protonctl may send, none of which changes the
+    /// account (R1). EXAMINE opens a mailbox read-only, where SELECT would
+    /// let a fetch set `\Seen`; LOGOUT ends `setup mail`'s and `doctor`'s
+    /// sessions, which the scripted Bridge does not see.
+    const READ_ONLY: [&str; 7] = [
+        "LOGIN",
+        "LIST",
+        "EXAMINE",
+        "STATUS",
+        "UID SEARCH",
+        "UID FETCH",
+        "LOGOUT",
+    ];
+
+    /// Whether `command` (without its tag) is one of `READ_ONLY` and, if a
+    /// fetch, reads bodies with `BODY.PEEK`: `BODY[]` sets `\Seen`, and so do
+    /// two of the `RFC822` items, which protonctl has no use for.
+    fn read_only(command: &str) -> bool {
+        let verb = READ_ONLY.iter().find(|verb| {
+            command
+                .strip_prefix(**verb)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+        });
+        match verb {
+            Some(&"UID FETCH") => !command.contains("BODY[") && !command.contains("RFC822"),
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    /// The check the scripted Bridge's test ends with refuses the commands
+    /// that change an account, and a fetch that would set `\Seen` (R1).
+    #[test]
+    fn commands_that_can_change_the_account_are_refused() {
+        for ok in [
+            "LOGIN \"a\" \"b\"",
+            "EXAMINE \"INBOX\"",
+            "UID FETCH 1 (UID BODY.PEEK[])",
+            "LOGOUT",
+        ] {
+            assert!(read_only(ok), "{ok}");
+        }
+        for changes in [
+            "SELECT \"INBOX\"",
+            "UID STORE 1 +FLAGS (\\Seen)",
+            "UID FETCH 1 (UID BODY[])",
+            "UID FETCH 1 (RFC822)",
+            "APPEND \"Drafts\" {3}",
+            "UID MOVE 1 \"Trash\"",
+            "EXPUNGE",
+        ] {
+            assert!(!read_only(changes), "{changes}");
+        }
+    }
+
     /// A scripted Bridge serving `boxes` over one TLS session, and the
     /// commands it was sent, without their tags.
     async fn fake_imap(
@@ -2556,7 +2611,8 @@ mod tests {
     }
 
     /// Every IMAP operation, on one `Mail`, against the scripted Bridge. The
-    /// snapshots pin each result and the exact commands sent.
+    /// snapshots pin each result and the exact commands sent, and every
+    /// command sent must be one that changes nothing in the account (R1).
     #[tokio::test]
     #[expect(
         clippy::too_many_lines,
@@ -2679,5 +2735,13 @@ mod tests {
         let unlisted =
             crate::privacy::pipeline::unlisted(crate::tool::Tool::GetAttachment, &unsaved.json);
         assert_eq!(unlisted, Vec::<String>::new(), "{}", unsaved.json);
+        // Last, so it covers every command, including any whose failure a
+        // call went on past, and holds if the snapshot is ever accepted.
+        let sent = sent.lock().unwrap().clone();
+        let changing: Vec<&String> = sent.iter().filter(|c| !read_only(c)).collect();
+        assert!(
+            changing.is_empty(),
+            "protonctl sent IMAP commands that can change the account (R1): {changing:#?}"
+        );
     }
 }

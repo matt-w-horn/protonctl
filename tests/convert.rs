@@ -101,29 +101,36 @@ fn a_damaged_pdf_fails_in_the_reader_not_the_sandbox() {
 
 /// The whole path a server takes: the Drive CLI (a stand-in, pinned as
 /// `setup drive` pins it) downloads the file, and protonctl reads it
-/// through `/proc/self/exe convert`.
+/// through `/proc/self/exe convert`. The stand-in fails any call but the
+/// ones a read makes, and records it, so the test fails on it (R1).
 #[test]
 fn drive_reads_documents_through_the_sandboxed_readers() {
     let home = tempfile::tempdir().unwrap();
     let cli = home.path().join("proton-drive");
+    let unexpected = home.path().join("unexpected.txt");
     let fixtures = fixture("");
     std::fs::write(
         &cli,
         format!(
             r#"#!/bin/sh
 f='{}'
-case "$1 $2" in
-"--version ") echo '@protontech/cli-drive@0.8.0' ;;
-"filesystem info")
+case "$#:$*" in
+"1:--version") echo '@protontech/cli-drive@0.8.0' ;;
+"4:filesystem info -j "*)
   name=$(basename "$4")
   printf '{{"uid":"v~n","parentUid":"v~p","name":{{"ok":true,"value":"%s"}},"type":"file","modificationTime":"2026-09-28T17:04:05.123Z","activeRevision":{{"uid":"r","claimedSize":%s,"claimedModificationTime":"2026-09-01T08:00:00.000Z"}}}}' "$name" "$(wc -c < "$f/$name")" ;;
-"filesystem download")
+"9:filesystem download -j -f skip -d skip "*)
   for dest; do :; done
   cp "$f/$(basename "$8")" "$dest/"
   echo '{{"transferredItems":1,"transferredBytes":1,"skippedItems":0,"failedItems":0,"failures":[]}}' ;;
+*)
+  echo "$*" >> '{}'
+  echo "protonctl never makes this call (R1): $*" >&2
+  exit 2 ;;
 esac
 "#,
-            fixtures.display()
+            fixtures.display(),
+            unexpected.display()
         ),
     )
     .unwrap();
@@ -167,4 +174,9 @@ esac
     let downloads = home.path().join(".cache/protonctl/downloads");
     let left = std::fs::read_dir(&downloads).map_or(0, |d| d.flatten().count());
     assert_eq!(left, 0, "{}", downloads.display());
+    let calls = std::fs::read_to_string(&unexpected).unwrap_or_default();
+    assert!(
+        calls.is_empty(),
+        "protonctl ran the Drive CLI with a call it must never make (R1):\n{calls}"
+    );
 }

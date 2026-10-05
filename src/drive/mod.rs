@@ -1726,8 +1726,9 @@ mod tests {
     /// prints the report the real CLI prints (RFC Appendix A). With a `fail`
     /// file beside it, a download prints that file as its report, or one
     /// failed item when the file is empty, and still exits 0, as the real one
-    /// does.
-    fn fake_cli(dir: &Path) -> Cli {
+    /// does. Any call but the four protonctl makes fails, and is recorded in
+    /// `unexpected.txt` for `FakeCli` to fail the test with (R1).
+    fn fake_cli(dir: &Path) -> FakeCli {
         use std::os::unix::fs::PermissionsExt;
         let script = dir.join("proton-drive");
         std::fs::write(
@@ -1737,12 +1738,22 @@ here=$(dirname "$0")
 env > "$here/env.txt"
 printf '%s\n' "$@" > "$here/argv.txt"
 echo "$*" >> "$here/calls.txt"
-case "$2" in
-list|info)
+case "$#:$*" in
+"4:filesystem list -j "* | "4:filesystem info -j "*)
   f="$here/$2$(printf '%s' "$4" | tr / _).json"
   if [ -e "$f" ]; then cat "$f"; exit 0; fi
   echo "Node not found: $(basename "$4")" >&2
   exit 1
+  ;;
+"9:filesystem download -j -f skip -d skip "*) ;;
+"1:--version")
+  echo '@protontech/cli-drive@0.8.0'
+  exit 0
+  ;;
+*)
+  echo "$*" >> "$here/unexpected.txt"
+  echo "protonctl never makes this call (R1): $*" >&2
+  exit 2
   ;;
 esac
 for dest; do :; done
@@ -1757,7 +1768,41 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         )
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        Cli::trusted(script)
+        FakeCli {
+            unexpected: dir.join("unexpected.txt"),
+            cli: Cli::trusted(script),
+        }
+    }
+
+    /// The CLI from `fake_cli`, passed wherever a `Cli` is. At the end of the
+    /// test it fails the test if protonctl made any call but `filesystem
+    /// list`, `filesystem info`, `filesystem download` and `--version`,
+    /// even one whose failure the code went on past (R1).
+    struct FakeCli {
+        cli: Cli,
+        unexpected: PathBuf,
+    }
+
+    impl std::ops::Deref for FakeCli {
+        type Target = Cli;
+
+        fn deref(&self) -> &Cli {
+            &self.cli
+        }
+    }
+
+    impl Drop for FakeCli {
+        fn drop(&mut self) {
+            // A test already failing says why; a second panic would abort.
+            if std::thread::panicking() {
+                return;
+            }
+            let calls = std::fs::read_to_string(&self.unexpected).unwrap_or_default();
+            assert!(
+                calls.is_empty(),
+                "protonctl ran the Drive CLI with a call it must never make (R1):\n{calls}"
+            );
+        }
     }
 
     /// What the fake CLI prints for `sub` (list or info) of the Drive path `path`.
