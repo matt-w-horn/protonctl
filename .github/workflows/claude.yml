@@ -29,7 +29,8 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-      # The action trades the workflow's OIDC token for the Claude app's token.
+      # The action trades the workflow's OIDC token for the Claude app's token
+      # and for a Claude API token.
       id-token: write
       actions: read
     steps:
@@ -48,7 +49,13 @@ jobs:
           tool: cargo-deny,cargo-llvm-cov
       - uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea # v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Workload identity federation: the action trades the job's GitHub OIDC
+          # token for a short-lived Claude API token, so no key is stored here.
+          # These IDs are not secrets.
+          anthropic_federation_rule_id: fdrl_01CjqjRbGiXiNCrBswsEvT7G
+          anthropic_organization_id: 61d1a2d4-6e69-4978-99f1-9d84c6617b2e
+          anthropic_service_account_id: svac_01K3FVXiymWwYPVJABzivgAQ
+          anthropic_workspace_id: wrkspc_01KtYq65wrh7Zfz9Z4frovb6
           include_comments_by_actor: ${{ github.repository_owner }}
           # No co-author line, no attribution and no session link in commits or pull requests.
           settings: |
