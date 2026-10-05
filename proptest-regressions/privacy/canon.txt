@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 352d060d619d81cf4ab61a4371b25c635568844b2adfed7adae858f4ff3f82e0 # shrinks to s = "@𝒢"
+cc cab2e2582d43a570eb4c8b2d5254746190208e75f04953b58db24ed6c318c802 # shrinks to s = "® ."

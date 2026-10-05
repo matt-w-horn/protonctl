@@ -151,9 +151,13 @@ pub fn plain(s: &str) -> String {
         .collect()
 }
 
-/// A domain name: lower case, without a trailing dot.
+/// A domain name: lower case, without a trailing dot. Dots and whitespace
+/// come off the end together, so a space left before a dot goes too and a
+/// second pass changes nothing.
 pub fn domain(s: &str) -> String {
-    s.trim().trim_end_matches('.').to_lowercase()
+    s.trim_start()
+        .trim_end_matches(|c: char| c == '.' || c.is_whitespace())
+        .to_lowercase()
 }
 
 /// An IP address in its standard form (IPv6 compressed), or as given in

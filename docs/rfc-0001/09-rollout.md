@@ -239,9 +239,13 @@ Examples here are synthetic. Each is open until a test or the evaluation
 (D1) shows it fixed: D1 is [#13](https://github.com/matt-w-horn/protonctl/issues/13), and D2 to
 D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://github.com/matt-w-horn/protonctl/issues/7).
 
-- D1 No evaluation of the privacy layer. Nothing measures what passes
+- D1 No evaluation of the privacy layer. Nothing measured what passes
   raw: the leak test plants exact values, and Phase 5's recall
-  measurement (M5.2) comes after the gaps below. Not built
+  measurement (M5.2) comes after the gaps below. Built 2026-10-04:
+  `what_passes_raw_per_form` in `src/privacy/eval.rs` reports, per form
+  and entity type, what comes back raw, with a word left, with a second
+  alias, or typed wrong ([section 7](07-testing.md)); its snapshot holds
+  the numbers each fix below moves
   ([#13](https://github.com/matt-w-horn/protonctl/issues/13)).
 - D2 Short forms of a name pass raw. The dictionary holds correspondents'
   full display names, so a surname alone ("Lee v. Acme", "Dr. Lee") and a

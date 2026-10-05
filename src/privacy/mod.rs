@@ -6,6 +6,8 @@
 pub mod canon;
 pub mod detect;
 pub mod error;
+#[cfg(test)]
+mod eval;
 pub mod fields;
 pub mod ident;
 pub mod key;
