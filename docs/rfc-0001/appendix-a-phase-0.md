@@ -137,6 +137,52 @@ keys, types and sizes only:
   folder listed with no entry skipped, and `get_file_metadata` of a file
   matched its listing entry.
 
+<a id="memory-disk-m28"></a>**Memory disk** (M2.8, recorded 2026-10-04 on macOS 27, by hand and through
+`platform::memory_disk`): `diskutil image attach --noMount ram://<sectors>`,
+`newfs_hfs` and `diskutil mount -mountOptions nobrowse,owners,noexec
+-mountPoint <folder>` all run as the user, with no admin password;
+`hdiutil attach` still works but warns that it is deprecated. The mount
+reads `hfs, local, nodev, noexec, nosuid, nobrowse, mounted by matt`, and
+`diskutil info` reports `Owners: Enabled`, so the volume's 0700 root holds.
+The device nodes come up `brw-r----- matt staff`, readable by group
+`staff`, which every local user is in, so another account could read the
+raw blocks around the volume's permissions; protonctl makes both nodes 0600
+before formatting. A canary file stayed out of Spotlight for 90 s, while
+`mdfind` found a file on the system volume at once; the volume gains no
+`.Spotlight-V100` folder, and `nobrowse` keeps it out of Finder.
+`vm.swapusage` reports the swap as `(encrypted)`.
+`diskutil eject` removes the disk and its device nodes. *Live check*
+(aliases mode, counts only): a cloud-only Markdown file of 7,275 bytes
+came back as 7,907 characters of aliased text; it stayed cloud-only, and
+no download folder, memory folder or mounted disk was left after the
+server exited. A folder made online-only in the Drive app is itself
+dataless, and its listing is not on the Mac: `read_dir` gave nothing, so
+`list_folder` and `list_drive_tree` showed it as empty and its 126 files
+not at all, with no note. After a second change in the app, 126 files
+and one folder were dataless, and the tree reported 40 cloud-only files
+before the check stopped at the first one it could read.
+
+<a id="signing-q12"></a>**Signing** (Q12, recorded 2026-10-04 on macOS 27, in a throwaway keychain,
+with a probe that reads a generic password with user interaction turned
+off, so a refusal returns an error instead of a dialog): `codesign` signs
+with a self-signed identity that `find-identity` marks
+`CSSMERR_TP_NOT_TRUSTED`, so no trust setting has to change. The
+designated requirement is `identifier "probe" and certificate leaf =
+H"..."`. An item created for the signed probe was read with status 0 by a
+rebuilt probe signed with the same identity, and refused (`-25293`) by an
+ad-hoc build and by one signed with a second self-signed identity. A key
+imported with `-T /usr/bin/codesign` signed with no prompt; imported
+without `-T`, with or without `-x`, `codesign` waited for approval, but
+the key's ACL then trusts `/usr/bin/security` for `sign` and
+`export_clear`; `-T ""` leaves the `sign` entry trusting no program
+(read with `security dump-keychain -a`, which raises no dialog). On the
+login keychain, choosing Always Allow for `codesign` on the first install
+put it in that entry, and every later install signed silently until it
+was removed in Keychain Access. An
+unsigned build's identifier is `protonctl-<hash>`, new each build, so the
+install passes `--identifier protonctl`. macOS's own LibreSSL 3.3.6 makes
+the certificate and the PKCS#12 file `security import` reads.
+
 **Calendar** (recorded 2026-10-03, headers only; the link went from the
 Keychain to curl's stdin): the feed is served with `Cache-Control: max-age=0,
 must-revalidate, no-cache, no-store, private`, an `Expires` in 1984, and no

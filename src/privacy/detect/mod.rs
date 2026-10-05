@@ -56,6 +56,27 @@ pub fn settle(mut found: Vec<Mention>) -> Vec<Mention> {
     kept
 }
 
+/// How far either side of a cut `around` looks: more than any mention
+/// but the longest links.
+const REACH: usize = 4096;
+
+/// The mention a cut at byte `at` of `text` would split in two, in byte
+/// offsets. Text is cut into pages before the pipeline sees it, so a cut
+/// inside a name or an address would leave each half to pass undetected
+/// (RFC R13); aliases mode moves its cuts off these spans.
+pub fn around(dict: &dict::Dictionary, text: &str, at: usize) -> Option<(usize, usize)> {
+    let lo = text.floor_char_boundary(at.saturating_sub(REACH));
+    let hi = text.ceil_char_boundary(at.saturating_add(REACH));
+    let window = &text[lo..hi];
+    let mut found = Vec::new();
+    pattern::find(window, &mut found);
+    dict.find(window, &mut found);
+    settle(found)
+        .into_iter()
+        .map(|m| (m.start + lo, m.end + lo))
+        .find(|&(start, end)| start < at && at < end)
+}
+
 /// Whether `text[start..end]` stands alone: no letter or digit just before
 /// or just after it.
 pub fn bounded(text: &str, start: usize, end: usize) -> bool {

@@ -31,7 +31,7 @@ use crate::drive::{
     TreeReq,
 };
 use crate::mail::read::{AttachmentReq, CountMessagesReq, MessageReq, SearchThreadsReq, ThreadReq};
-use crate::privacy::detect::dict::Names;
+use crate::privacy::detect::{self, dict::Dictionary, dict::Names};
 use crate::privacy::error::{Param, Service};
 use crate::privacy::ident::{ItemKind, TokenKind, Unopened};
 use crate::privacy::key::Keys;
@@ -392,19 +392,25 @@ impl Server {
             return Ok(fault(&Fault::PrivacyKeyMissing, self.mode));
         };
         let result = tokio::time::timeout_at(deadline, async {
-            let people = self.people().await;
-            content::restricted(op(session)).await.map(|r| (people, r))
+            let (mut names, incomplete) = self.people().await;
+            if let Some(q) = &query {
+                names.extend(&ref_names(&keys, q));
+            }
+            // The operation cuts text into pages before the pipeline sees
+            // it, so it cuts with the pipeline's detectors (R13).
+            let dict = Dictionary::new(&names)?;
+            let cut: content::Cut = Arc::new(move |text, at| detect::around(&dict, text, at));
+            content::restricted(cut, op(session))
+                .await
+                .map(|r| ((names, incomplete), r))
         })
         .await;
-        let ((mut names, incomplete), value) = match result {
+        let ((names, incomplete), value) = match result {
             Err(_) => return Ok(fault(&Fault::Timeout, self.mode)),
             Ok(Err(e)) => return Ok(fault(&fault_of(&e, tool), self.mode)),
             // Images and files never leave in aliases mode (R22).
             Ok(Ok((people, r))) => (people, r.into().json),
         };
-        if let Some(q) = &query {
-            names.extend(&ref_names(&keys, q));
-        }
         let ctx = Context {
             tool,
             query: query.as_deref(),
@@ -890,7 +896,7 @@ impl Server {
         .await
     }
 
-    /// Read a Proton Drive file's text into the conversation, a page at a time; takes a fileId. Reads text files, the text of PDFs, and Word, RTF and OpenDocument documents, up to 64 MiB; names, addresses, numbers and links in the text come back as aliases. Each call returns up to maxChars characters (default 20,000) from offset (default 0), with `totalChars` and `nextOffset`; while `nextOffset` is not null, call again with offset set to it to read on. Images, and PDFs with no text layer, return a `reason` instead of their content. A file that is only in the cloud is fetched through the official Proton Drive CLI into memory, where this computer allows that; where it does not, the call says so, and the user can open the file in Proton.
+    /// Read a Proton Drive file's text into the conversation, a page at a time; takes a fileId. Reads text files, the text of PDFs, and Word, RTF and OpenDocument documents, up to 64 MiB; names, addresses, numbers and links in the text come back as aliases. Each call returns up to maxChars characters (default 20,000) from offset (default 0), with `totalChars` and `nextOffset`; while `nextOffset` is not null, call again with offset set to it to read on. Images, and PDFs with no text layer, return a `reason` instead of their content. A file that is only in the cloud is fetched through the official Proton Drive CLI into memory, never to disk.
     #[tool(
         name = "read_file_content",
         annotations(
@@ -1201,6 +1207,42 @@ mod tests {
             );
             assert!(!text(out).contains("Jane"), "{v}");
         }
+    }
+
+    /// RFC R13: a page edge that cuts an address in two leaks neither half;
+    /// the detectors see the whole value, not two fragments.
+    #[tokio::test]
+    async fn an_address_cut_by_a_page_edge_does_not_leak() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = "Write to jane.doe@example.com today, or call +1 415 555 0123 after six.";
+        std::fs::write(dir.path().join("a.txt"), text).unwrap();
+        let server = Server::new(aliases_app(dir.path()));
+        let keys = server.app.privacy.check().unwrap().keys.unwrap();
+        let file_id = keys.handle(ItemKind::DrivePath, "/a.txt");
+        let mut pages = String::new();
+        let mut offset = Some(0);
+        while let Some(at) = offset {
+            let req = ReadAliases {
+                file_id: file_id.clone(),
+                offset: Some(at),
+                max_chars: Some(16),
+            };
+            let page = json_of(
+                &server
+                    .read_file_content_aliases(Parameters(req))
+                    .await
+                    .unwrap(),
+            );
+            pages.push_str(page["content"].as_str().unwrap_or_default());
+            pages.push('|');
+            offset = page["nextOffset"]
+                .as_u64()
+                .map(|n| usize::try_from(n).unwrap());
+        }
+        for raw in ["jane", "doe", "example", "415", "555", "0123"] {
+            assert!(!pages.contains(raw), "{raw} in {pages}");
+        }
+        assert!(pages.contains("after six."), "{pages}");
     }
 
     /// RFC M2.5 and R7: a handle to an excluded file, made with the right

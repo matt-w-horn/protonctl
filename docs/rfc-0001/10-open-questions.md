@@ -130,7 +130,13 @@
     in the login keychain, made once by the maintainer, so a rebuild no
     longer brings a Keychain prompt and a swapped binary does. The binary
     stays in `~/.cargo/bin`. An Apple Developer ID waits until protonctl
-    is distributed to others.
+    is distributed to others. Built 2026-10-04 as `scripts/install.sh`,
+    which makes the identity on its first run, with a non-extractable key
+    that no program is trusted to use (`security import -T ""`; without
+    it `/usr/bin/security` itself is trusted), so each install asks before
+    `codesign` signs: Always Allow there would let any process sign a
+    swapped binary with no prompt, since any process can run `codesign`.
+    The premise was checked in a throwaway keychain ([Appendix A](appendix-a-phase-0.md#signing-q12)).
   - Q14: `proton-drive` cannot write a download to stdout: its
     `filesystem download` takes remote paths and one local folder, and
     nothing else (the CLI's source, `cli/src/commands/fileSystem/commandFileSystemDownload.ts`,
@@ -148,9 +154,10 @@
   - Q18: the EFF large word list, curated as [section 6](06-privacy.md#identifiers)
     says: loaded words, names, brands and words that name a kind of place,
     organization, role or relation dropped, at least 7,132 words kept.
-    Its licence is understood to be Creative Commons Attribution 3.0 US;
-    M2.2 checks the licence text before the list is added, and the README
-    credits EFF. eff.org was blocked from the container that recorded this.
+    Its licence is Creative Commons Attribution 4.0 International, which
+    EFF's copyright policy gives all its original material (checked on
+    2026-10-04; the wordlist post names no licence of its own), and the
+    README credits EFF.
   - Q19: names (person, organization, location) enter the alias HMAC with
     one shared tag, `name`, so a detector that retypes a name keeps its
     alias (Q8); other types keep their own tag. Three words, with a fourth

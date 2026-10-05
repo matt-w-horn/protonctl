@@ -63,7 +63,7 @@ Pseudonyms derive from one key, so they need no state (R14 to R17).
 Calendar fetch through `/usr/bin/curl`, not an HTTP crate. Bridge is opened
 on demand when nothing answers on its port (Q2).
 
-**Packaging.** `cargo install --path . --locked --root ~/.cargo`, then one
+**Packaging.** `scripts/install.sh` (build, sign, install; Q12), then one
 `claude mcp add` and one `claude_desktop_config.json` entry. A Claude Code
 plugin only if a skill is added later; MCPB bundles add nothing locally.
 Each rebuild changes the ad-hoc signature, so the Keychain asks again for

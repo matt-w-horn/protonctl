@@ -1,6 +1,9 @@
 //! The word list for aliases and keyed digests (RFC Q18): the EFF large
-//! diceware list, by Joseph Bonneau for the Electronic Frontier Foundation,
-//! under the Creative Commons Attribution 3.0 US licence, in its order,
+//! diceware list, by Joseph Bonneau for the Electronic Frontier Foundation
+//! (<https://www.eff.org/deeplinks/2016/07/new-wordlists-random-passphrases>),
+//! under the Creative Commons Attribution 4.0 International licence that
+//! EFF's copyright policy (<https://www.eff.org/copyright>) gives its original
+//! material (<https://creativecommons.org/licenses/by/4.0/>), in its order,
 //! less the words `words-dropped.txt` lists with their reasons. The order is
 //! fixed: changing it changes every alias, a format change (the `v1` in the
 //! key labels).

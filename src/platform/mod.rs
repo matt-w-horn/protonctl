@@ -3,7 +3,7 @@
 //! of protonctl is the same on both.
 
 use std::fs::Metadata;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -74,10 +74,18 @@ pub fn cloud_only(meta: &Metadata) -> bool {
     imp::cloud_only(meta)
 }
 
-/// A folder in memory that only this user can open, where aliases mode
-/// lets the Drive CLI write a file it reads (R10, Q14), or why there is none.
-pub fn memory_dir() -> Result<PathBuf> {
-    imp::memory_dir()
+/// This process's memory disk, mounted at `mount` on first use and readable
+/// by this user only: where aliases mode lets the Drive CLI write a file it
+/// reads (RFC R10, Q14), since the CLI writes only into a folder. Fails
+/// rather than fall back to the disk. On Linux it is a folder under
+/// `$XDG_RUNTIME_DIR`, which is in memory already, so `mount` is not used.
+pub fn memory_disk(mount: &Path) -> Result<PathBuf> {
+    imp::memory_disk(mount)
+}
+
+/// Detach the memory disk, if this process made one, with everything on it.
+pub fn remove_memory_disk() {
+    imp::remove_memory_disk();
 }
 
 /// Confine this process, and every program it runs, as a document reader

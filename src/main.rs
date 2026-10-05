@@ -548,12 +548,17 @@ async fn doctor(app: &App) -> bool {
                 .await
                 .map(|v| format!("{} {v}", app.drive_cli.path().display())),
         );
-        // Every Linux read goes through the CLI; a Mac's waits for M2.8.
+        // Every Linux read goes through the CLI, so the folder in memory is
+        // checked here; a Mac makes its RAM disk only for a cloud-only file.
         if cfg!(target_os = "linux") && app.privacy.started() == Some(privacy::Mode::Aliases) {
+            let made = content::memory_folder();
+            content::remove_downloads();
             check(
                 "drive reads in aliases mode",
-                platform::memory_dir()
-                    .map(|d| format!("through {}, in memory and private", d.display())),
+                made.map(|f| {
+                    let at = f.parent().unwrap_or(&f);
+                    format!("through {}, in memory and private", at.display())
+                }),
             );
         }
     }

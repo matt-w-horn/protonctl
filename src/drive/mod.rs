@@ -762,9 +762,9 @@ impl Drive {
 
     /// The bytes of the file `locate` found, at most `MAX_SOURCE`: from this
     /// Mac when they are here, else through the CLI into the download folder,
-    /// or in aliases mode a folder in memory, whose copy goes as soon as it
-    /// is read. Read off the async threads, where a File Provider stall
-    /// cannot stop the R8 time limit.
+    /// or in aliases mode the memory disk, whose copy goes as soon as it is
+    /// read. Read off the async threads, where a File Provider stall cannot
+    /// stop the R8 time limit.
     async fn bytes(&self, local: Option<PathBuf>, real: &str, cli: &Cli) -> Result<Vec<u8>> {
         // A file that is not on this Mac comes through the CLI, never the app's
         // File Provider, whose downloads on demand can stall (RFC principle 5).
@@ -1291,7 +1291,8 @@ async fn fetch(cli: &Cli, real: &str, dest: Option<&Path>) -> Result<PathBuf> {
         let dir = if crate::content::disk_allowed() {
             download_folder("drive")?
         } else {
-            crate::content::memory_folder()?
+            // Off the async threads: on a Mac this can attach a RAM disk.
+            crate::content::blocking(crate::content::memory_folder).await??
         };
         let got = download(cli, real, &dir).await;
         if got.is_err() {
@@ -3343,9 +3344,49 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         assert!(!folder.exists(), "{} is still there", folder.display());
     }
 
-    /// R10 and Q14: in aliases mode the CLI downloads into memory that only
-    /// this user can open, never the download folder, and the copy goes once
-    /// read. A Mac has no such memory until M2.8, so there the read refuses.
+    /// RFC M2.8: aliases mode reads a cloud-only file through the memory
+    /// disk, never the download folder. Makes a real RAM disk, which Claude
+    /// Code's sandbox refuses.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn an_aliases_mode_cloud_only_read_goes_through_the_memory_disk() {
+        use std::os::unix::fs::MetadataExt as _;
+        let bin = tempfile::tempdir().unwrap();
+        let cli = fake_cli(bin.path());
+        answer(
+            bin.path(),
+            "info",
+            "/notes.txt",
+            &node("notes.txt", Some(5)),
+        );
+        let req = ReadReq {
+            path: "/notes.txt".into(),
+            ..Default::default()
+        };
+        let d = cli_drive(&[]);
+        let read = crate::content::restricted(
+            crate::content::no_mentions(),
+            d.read_file_content(&req, &cli),
+        )
+        .await;
+        let argv = std::fs::read_to_string(bin.path().join("argv.txt")).unwrap();
+        let folder = PathBuf::from(argv.lines().last().unwrap());
+        let mount = folder.parent().unwrap().to_path_buf();
+        let mounted = std::fs::metadata(&mount).map(|m| m.dev()).ok()
+            != std::fs::metadata(mount.parent().unwrap())
+                .map(|m| m.dev())
+                .ok();
+        crate::platform::remove_memory_disk();
+        assert_eq!(read.unwrap().json["content"], "hello");
+        assert!(mounted, "{} was not a mounted disk", mount.display());
+        assert!(!folder.exists(), "{} is still there", folder.display());
+        assert!(!mount.exists(), "{} is still there", mount.display());
+    }
+
+    /// R10 and Q14: on Linux aliases mode's CLI download goes into this
+    /// process's folder under `$XDG_RUNTIME_DIR` (here a private folder on
+    /// /dev/shm), never the download folder, and the copy goes once read.
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn an_aliases_mode_read_fetches_into_memory_and_leaves_nothing() {
         let bin = tempfile::tempdir().unwrap();
@@ -3361,23 +3402,16 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
             ..Default::default()
         };
         let d = cli_drive(&[]);
-        let read = crate::content::restricted(d.read_file_content(&req, &cli)).await;
-        if cfg!(target_os = "macos") {
-            let err = read.unwrap_err();
-            assert!(
-                err.chain()
-                    .any(|c| c.downcast_ref::<crate::content::DiskForbidden>().is_some()),
-                "{err:#}"
-            );
-            return;
-        }
+        let read = crate::content::restricted(
+            crate::content::no_mentions(),
+            d.read_file_content(&req, &cli),
+        )
+        .await;
         assert_eq!(read.unwrap().json["content"], "hello");
         let argv = std::fs::read_to_string(bin.path().join("argv.txt")).unwrap();
         let folder = Path::new(argv.lines().last().unwrap());
-        assert!(
-            folder.starts_with(crate::platform::memory_dir().unwrap()),
-            "{argv}"
-        );
+        let memory = crate::platform::memory_disk(Path::new("unused")).unwrap();
+        assert!(folder.starts_with(&memory), "{argv}");
         assert!(!folder.exists(), "{} is still there", folder.display());
     }
 

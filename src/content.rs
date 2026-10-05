@@ -8,7 +8,7 @@
 use std::fmt::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, bail};
@@ -146,12 +146,15 @@ impl From<Value> for Reply {
     }
 }
 
-/// Cut `s` to at most `max` characters. Returns true if anything was cut.
+/// Cut `s` to at most `max` characters, or in aliases mode fewer, or past
+/// a mention that starts the text (`cut_at`). Returns true if anything was cut.
 pub fn truncate(s: &mut String, max: usize) -> bool {
     match s.char_indices().nth(max) {
         Some((i, _)) => {
+            let i = cut_at(s, i, 0);
+            let cut = i < s.len();
             s.truncate(i);
-            true
+            cut
         }
         None => false,
     }
@@ -215,23 +218,47 @@ pub async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static)
     })
 }
 
+/// Aliases mode's detectors at a cut: the span, in byte offsets, of the
+/// mention a cut at the given byte of the text would split, if any.
+pub type Cut = Arc<dyn Fn(&str, usize) -> Option<(usize, usize)> + Send + Sync>;
+
 tokio::task_local! {
     /// Set for a call in aliases mode, where no content may reach the disk
-    /// (RFC R10) and no image is returned (R22).
-    static RESTRICTED: bool;
+    /// (RFC R10), no image is returned (R22), and text is cut only where
+    /// `Cut` finds no mention (R13).
+    static RESTRICTED: Cut;
 }
 
 /// Run `call` as aliases mode does: the download folder refused, since
 /// every write of content goes through `downloads()`, so this one check
 /// covers a saved attachment and a Drive file alike, which reaches the
-/// Drive CLI only through `memory_folder`; and no image made, since none
-/// would be returned.
-pub async fn restricted<F: Future>(call: F) -> F::Output {
-    RESTRICTED.scope(true, call).await
+/// Drive CLI only through `memory_folder`; no image
+/// made, since none would be returned; and every cut of text moved off the
+/// mentions `cut` finds, through `cut_at`.
+pub async fn restricted<F: Future>(cut: Cut, call: F) -> F::Output {
+    RESTRICTED.scope(cut, call).await
+}
+
+/// A `Cut` that finds nothing, for tests of the rest of aliases mode.
+#[cfg(test)]
+pub fn no_mentions() -> Cut {
+    Arc::new(|_, _| None)
 }
 
 fn is_restricted() -> bool {
-    RESTRICTED.try_with(|r| *r).unwrap_or(false)
+    RESTRICTED.try_with(|_| ()).is_ok()
+}
+
+/// Where to cut `text` near byte `at`: at `at`, or in aliases mode off any
+/// mention it would split, back to the mention's start, or past its end
+/// when the mention starts at or before `floor` (where the piece begins),
+/// so a page always moves on.
+pub fn cut_at(text: &str, at: usize, floor: usize) -> usize {
+    match RESTRICTED.try_with(|cut| cut(text, at)).ok().flatten() {
+        Some((start, _)) if start > floor => start,
+        Some((_, end)) => end,
+        None => at,
+    }
 }
 
 /// False inside `restricted`, so a reader can answer without the file
@@ -342,14 +369,32 @@ impl std::fmt::Display for Missing {
 
 impl std::error::Error for Missing {}
 
-fn downloads_path() -> PathBuf {
-    // Unit tests share one process and the real HOME; keep them out of it.
-    let base = if cfg!(test) {
+/// protonctl's cache folder. Unit tests share one process and the real
+/// HOME; keep them out of it.
+fn cache_base() -> PathBuf {
+    if cfg!(test) {
         std::env::temp_dir().join("protonctl-test")
     } else {
         cache_dir()
-    };
-    base.join(format!("downloads/{}", std::process::id()))
+    }
+}
+
+fn downloads_path() -> PathBuf {
+    cache_base().join(format!("downloads/{}", std::process::id()))
+}
+
+/// A new folder for one cloud-only Drive file that aliases mode reads, on
+/// this process's memory disk (RFC R10, Q14). The reader deletes it once the
+/// file is read; the disk goes at exit, with `remove_downloads`. Where there
+/// is no such disk, the error is `DiskForbidden`, with why.
+pub fn memory_folder() -> Result<PathBuf> {
+    let mount = cache_base().join(format!("memory/{}", std::process::id()));
+    let disk = crate::platform::memory_disk(&mount)
+        .map_err(|e| anyhow::Error::new(DiskForbidden).context(format!("{e:#}")))?;
+    Ok(tempfile::Builder::new()
+        .prefix("drive-")
+        .tempdir_in(disk)?
+        .keep())
 }
 
 /// This process's folder for downloaded mail attachments and Drive files, made
@@ -388,33 +433,12 @@ fn made_at(name: &str) -> Option<SystemTime> {
     UNIX_EPOCH.checked_add(Duration::from_secs(seconds.parse().ok()?))
 }
 
-/// This process's folder in memory, once a read has made it.
-static MEMORY: OnceLock<PathBuf> = OnceLock::new();
-
-/// A new folder for one file the Drive CLI fetches in aliases mode, in
-/// memory that only this user can open (R10, Q14). The caller deletes it
-/// once read; what a cancelled read leaves goes with `remove_downloads`.
-/// Where there is no such memory, the error is `DiskForbidden`, with why.
-pub fn memory_folder() -> Result<PathBuf> {
-    let base = crate::platform::memory_dir()
-        .map_err(|e| anyhow::Error::new(DiskForbidden).context(format!("{e:#}")))?;
-    let dir = MEMORY.get_or_init(|| base.join(format!("protonctl-{}", std::process::id())));
-    std::fs::create_dir_all(dir)?;
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-    Ok(tempfile::Builder::new()
-        .prefix("drive-")
-        .tempdir_in(dir)?
-        .keep())
-}
-
-/// Delete this process's download folder and its folder in memory; every
+/// Delete this process's download folder and detach its memory disk; every
 /// command ends with this. A failure is reported, since either can hold
 /// message and file content.
 pub fn remove_downloads() {
+    crate::platform::remove_memory_disk();
     remove(&downloads_path());
-    if let Some(dir) = MEMORY.get() {
-        remove(dir);
-    }
 }
 
 fn remove(dir: &Path) {
@@ -545,6 +569,31 @@ mod tests {
         assert_eq!(clean(kept, &mut 0), kept);
     }
 
+    /// RFC R13: in aliases mode a cut moves off a mention, back to its
+    /// start, or past its end when it starts the text.
+    #[tokio::test]
+    async fn aliases_mode_truncates_beside_a_mention() {
+        // A stand-in detector: the mention is bytes 3 to 9.
+        let cut: Cut = Arc::new(|_, at| (3 < at && at < 9).then_some((3, 9)));
+        let (inside, before) = restricted(cut.clone(), async {
+            let mut a = "to ann@x.io now".to_string();
+            let mut b = "ann@x.io now".to_string();
+            (
+                (truncate(&mut a, 6), a),
+                restricted(Arc::new(|_, at| (at < 8).then_some((0, 8))), async {
+                    (truncate(&mut b, 4), b)
+                })
+                .await,
+            )
+        })
+        .await;
+        assert_eq!(inside, (true, "to ".to_string()));
+        assert_eq!(before, (true, "ann@x.io".to_string()));
+        let mut off = "to ann@x.io now".to_string();
+        assert!(truncate(&mut off, 6));
+        assert_eq!(off, "to ann");
+    }
+
     #[test]
     fn truncates_on_character_boundaries() {
         let mut s = String::from("héllo");
@@ -652,7 +701,7 @@ mod tests {
 
     #[tokio::test]
     async fn aliases_mode_gets_no_download_folder() {
-        let refused = restricted(async { download_folder("drive") })
+        let refused = restricted(no_mentions(), async { download_folder("drive") })
             .await
             .unwrap_err();
         assert!(

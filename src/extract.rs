@@ -168,7 +168,15 @@ impl Document {
                 .nth(n)
                 .map_or(self.text.len(), |(i, _)| i)
         };
-        let end = offset.saturating_add(max).min(self.chars);
+        let mut end = offset.saturating_add(max).min(self.chars);
+        if end < self.chars {
+            // Aliases mode moves the edge off a name or address (RFC R13).
+            let (from, at) = (byte(offset), byte(end));
+            let cut = crate::content::cut_at(&self.text, at, from);
+            if cut != at {
+                end = offset + self.text[from..cut].chars().count();
+            }
+        }
         let slice = &self.text[byte(offset)..byte(end)];
         let next = (end < self.chars).then_some(end);
         let mut v = json!({
@@ -683,9 +691,10 @@ pub(crate) mod tests {
     async fn a_scan_in_aliases_mode_gives_a_reason_and_no_images() {
         let mut scan = Document::new(&[String::new()], TextFrom::Pdf);
         scan.pdf = Some(b"%PDF-1.4 not rendered".to_vec());
-        let (v, images) = crate::content::restricted(scan.read(None, None, None))
-            .await
-            .unwrap();
+        let (v, images) =
+            crate::content::restricted(crate::content::no_mentions(), scan.read(None, None, None))
+                .await
+                .unwrap();
         assert!(images.is_empty());
         assert_eq!(
             (v["content"].clone(), v["textLayer"].clone()),

@@ -274,9 +274,40 @@ pub fn sandbox() -> Result<()> {
 /// `statfs`'s type for tmpfs, a file system in memory and swap.
 const TMPFS_MAGIC: u64 = 0x0102_1994;
 
+/// This process's folder under `$XDG_RUNTIME_DIR`, once made.
+static MEMORY: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// Linux needs no disk of its own: `$XDG_RUNTIME_DIR` is in memory already,
+/// once `memory_base` has checked it, so this makes a 0700 folder there for
+/// the process and `mount`, where macOS mounts its RAM disk, is not used.
+pub fn memory_disk(_mount: &Path) -> Result<PathBuf> {
+    let dir = memory_base()?.join(format!("protonctl-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    *MEMORY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(dir.clone());
+    Ok(dir)
+}
+
+/// Delete this process's folder in memory, with everything in it. A failure
+/// is reported, since the folder can hold file content until logout.
+pub fn remove_memory_disk() {
+    let taken = MEMORY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    if let Some(dir) = taken
+        && let Err(e) = std::fs::remove_dir_all(&dir)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!("protonctl: cannot delete {}: {e}", dir.display());
+    }
+}
+
 /// `$XDG_RUNTIME_DIR`, once it is on tmpfs, only this user can open it, and
 /// every active swap is encrypted or in memory (R10, Q14).
-pub fn memory_dir() -> Result<PathBuf> {
+fn memory_base() -> Result<PathBuf> {
     let dir = if cfg!(test) {
         // /dev/shm is tmpfs too, and the tests' environment has no session.
         let dir = PathBuf::from(format!("/dev/shm/protonctl-test-{}", own_uid()?));
@@ -536,7 +567,7 @@ mod tests {
     /// The folder must be on tmpfs and private to this user.
     #[test]
     fn the_memory_folder_must_be_tmpfs_and_private() {
-        let dir = memory_dir().unwrap();
+        let dir = memory_base().unwrap();
         private_memory(&dir).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         let err = private_memory(&dir).unwrap_err().to_string();
