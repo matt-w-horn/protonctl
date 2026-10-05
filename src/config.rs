@@ -1,5 +1,5 @@
 //! `~/.config/protonctl/config.toml` (or `$XDG_CONFIG_HOME/protonctl/`, or
-//! `$PROTONCTL_CONFIG`). It holds no secrets; those live in the Keychain.
+//! `$PROTONCTL_CONFIG`). It holds no secrets; those live in the secret store.
 //!
 //! ```toml
 //! time_zone = "America/Los_Angeles"   # top-level keys go before any [table]
@@ -34,7 +34,7 @@ use crate::digest::Sha256;
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    /// IANA zone for calendar output and floating times. Defaults to the Mac's zone.
+    /// IANA zone for calendar output and floating times. Defaults to this computer's zone.
     pub time_zone: Option<String>,
     pub mail: Option<MailConfig>,
     pub drive: Option<DriveConfig>,

@@ -159,7 +159,7 @@ pub struct TreeReq {
 pub struct FileMetadataReq {
     /// Drive path from `search_files` or `list_folder`, e.g. "/Projects/notes.md".
     pub path: String,
-    /// Also return Proton's view of the file and its SHA-256 and SHA-1 when it is on this Mac. Default false.
+    /// Also return Proton's view of the file and its SHA-256 and SHA-1 when it is on this computer. Default false.
     #[arg(long)]
     #[serde(default)]
     pub digests: bool,
@@ -347,7 +347,7 @@ fn entry(path: String, meta: &std::fs::Metadata) -> Entry {
     }
 }
 
-/// A modification-time bound; a bare date means midnight on this Mac, as in the calendar tools.
+/// A modification-time bound; a bare date means midnight on this computer, as in the calendar tools.
 fn time_bound(s: &str) -> Result<SystemTime> {
     parse_time(s, Zone::Local).map(SystemTime::from)
 }
@@ -436,7 +436,7 @@ impl Drive {
         Ok(path)
     }
 
-    /// One path's entry, where its content is on this Mac if it is, and the
+    /// One path's entry, where its content is on this computer if it is, and the
     /// real Drive path to download it by.
     async fn locate(&self, path: &str, cli: &Cli) -> Result<(Entry, Option<PathBuf>, String)> {
         if let Some(root) = &self.root {
@@ -479,7 +479,7 @@ impl Drive {
     pub async fn search_files(&self, req: &SearchFilesReq) -> Result<Value> {
         let Some(root) = &self.root else {
             bail!(Invalid::rule(
-                "search needs the Proton Drive app's folder on this Mac, and protonctl does not walk \
+                "search needs the Proton Drive app's folder on this computer, and protonctl does not walk \
                  the remote tree (Proton's SDK rules); browse with list_folder instead"
             ));
         };
@@ -1053,7 +1053,7 @@ impl Drive {
     ) -> Result<Value> {
         let Some(root) = &self.root else {
             bail!(Invalid::rule(
-                "export_drive_manifest needs the Proton Drive app's folder on this Mac, as search_files \
+                "export_drive_manifest needs the Proton Drive app's folder on this computer, as search_files \
                  does: protonctl does not walk the remote tree (Proton's SDK rules)"
             ));
         };
@@ -1110,7 +1110,7 @@ impl Drive {
     pub async fn list_tree(&self, req: &TreeReq, cli: &Cli) -> Result<Value> {
         let Some(root) = &self.root else {
             bail!(Invalid::rule(
-                "list_drive_tree needs the Proton Drive app's folder on this Mac, as search_files \
+                "list_drive_tree needs the Proton Drive app's folder on this computer, as search_files \
                  does: protonctl does not walk the remote tree (Proton's SDK rules); browse with \
                  list_folder instead"
             ));

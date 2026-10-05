@@ -10,7 +10,7 @@ leaves a choice open, this draft names the choice it is written with and
 the question that can change it; each such choice stays inside one module.
 
 Code locations are `file:line` at that commit. Phase 2 is now built,
-except M2.8 and the Mac checks ([section 9](09-rollout.md)); the code is
+except M2.8 on a Mac and the Mac checks ([section 9](09-rollout.md)); the code is
 the reference for how it behaves, and [As built](#as-built) lists where it
 differs from this draft. Phases 3 to 5 below are still a design.
 
@@ -83,7 +83,7 @@ Changed files:
 | `src/content.rs` | `Reply` gains `entities`; `Attached` stays for off mode | M2.4 |
 | `src/drive/mod.rs` | error sites take a display name (the escaped path, or the handle in aliases mode) | M2.4 |
 | `src/mail/read.rs`, `src/calendar/mod.rs` | error sites quoting third-party text get a fixed form in aliases mode | M2.4 |
-| `src/platform/` | done in MP1: the Keychain, cache path, Drive app folder and cloud-only check per system; `security-framework` a macOS-only dependency. Traits arrive with their first fake or second backend (`KeySource`, `Presence`) | MP1, M2.1, M3.2 |
+| `src/platform/` | done in MP1: the Keychain, cache path, Drive app folder and cloud-only check per system; `security-framework` a macOS-only dependency. From MP2 to MP4 (2026-10-05), Linux's Secret Service, the memory folder for aliases-mode reads (M2.8), and the readers' sandbox ([section 11](11-platforms.md)). Traits arrive with their first fake or second backend (`KeySource`, `Presence`) | MP1, M2.1, M3.2 |
 | `Cargo.toml` | `aes-siv`; HMAC and HKDF from `ring` or RustCrypto (M2.2); `phonenumber`; a case-folding crate; `aho-corasick` moved from transitive to direct | M2.2, M2.3 |
 
 How the modules depend on each other (arrows point at what is used):

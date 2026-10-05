@@ -193,7 +193,7 @@ struct Cli {
 enum Cmd {
     /// Run the MCP server on stdin/stdout.
     Serve,
-    /// Store a secret in the Keychain and add the service to the config.
+    /// Store a secret in the system's secret store (the Keychain, or the Secret Service on Linux) and add the service to the config.
     Setup {
         #[command(subcommand)]
         what: Setup,
@@ -202,7 +202,7 @@ enum Cmd {
     Doctor,
     /// Show what protonctl can reach and every secret it holds.
     Status,
-    /// Delete protonctl's Keychain items, then print how to revoke Proton-side access. Asks to confirm on a terminal.
+    /// Delete protonctl's items in the secret store, then print how to revoke Proton-side access. Asks to confirm on a terminal.
     Logout,
     /// Replace the privacy key: every alias changes, and old refs and handles stop working. Asks to confirm on a terminal.
     RotateKey,
@@ -570,7 +570,7 @@ async fn doctor(app: &App) -> bool {
     ok
 }
 
-/// Deletes everything under protonctl's Keychain service, plus the configured
+/// Deletes everything under protonctl's service in the secret store, plus the configured
 /// calendars' items by name. It needs neither a readable config nor a working
 /// Keychain search, so revoking never waits on anything else being healthy
 /// (RFC principle 4); whatever went wrong is listed under `problems`.

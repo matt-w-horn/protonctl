@@ -1190,7 +1190,7 @@ impl Mail {
                 }
                 saved(&mut out, save(None, &file, &bytes)?, removed);
                 out["note"] = json!(format!(
-                    "{why}, so it was saved to protonctl's private folder on this Mac (removed after an hour); export: true saves it where agents can read it, and inline: true returns its bytes"
+                    "{why}, so it was saved to protonctl's private folder on this computer (removed after an hour); export: true saves it where agents can read it, and inline: true returns its bytes"
                 ));
                 Ok(out.into())
             }

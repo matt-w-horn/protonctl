@@ -1,5 +1,6 @@
 //! protonctl keeps secrets only in the system's secret store (RFC R2): the
-//! login Keychain on macOS, and on Linux none yet (RFC section 11, Q31).
+//! login Keychain on macOS, and the Secret Service on Linux (RFC section 11,
+//! Q31).
 //! Items live under service `protonctl`; `Account` names them.
 
 use anyhow::{Result, anyhow};

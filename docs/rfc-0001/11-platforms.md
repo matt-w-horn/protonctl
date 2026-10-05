@@ -18,7 +18,7 @@ desktop signed in to Proton.
   four errors in the binary and two more in the tests, all from the
   macOS-only APIs in the table below. Every other module compiled. After
   P1, every test runs on Linux except the two of macOS's document
-  readers.
+  readers; from P4, Linux has its own readers' tests.
 - **Users.** Proton Mail Bridge, the Drive CLI, Claude Code and, in beta,
   Claude Desktop all ship for Linux (below).
 
@@ -233,10 +233,14 @@ more.
 ## Testing
 
 - The platform-independent tests run on both systems, and `scripts/check.sh`
-  runs on Linux, so a cloud container covers everything but the platform
-  files.
+  runs on Linux, so a cloud container covers everything but the macOS
+  platform file and macOS's readers.
 - Each platform file is tested on its own system; the traits' fakes run
-  everywhere.
+  everywhere. On Linux that includes the Secret Service against a
+  throwaway GNOME Keyring in a private D-Bus session (when
+  `gnome-keyring-daemon` is installed), the readers' sandbox from a child
+  process, and the readers themselves (poppler-utils and pandoc are
+  required).
 - `deny.toml` checks `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`
   and `aarch64-unknown-linux-gnu`.
 - On Linux, `scripts/check.sh` also runs clippy on the macOS build

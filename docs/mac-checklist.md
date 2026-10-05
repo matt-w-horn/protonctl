@@ -16,6 +16,9 @@ delete this file. Milestone states live in [RFC section 9](rfc-0001/09-rollout.m
 ## 2. Before a mode is chosen (Q27)
 
 1. Run `~/.cargo/bin/protonctl status`. Expect `privacy.mode` `"unset"`.
+   This also shows that your existing config still loads: `cert_sha256`
+   in `[mail]` is now read as a SHA-256 when the config loads, so a
+   malformed value stops every command instead of only mail.
 2. Run `~/.cargo/bin/protonctl doctor`. Expect it to fail on the privacy
    line.
 3. In Claude Code, call `get_status`. Expect the error
