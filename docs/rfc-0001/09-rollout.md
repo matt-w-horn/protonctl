@@ -258,14 +258,23 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
   Fixed 2026-10-04 for the people in a result's own headers
   ([#2](https://github.com/matt-w-horn/protonctl/issues/2)).
 - D4 Misspelled names pass raw, from typing and above all from OCR ("Jonh
-  Lee", "J0hn Lee", "John Lce"). The dictionary matches exact text after
+  Lee", "J0hn Lee", "John Lce"). Fixed 2026-10-04 for known names: a run
+  within one edit per word, OCR's confusions counting as none, is its
+  own alias linked to the name
+  ([#3](https://github.com/matt-w-horn/protonctl/issues/3)). The dictionary matched exact text after
   case and accent folding only.
 - D5 Project names pass raw ("the Falcon rewrite", a paper's title, a
   folder named for a project), in text and in Drive paths and names,
   which run through the detectors only. Projects have no entity type and
   no source of names.
+  Moved to Phase 5 on 2026-10-04: a project's name is in no header, so
+  finding it needs the named-entity model, which waits for Q23
+  ([#4](https://github.com/matt-w-horn/protonctl/issues/4)).
 - D6 One entity gets several aliases: a person's full name and another
-  form of it in one result each got their own alias.
+  form of it in one result each got their own alias. Fixed 2026-10-04 for
+  known names: a form joins its full name or is linked to it by
+  `maybeSameAs`, and the evaluation has no second alias left unlinked
+  ([#5](https://github.com/matt-w-horn/protonctl/issues/5)).
 - D7 Organizations and products are typed `person`, or pass raw.
   Correspondents' display names enter the dictionary as people, so an
   employer, a storage service or an assistant that sends mail becomes a

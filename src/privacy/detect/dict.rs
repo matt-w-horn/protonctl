@@ -4,7 +4,7 @@
 //! with the short forms of each person's name and the initials of the
 //! result's own people.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 
@@ -196,6 +196,110 @@ fn sentence_start(text: &str, start: usize) -> bool {
 pub struct Dictionary {
     automaton: Option<AhoCorasick>,
     entries: Vec<Entry>,
+    /// Known people's names of two or three words, for misspellings.
+    near: Vec<NearName>,
+    /// `near` by word count and the first letter of the first word.
+    near_index: HashMap<(usize, char), Vec<usize>>,
+}
+
+/// A known person's name, as the misspelling pass compares it.
+struct NearName {
+    full: String,
+    /// Its words, given name first.
+    words: Vec<Word>,
+}
+
+/// Letters OCR and typing swap for each other, which count as the same
+/// letter when names are compared.
+const CONFUSED: &[(char, char)] = &[
+    ('o', '0'),
+    ('l', '1'),
+    ('i', '1'),
+    ('l', 'i'),
+    ('s', '5'),
+    ('b', '8'),
+    ('e', 'c'),
+    ('u', 'n'),
+];
+
+fn same_letter(a: char, b: char) -> bool {
+    a == b
+        || CONFUSED
+            .iter()
+            .any(|&(x, y)| (a, b) == (x, y) || (a, b) == (y, x))
+}
+
+/// Edits between two words, 0, 1, or 2 for more: a substitution, an
+/// insertion or deletion, or a swap of neighbours, with a confused letter
+/// counting as no edit. One walk along both words, since the pass only
+/// asks whether they are within one edit.
+fn edits(a: &[char], b: &[char]) -> usize {
+    let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+    match long.len() - short.len() {
+        0 => {
+            let differ: Vec<usize> = (0..long.len())
+                .filter(|&i| !same_letter(long[i], short[i]))
+                .take(3)
+                .collect();
+            match differ.as_slice() {
+                [] => 0,
+                [_] => 1,
+                &[i, j] if j == i + 1 && long[i] == short[j] && long[j] == short[i] => 1,
+                _ => 2,
+            }
+        }
+        1 => {
+            // The one extra letter of `long` is at the first difference.
+            let at = (0..short.len())
+                .find(|&i| !same_letter(long[i], short[i]))
+                .unwrap_or(short.len());
+            if (at..short.len()).all(|i| same_letter(long[i + 1], short[i])) {
+                1
+            } else {
+                2
+            }
+        }
+        _ => 2,
+    }
+}
+
+/// A word of text or of a name as the misspelling pass compares it: in
+/// lower case as written, and with the pairs of letters OCR reads for one
+/// letter ("rn" for "m", "cl" for "d", "vv" for "w") as that letter.
+struct Word {
+    plain: Vec<char>,
+    folded: Vec<char>,
+}
+
+fn lower(word: &str) -> Vec<char> {
+    word.chars().flat_map(char::to_lowercase).collect()
+}
+
+fn word(w: &str) -> Word {
+    let plain = lower(w);
+    let s: String = plain.iter().collect();
+    let folded = s
+        .replace("rn", "m")
+        .replace("cl", "d")
+        .replace("vv", "w")
+        .chars()
+        .collect();
+    Word { plain, folded }
+}
+
+/// Edits between two words, as written or with OCR's letter pairs folded,
+/// whichever is fewer.
+fn word_edits(a: &Word, b: &Word) -> usize {
+    edits(&a.plain, &b.plain).min(edits(&a.folded, &b.folded))
+}
+
+/// The letter a name's first word is indexed under: its first letter, or
+/// the letter a digit OCR made of it stands for.
+fn index_letter(c: char) -> char {
+    CONFUSED
+        .iter()
+        .find(|&&(_, digit)| digit == c && c.is_ascii_digit())
+        .map_or(c, |&(letter, _)| letter)
 }
 
 /// `text` case-folded (Unicode default case folding, as `canon` uses),
@@ -265,6 +369,25 @@ impl Dictionary {
                 of.sort();
             }
         }
+        let mut near = Vec::new();
+        let mut near_index: HashMap<(usize, char), Vec<usize>> = HashMap::new();
+        for (full, t) in &names.0 {
+            let p = parts(full);
+            let letters: usize = p.iter().map(|w| w.chars().count()).sum();
+            if *t != EntityType::Person || !(2..=3).contains(&p.len()) || letters < 6 {
+                continue;
+            }
+            let words: Vec<Word> = p.iter().map(|w| word(w)).collect();
+            let first = index_letter(words[0].plain[0]);
+            near_index
+                .entry((words.len(), first))
+                .or_default()
+                .push(near.len());
+            near.push(NearName {
+                full: full.clone(),
+                words,
+            });
+        }
         let (keys, entries): (Vec<String>, Vec<Entry>) = by_text.into_iter().unzip();
         let automaton = if keys.is_empty() {
             None
@@ -275,7 +398,12 @@ impl Dictionary {
                     .build(&keys)?,
             )
         };
-        Ok(Self { automaton, entries })
+        Ok(Self {
+            automaton,
+            entries,
+            near,
+            near_index,
+        })
     }
 
     /// Each place a name appears on its own. A one-word name must not start
@@ -287,6 +415,7 @@ impl Dictionary {
     /// and a one-word form of a name the result does not hold only inside
     /// a sentence.
     pub fn find(&self, text: &str, out: &mut Vec<Mention>) {
+        self.find_near(text, out);
         let Some(ac) = &self.automaton else { return };
         let (copy, map) = folded(text);
         for m in ac.find_iter(&copy) {
@@ -315,6 +444,87 @@ impl Dictionary {
                 source: Detector::Dictionary,
                 form: e.form.clone(),
             });
+        }
+    }
+
+    /// B17: each run of two or three words that is a misspelling of a known
+    /// person's name, from typing or OCR: every word within one edit of
+    /// the name's (a confused letter, such as 0 for o, is none), at most
+    /// one edit in all for a name of fewer than ten letters and two for a
+    /// longer one, a word of fewer than three letters spelled right, and a
+    /// capital or digit first. The name as written is the dictionary's
+    /// own match, which wins over this one.
+    fn find_near(&self, text: &str, out: &mut Vec<Mention>) {
+        if self.near.is_empty() {
+            return;
+        }
+        let mut words: Vec<(usize, usize, Word)> = Vec::new();
+        let mut start = None;
+        for (i, c) in text
+            .char_indices()
+            .chain(std::iter::once((text.len(), ' ')))
+        {
+            match (c.is_alphanumeric(), start) {
+                (true, None) => start = Some(i),
+                (false, Some(s)) => {
+                    words.push((s, i, word(&text[s..i])));
+                    start = None;
+                }
+                _ => {}
+            }
+        }
+        for (i, (first_start, _, first)) in words.iter().enumerate() {
+            let opens = text[*first_start..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_uppercase() || c.is_ascii_digit());
+            let Some(&initial) = first.plain.first() else {
+                continue;
+            };
+            if !opens {
+                continue;
+            }
+            for k in 2..=3 {
+                let Some(window) = words.get(i..i + k) else {
+                    break;
+                };
+                let key = (k, index_letter(initial));
+                let mut of: Vec<String> = Vec::new();
+                for &n in self.near_index.get(&key).into_iter().flatten() {
+                    let name = &self.near[n];
+                    let mut total = 0;
+                    let mut fits = true;
+                    for ((_, _, w), nw) in window.iter().zip(&name.words) {
+                        let e = word_edits(w, nw);
+                        if e > 1 || (e > 0 && nw.plain.len() < 3) {
+                            fits = false;
+                            break;
+                        }
+                        total += e;
+                    }
+                    let letters: usize = name.words.iter().map(|w| w.plain.len()).sum();
+                    let budget = if letters < 10 { 1 } else { 2 };
+                    let exact = window
+                        .iter()
+                        .zip(&name.words)
+                        .all(|((_, _, w), nw)| w.plain == nw.plain);
+                    if fits && total <= budget && !exact && !of.contains(&name.full) {
+                        of.push(name.full.clone());
+                    }
+                }
+                if !of.is_empty() {
+                    of.sort();
+                    let end = window[k - 1].1;
+                    out.push(Mention {
+                        start: *first_start,
+                        end,
+                        kind: Kind::Entity(EntityType::Person),
+                        value: text[*first_start..end].to_string(),
+                        source: Detector::Dictionary,
+                        form: Form::Near(of),
+                    });
+                }
+            }
         }
     }
 }
@@ -416,7 +626,7 @@ mod tests {
             .iter()
             .map(|m| {
                 let of = match &m.form {
-                    Form::Short(of) => of.iter().map(String::as_str).collect(),
+                    Form::Short(of) | Form::Near(of) => of.iter().map(String::as_str).collect(),
                     Form::Whole => Vec::new(),
                 };
                 (&text[m.start..m.end], of)
@@ -435,6 +645,46 @@ mod tests {
                 ("Will", vec!["Will Mason"]),
             ]
         );
+    }
+
+    /// B17: a known name misspelled by typing (a swap, a letter added or
+    /// lost) or by OCR (0 for o, 1 for i, n for u) is found as a
+    /// misspelling of it; a name that differs more, another known name
+    /// spelled right, and a run in lower case are not.
+    #[test]
+    fn misspelled_names_are_found_as_near_their_name() {
+        let mut names = Names::default();
+        for n in ["Dana Ruiz", "Kenji Watanabe", "Jon Lee", "John Lee"] {
+            names.add(n, EntityType::Person);
+        }
+        let d = Dictionary::new(&names).unwrap();
+        let text = "Dnaa Ruiz, Kenj1 Watanabe and Dana Rniz met Jon Lee and Dana Rulz; \
+            Dina Rios, Ken Watanabe and dnaa ruiz did not.";
+        let mut out = Vec::new();
+        d.find(text, &mut out);
+        let kept = super::super::settle(out);
+        let got: Vec<(&str, Vec<&str>)> = kept
+            .iter()
+            .filter_map(|m| match &m.form {
+                Form::Near(of) => Some((
+                    &text[m.start..m.end],
+                    of.iter().map(String::as_str).collect(),
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Dnaa Ruiz", vec!["Dana Ruiz"]),
+                ("Kenj1 Watanabe", vec!["Kenji Watanabe"]),
+                ("Dana Rniz", vec!["Dana Ruiz"]),
+                ("Dana Rulz", vec!["Dana Ruiz"]),
+            ]
+        );
+        assert_eq!(word_edits(&word("Lce"), &word("Lee")), 0);
+        assert_eq!(word_edits(&word("Jonh"), &word("John")), 1);
+        assert_eq!(word_edits(&word("Rarnan"), &word("Raman")), 0);
     }
 
     /// Case beyond ASCII: "RENÉE" is "Renée", and "STRASSE" is "Straße".

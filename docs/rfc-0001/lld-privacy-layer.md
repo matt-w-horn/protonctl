@@ -563,7 +563,8 @@ lists every rule. Two rules keep the list honest:
 6. Short forms (`detect/dict.rs`, built 2026-10-04): a short form or
    initials join a full name when exactly one known name fits and the
    result's own headers hold it; otherwise the form is its own entity,
-   and both rows carry `maybeSameAs`.
+   and both rows carry `maybeSameAs`. A misspelling of a known name, from
+   typing or OCR, is always its own entity, linked the same way.
 
 ### Replacement
 
@@ -795,7 +796,11 @@ sequenceDiagram
   28 ms; a process's first run took about 90 ms more. With 600 entities,
   both pages were refused as `too_large`: in that text each entity added
   about 185 characters to the result, so the cap of 90,000 holds roughly
-  380 entities on a 20,000-character page.
+  380 entities on a 20,000-character page. The misspelling pass (D4)
+  compares each run of two or three words with the known names that
+  share its first letter; measured on 2026-10-04 in a release build on
+  a Mac, the same pages took a median 54 ms and 89 ms with it, against
+  23 ms and 33 ms on that Mac without it.
 - GLiNER (Phase 5) is the one stage with a real cost; its runtime is Q23.
 
 ## Testing hooks
