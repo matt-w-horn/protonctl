@@ -2,7 +2,7 @@
 
 # 7. Testing
 
-Built (on macOS on 2026-10-04, `cargo test` ran 239 tests: 230 unit, 9
+Built (on macOS on 2026-10-04, `cargo test` ran 240 tests: 231 unit, 9
 against the built binary, and 3 ignored. On Linux on 2026-10-05 it ran 217: 208 unit, 9
 against the built binary; 4 more are ignored by default: one lists Drive
 through the real CLI, two reach a Secret Service and run in
@@ -600,6 +600,13 @@ missing ones:
   `each_reader_runs_in_its_sandbox` and
   `a_damaged_pdf_fails_in_the_reader_not_the_sandbox` in
   `tests/convert.rs`. macOS and Vision: not built (Phase 4).
+- Names in text (Phase 2): a known name is found wherever it stands
+  alone, in any case and any script. B25 (built 2026-10-04): a Chinese or
+  Japanese name inside running text in its own script, which has no
+  spaces, is found, a two-character one too, while a Latin name inside a
+  longer word is not. Built: `a_name_in_running_text_without_spaces_is_found`
+  in `src/privacy/detect/dict.rs`, shown to fail with the boundary rule
+  applied to every script.
 - Evaluation (Phase 2, defect D1 in [section 9](09-rollout.md#phase-2-defects-found-on-real-results)):
   aliases mode over a labeled synthetic corpus that plants each person,
   organization and project in every form D2 to D7 name (surname, given

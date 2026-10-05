@@ -8,7 +8,7 @@ organization that sends mail | organization | 2 | 0 | 0 | 0 | 0 | 2
 person full, in headers | person | 2 | 0 | 0 | 0 | 0 | 0
 person full, process only | person | 1 | 0 | 0 | 0 | 0 | 0
 person given name | person | 2 | 2 | 0 | 0 | 0 | 0
-person in run-in CJK text | person | 1 | 1 | 0 | 0 | 0 | 0
+person in run-in CJK text | person | 1 | 0 | 0 | 0 | 0 | 0
 person initials | person | 2 | 2 | 0 | 0 | 0 | 0
 person initials, dotted | person | 1 | 1 | 0 | 0 | 0 | 0
 person middle initial | person | 1 | 1 | 0 | 0 | 0 | 0

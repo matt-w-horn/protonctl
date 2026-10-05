@@ -77,6 +77,16 @@ pub fn around(dict: &dict::Dictionary, text: &str, at: usize) -> Option<(usize, 
         .find(|&(start, end)| start < at && at < end)
 }
 
+/// Whether `c` belongs to a script written without spaces between words:
+/// Chinese, Japanese kana, Thai, Lao, Khmer and Myanmar. A name in such
+/// text has letters on both sides, so `bounded` cannot hold for it.
+pub fn unspaced(c: char) -> bool {
+    matches!(c as u32,
+        0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0x20000..=0x3134F
+        | 0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F
+        | 0x0E00..=0x0EFF | 0x1780..=0x17FF | 0x1000..=0x109F)
+}
+
 /// Whether `text[start..end]` stands alone: no letter or digit just before
 /// or just after it.
 pub fn bounded(text: &str, start: usize, end: usize) -> bool {

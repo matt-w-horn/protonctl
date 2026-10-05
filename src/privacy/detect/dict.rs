@@ -14,10 +14,16 @@ pub struct Names(Vec<(String, EntityType)>);
 
 impl Names {
     /// Add a name, unless it is too short or has no letter to be one: "Me"
-    /// or "Al" would match ordinary words.
+    /// or "Al" would match ordinary words. A name written in a script
+    /// without spaces may have two characters, as many Chinese names do.
     pub fn add(&mut self, text: &str, t: EntityType) {
         let text = text.trim();
-        if text.chars().count() >= 3 && text.chars().any(char::is_alphabetic) {
+        let least = if text.chars().all(super::unspaced) {
+            2
+        } else {
+            3
+        };
+        if text.chars().count() >= least && text.chars().any(char::is_alphabetic) {
             self.0.push((text.to_string(), t));
         }
     }
@@ -96,7 +102,9 @@ impl Dictionary {
     /// Each place a name appears on its own. A one-word name must not start
     /// with a lower-case letter there, so "Grace" the person is found and
     /// "grace" the word is not; a script without case, such as Chinese, has
-    /// no lower-case word to mistake for the name.
+    /// no lower-case word to mistake for the name. A name written wholly in
+    /// a script without spaces is found inside running text too, where
+    /// letters stand on both sides of it.
     pub fn find(&self, text: &str, out: &mut Vec<Mention>) {
         let Some(ac) = &self.automaton else { return };
         let (copy, map) = folded(text);
@@ -110,7 +118,8 @@ impl Dictionary {
             let found = &text[start..end];
             // Only a name needs a capital: an address or a domain does not.
             let one_word = t.class() == AliasClass::Name && !name.contains(char::is_whitespace);
-            if !bounded(text, start, end)
+            let run_in = name.chars().all(super::unspaced);
+            if !(run_in || bounded(text, start, end))
                 || (one_word && found.chars().next().is_some_and(char::is_lowercase))
             {
                 continue;
@@ -175,6 +184,24 @@ mod tests {
         d.find(text, &mut out);
         let got: Vec<&str> = out.iter().map(|m| &text[m.start..m.end]).collect();
         assert_eq!(got, ["王小明"]);
+    }
+
+    /// B25: a Chinese or Japanese name inside running text in its own
+    /// script, which has no spaces, is found, a two-character one too; a
+    /// Latin name inside a longer word is still not.
+    #[test]
+    fn a_name_in_running_text_without_spaces_is_found() {
+        let mut names = Names::default();
+        names.add("王小明", EntityType::Person);
+        names.add("李明", EntityType::Person);
+        names.add("やまだはなこ", EntityType::Person);
+        names.add("Dana", EntityType::Person);
+        let d = Dictionary::new(&names).unwrap();
+        let mut out = Vec::new();
+        let text = "与王小明开会，和李明说，やまだはなこさんへ。Danaruiz";
+        d.find(text, &mut out);
+        let got: Vec<&str> = out.iter().map(|m| &text[m.start..m.end]).collect();
+        assert_eq!(got, ["王小明", "李明", "やまだはなこ"]);
     }
 
     /// Case beyond ASCII: "RENÉE" is "Renée", and "STRASSE" is "Straße".
