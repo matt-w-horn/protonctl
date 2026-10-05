@@ -293,6 +293,7 @@ send on whatever protonctl returned ([section 5](05-security.md)).
 | Config | `~/.config/protonctl/config.toml` (no secrets, and not the privacy mode; format in `src/config.rs`) |
 | Secrets | Keychain service `protonctl`, accounts `calendar/<id>`, `bridge/<address>`, from Phase 2 `privacy-mode` and, in aliases mode, `privacy-key` |
 | Downloads | `~/Library/Caches/protonctl/downloads/<pid>/<drive or mail>-<Unix seconds>-<random>/` (mail attachments and Drive files; the sweep reads each folder's age from its name); off mode only from Phase 2 |
+| Drive CLI lock | `~/Library/Caches/protonctl/cli.lock`, always empty, in both modes; every protonctl process locks it around a run of `proton-drive` (principle 6, Q37) |
 | Cloud-only Drive files | in aliases mode, from Phase 2, a per-process RAM disk, since `proton-drive` cannot stream to stdout (Q14) |
 | Exports | the folder `[export] folder` names: `drive/<Drive path>`, `mail/<messageId>/<index>-<name>`, `manifests/drive-<UTC time>.jsonl`; off mode only from Phase 2 |
 | On Linux | the cache under `$XDG_CACHE_HOME/protonctl` (else `~/.cache/protonctl`); secrets in the Secret Service, with the attributes `service` and `account` (Q31, [section 11](11-platforms.md)) |

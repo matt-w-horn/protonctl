@@ -53,6 +53,8 @@ fn environment() -> [(&'static str, std::ffi::OsString); 2] {
     ]
 }
 
+/// One path for every protonctl process, in the cache folder in both modes
+/// (RFC Q37): the per-process memory folder would lock nothing.
 fn lock_path() -> PathBuf {
     // Unit tests share the real HOME; keep them out of it, as the downloads do.
     if cfg!(test) {

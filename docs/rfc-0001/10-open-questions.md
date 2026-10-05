@@ -40,6 +40,7 @@
 | Q34 | Converters and their sandbox on Linux | decided 2026-10-04 |  |
 | Q35 | User presence on Linux | decided 2026-10-04 |  |
 | Q36 | Listing in Anthropic's plugin directory | decided 2026-10-05 |  |
+| Q37 | The Drive CLI's lock file stays in the cache folder | decided 2026-10-05 |  |
 
 ## Decisions and questions
 
@@ -253,6 +254,20 @@
     data-protection keychain.
   - Releases: the directory tracks a `release` branch, fast-forwarded to a
     tagged commit on `main` for each release.
+
+- Q37, decided 2026-10-05 by the maintainer
+  ([#26](https://github.com/matt-w-horn/protonctl/issues/26)): the Drive
+  CLI's lock file stays at `cli.lock` in the cache folder
+  (`~/Library/Caches/protonctl`, or `~/.cache/protonctl` on Linux), in
+  both modes, though in aliases mode it is a new file in the home folder.
+  It must be one path that every protonctl process finds, since it stops
+  two servers (Claude Code and Claude Desktop, say) from running the CLI
+  at once, which fails with "database is locked" (principle 6). The
+  memory folder is per process, so a lock there would lock nothing across
+  processes, and a shared place in memory would need a fixed RAM-disk
+  path or `/tmp`, which other users of the Mac share. The file is always
+  empty, so R10 holds, and the no-disk test allows it only while it is
+  empty ([section 7](07-testing.md)).
 
 - Open, to check before the phase that depends on each
   ([#21](https://github.com/matt-w-horn/protonctl/issues/21), [#22](https://github.com/matt-w-horn/protonctl/issues/22), [#23](https://github.com/matt-w-horn/protonctl/issues/23) and [#24](https://github.com/matt-w-horn/protonctl/issues/24)):
