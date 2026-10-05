@@ -1,9 +1,11 @@
 name: claude
 
 # Hand an issue to Claude by giving it the `claude` label, or ask in a comment
-# with @claude. Only the repository owner can do either: labels need triage
-# access, and comments are checked for the owner's association. Claude works
-# on a claude/ branch and comments a link to open the pull request.
+# with @claude. Only the repository owner can do either, on an issue the owner
+# wrote, and Claude sees only the owner's comments: the repository is public,
+# so anyone else's text could carry instructions to an agent that can push.
+# Claude works on a claude/ branch and comments a link to open the pull
+# request. Every action is pinned to a commit, since this job holds a token.
 on:
   issues:
     types: [labeled]
@@ -18,9 +20,10 @@ permissions:
 jobs:
   claude:
     if: >-
-      (github.event_name == 'issues' && github.event.label.name == 'claude') ||
-      (github.event_name != 'issues' && contains(github.event.comment.body, '@claude') &&
-       github.event.comment.author_association == 'OWNER')
+      (github.event.issue.user.login || github.event.pull_request.user.login) == github.repository_owner &&
+      ((github.event_name == 'issues' && github.event.label.name == 'claude') ||
+       (github.event_name != 'issues' && contains(github.event.comment.body, '@claude') &&
+        github.event.comment.author_association == 'OWNER'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -30,20 +33,23 @@ jobs:
       id-token: write
       actions: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # What scripts/check.sh needs on Linux, as in ci.yml, so Claude can run it.
       - run: sudo apt-get update && sudo apt-get install -y poppler-utils pandoc dbus gnome-keyring
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         with:
+          # Named here, since a pinned commit cannot name it as the branch did.
+          toolchain: stable
           components: rustfmt, clippy, llvm-tools-preview
           targets: aarch64-apple-darwin
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2
         with:
           tool: cargo-deny,cargo-llvm-cov
-      - uses: anthropics/claude-code-action@v1
+      - uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          include_comments_by_actor: ${{ github.repository_owner }}
           # No co-author line, no attribution and no session link in commits or pull requests.
           settings: |
             {"attribution": {"commit": "", "pr": ""}}
