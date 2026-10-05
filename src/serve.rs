@@ -1523,4 +1523,103 @@ mod tests {
             &(Server::shared_router() + Server::aliases_router())
         ));
     }
+
+    /// RFC R13, the fail-closed test: a pipeline stage that panics fails the
+    /// call with the fixed `pipeline_failed` fault, and none of the result's
+    /// values leave.
+    #[tokio::test]
+    async fn a_pipeline_stage_that_panics_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "Write to jane.doe@example.com or call +1 415 555 0123.";
+        std::fs::write(dir.path().join("Jane Doe.txt"), body).unwrap();
+        let planted = format!("{body} {}", pipeline::PLANTED_PANIC);
+        std::fs::write(dir.path().join("Jane Doe planted.txt"), planted).unwrap();
+        let server = Server::new(aliases_app(dir.path()));
+        let keys = server.app.privacy.check().unwrap().keys.unwrap();
+        let read = |path: &str| ReadAliases {
+            file_id: keys.handle(ItemKind::DrivePath, path),
+            ..Default::default()
+        };
+        // Without the planted panic, the same text reads.
+        let plain = server
+            .read_file_content_aliases(Parameters(read("/Jane Doe.txt")))
+            .await
+            .unwrap();
+        assert_eq!(plain.is_error, Some(false), "{}", text(&plain));
+        let out = server
+            .read_file_content_aliases(Parameters(read("/Jane Doe planted.txt")))
+            .await
+            .unwrap();
+        assert_eq!(out.is_error, Some(true), "{}", text(&out));
+        assert_eq!(
+            json_of(&out),
+            Fault::PipelineFailed.json(Some(Mode::Aliases), &pipeline::DETECTORS)
+        );
+        for leak in ["Jane", "jane", "example", "415", pipeline::PLANTED_PANIC] {
+            assert!(!text(&out).contains(leak), "{leak} in {}", text(&out));
+        }
+    }
+
+    /// RFC R20 and section 7, Rotation: a running server whose key is
+    /// replaced, as `rotate-key` does, gives the new key's aliases on its
+    /// next call, and refuses a handle or a ref made under the old key.
+    #[tokio::test]
+    async fn a_rotated_key_gives_new_aliases_and_refuses_old_handles() {
+        use crate::privacy::ident::EntityType;
+        let dir = tempfile::tempdir().unwrap();
+        let name = "jane.doe@example.com notes.txt";
+        std::fs::write(
+            dir.path().join(name),
+            "Write to jane.doe@example.com today.",
+        )
+        .unwrap();
+        let mut app = Arc::into_inner(aliases_app(dir.path())).unwrap();
+        let (p, _, key) = privacy(Some(Mode::Aliases), Some([7; 32]));
+        app.privacy = p;
+        let server = Server::new(Arc::new(app));
+        let alias =
+            |k: u8| Keys::derive(&[k; 32]).alias(EntityType::Email, "jane.doe@example.com", 0);
+        let top = async || {
+            let all = ListFolderAliases::default();
+            json_of(&server.list_folder_aliases(Parameters(all)).await.unwrap())["items"][0].clone()
+        };
+        let read = async |file_id: &Value| {
+            let req = ReadAliases {
+                file_id: file_id.as_str().unwrap().into(),
+                ..Default::default()
+            };
+            json_of(
+                &server
+                    .read_file_content_aliases(Parameters(req))
+                    .await
+                    .unwrap(),
+            )
+        };
+        let old = top().await;
+        assert_eq!(old["path"], format!("/{} notes.txt", alias(7)));
+        let old_ref = read(&old["fileId"]).await["entities"][alias(7)]["ref"].clone();
+        assert!(old_ref.is_string(), "{old_ref}");
+
+        *key.0.lock().unwrap() = Some([8; 32]);
+        let new = top().await;
+        assert_eq!(new["path"], format!("/{} notes.txt", alias(8)));
+        assert_ne!(new["fileId"], old["fileId"]);
+        assert_eq!(
+            read(&new["fileId"]).await["content"],
+            format!("Write to {} today.", alias(8))
+        );
+        let refused = read(&old["fileId"]).await;
+        assert_eq!(refused["error"], "invalid_handle", "{refused}");
+        let search = SearchFilesAliases {
+            query: format!("ref:{}", old_ref.as_str().unwrap()),
+            ..Default::default()
+        };
+        let refused = json_of(
+            &server
+                .search_files_aliases(Parameters(search))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(refused["error"], "invalid_ref", "{refused}");
+    }
 }

@@ -31,7 +31,8 @@ static IPV6: LazyLock<Regex> =
     LazyLock::new(|| re(r"(?i)\b[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}\b"));
 static PHONE: LazyLock<Regex> = LazyLock::new(|| re(r"\+?\(?\d[\d\s().-]{5,18}\d"));
 static CARD: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:\d[ -]?){12,18}\d\b"));
-static IBAN: LazyLock<Regex> = LazyLock::new(|| re(r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}\b"));
+// ASCII digits: `\d` takes any script's, and `iban` cuts at byte 4.
+static IBAN: LazyLock<Regex> = LazyLock::new(|| re(r"\b[A-Z]{2}[0-9]{2}(?: ?[A-Z0-9]){11,30}\b"));
 static SSN: LazyLock<Regex> = LazyLock::new(|| re(r"\b(\d{3})-(\d{2})-(\d{4})\b"));
 static SECRET: LazyLock<Regex> = LazyLock::new(|| {
     re(
@@ -298,6 +299,17 @@ mod tests {
             "order 1234567",
             "version 1.2.3",
         ] {
+            assert_eq!(found(text), Vec::new(), "{text}");
+        }
+    }
+
+    /// An IBAN's digits are ASCII: text shaped like one with a digit from
+    /// another script is no IBAN, and does not panic the detectors, as it
+    /// did when the check cut it at a byte inside that digit.
+    #[test]
+    fn an_iban_with_a_digit_from_another_script_is_not_one() {
+        // Arabic-Indic and Devanagari threes, of two and three bytes.
+        for text in ["GB3\u{663}ABCDEFGHIJK", "GB\u{969}\u{969}ABCDEFGHIJK"] {
             assert_eq!(found(text), Vec::new(), "{text}");
         }
     }

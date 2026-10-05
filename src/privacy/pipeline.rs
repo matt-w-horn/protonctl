@@ -28,6 +28,11 @@ pub const CAP: usize = 90_000;
 /// What the pipeline reports to `detectors`.
 pub const DETECTORS: [Detector; 2] = [Detector::Regex, Detector::Dictionary];
 
+/// In tests only, text that makes the rewrite stage panic, for the
+/// fail-closed test (RFC section 7; low-level design, "Testing hooks").
+#[cfg(test)]
+pub const PLANTED_PANIC: &str = "protonctl-planted-panic";
+
 /// MIME types kept as they are; a sender can write any other, a name
 /// included, into an attachment's type.
 const KNOWN_MIME: &[&str] = &[
@@ -451,6 +456,8 @@ impl State<'_> {
                 None
             }
             Stage::Rewrite => {
+                #[cfg(test)]
+                assert!(!text.contains(PLANTED_PANIC), "a planted panic");
                 let mut out = String::with_capacity(text.len());
                 let mut at = 0;
                 for m in mentions {
@@ -928,6 +935,7 @@ pub fn unlisted(tool: Tool, v: &Value) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::privacy::ident::TokenKind;
+    use crate::privacy::words;
 
     fn keys() -> Keys {
         Keys::derive(&[5; 32])
@@ -1041,6 +1049,223 @@ mod tests {
             json!({ "message": { "from": "Dana Ruiz <dana@ruiz-events.example>" } }),
         );
         assert_eq!(a["messages"][0]["from"], b["message"]["from"]);
+    }
+
+    /// One result for each kind of identifier the pipeline makes: aliases
+    /// of every type the detectors find, refs, a handle of each kind, page
+    /// tokens and keyed digests.
+    fn corpus() -> Vec<(Tool, Value)> {
+        vec![
+            (Tool::SearchThreads, search()),
+            (
+                Tool::SearchThreads,
+                json!({ "messages": [{
+                    "from": "Dana Ruiz <dana@ruiz-events.example>",
+                    "subject": "Card 4111 1111 1111 1111, IBAN GB82 WEST 1234 5698 7654 32",
+                    "snippet": "From 192.0.2.17; SSN 123-45-6789; code: 4821; see /home/dana/notes",
+                }] }),
+            ),
+            (
+                Tool::GetEvent,
+                json!({ "event": { "eventId": "uid-77@ruiz-events.example|20261001T090000Z",
+                    "summary": "Site visit with Dana Ruiz",
+                    "organizer": { "name": "Dana Ruiz", "email": "dana@ruiz-events.example" } } }),
+            ),
+            (
+                Tool::ListFolder,
+                json!({ "path": "/Clients", "items": [{
+                    "path": "/Clients/dana@ruiz-events.example notes.txt", "kind": "file",
+                    "claimedSha1": "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d" }] }),
+            ),
+            (
+                Tool::GetFileMetadata,
+                json!({ "file": { "path": "/Clients/a.txt",
+                    "sha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae" } }),
+            ),
+        ]
+    }
+
+    /// The corpus's results under keys derived from `key`.
+    fn corpus_under(key: &[u8; 32]) -> Vec<Value> {
+        let keys = Keys::derive(key);
+        corpus()
+            .into_iter()
+            .map(|(tool, v)| {
+                let ctx = Context {
+                    tool,
+                    query: None,
+                    you: Some("sam@okafor.example"),
+                    names: &Names::default(),
+                    incomplete: &[],
+                };
+                run(v, &keys, &ctx).unwrap()
+            })
+            .collect()
+    }
+
+    /// Each identifier in `results`, with its kind: an alias by its type, a
+    /// ref, or the member that holds a handle, page token or keyed digest.
+    fn identifiers(results: &[Value]) -> Vec<(String, String)> {
+        fn walk(v: &Value, out: &mut Vec<(String, String)>) {
+            match v {
+                Value::Object(map) => {
+                    for (k, child) in map {
+                        match (k.as_str(), child) {
+                            ("entities", Value::Object(rows)) => {
+                                for (alias, row) in rows {
+                                    let t = row["type"].as_str().unwrap();
+                                    out.push((format!("{t} alias"), alias.clone()));
+                                    out.push(("ref".into(), row["ref"].as_str().unwrap().into()));
+                                }
+                            }
+                            (
+                                "messageId" | "threadId" | "eventId" | "fileId" | "folderId"
+                                | "nextPageToken" | "sha256" | "claimedSha1",
+                                Value::String(s),
+                            ) => out.push((k.clone(), s.clone())),
+                            _ => walk(child, out),
+                        }
+                    }
+                }
+                Value::Array(items) => items.iter().for_each(|i| walk(i, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for r in results {
+            walk(r, &mut out);
+        }
+        out
+    }
+
+    /// RFC section 7, Stability: the corpus under one key gives the same
+    /// aliases, refs, handles, page tokens and keyed digests from keys
+    /// derived again, and in a second process; under another key, every one
+    /// of them differs.
+    #[test]
+    fn identifiers_are_stable_under_one_key_and_all_differ_under_another() {
+        const OUT: &str = "PROTONCTL_TEST_STABILITY_OUT";
+        let ours = corpus_under(&[5; 32]);
+        if let Some(path) = std::env::var_os(OUT) {
+            // The second process: hand the results to the first.
+            std::fs::write(path, serde_json::to_vec(&ours).unwrap()).unwrap();
+            return;
+        }
+        let ids = identifiers(&ours);
+        let kinds: BTreeSet<&str> = ids.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            kinds,
+            BTreeSet::from([
+                "account alias",
+                "card alias",
+                "claimedSha1",
+                "domain alias",
+                "email alias",
+                "eventId",
+                "fileId",
+                "folderId",
+                "iban alias",
+                "ip alias",
+                "messageId",
+                "national_id alias",
+                "nextPageToken",
+                "person alias",
+                "phone alias",
+                "ref",
+                "secret alias",
+                "sha256",
+                "threadId",
+            ]),
+            "the corpus holds every kind"
+        );
+        assert_eq!(corpus_under(&[5; 32]), ours, "keys derived again");
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("results.json");
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "privacy::pipeline::tests::identifiers_are_stable_under_one_key_and_all_differ_under_another",
+                "--test-threads=1",
+            ])
+            .env(OUT, &file)
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "{}",
+            String::from_utf8_lossy(&child.stderr)
+        );
+        let theirs: Vec<Value> = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+        assert_eq!(theirs, ours, "a second process");
+        let other = Value::from(corpus_under(&[6; 32])).to_string();
+        for (kind, id) in &ids {
+            assert!(
+                !other.contains(id.as_str()),
+                "{kind} {id} under another key"
+            );
+        }
+    }
+
+    /// RFC section 7, Collisions: with a word list of 4 words, two and three
+    /// entities that share three words in one result each get their own
+    /// alias, more words in the order of their refs, whatever the order of
+    /// the input.
+    #[test]
+    fn entities_sharing_three_words_get_distinct_aliases_in_any_order() {
+        const SHORT: &[&str] = &["amber", "falcon", "river", "stone"];
+        let k = keys();
+        words::with_list(SHORT, || {
+            let mut by_words: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for i in 0..200 {
+                let email = format!("p{i}@corp.example");
+                let three = k.alias(EntityType::Email, &email, 0);
+                by_words.entry(three).or_default().push(email);
+            }
+            let triple = by_words.values().find(|g| g.len() >= 3).unwrap()[..3].to_vec();
+            let pair = by_words
+                .values()
+                .find(|g| g.len() >= 2 && g[0] != triple[0])
+                .unwrap()[..2]
+                .to_vec();
+            // The rule: three words for the first by ref, then one more each.
+            let mut expected = BTreeMap::new();
+            for group in [&pair, &triple] {
+                let mut by_ref = group.clone();
+                by_ref.sort_by_key(|e| k.reference(EntityType::Email, e));
+                for (extra, e) in by_ref.into_iter().enumerate() {
+                    let alias = k.alias(EntityType::Email, &e, extra);
+                    assert_eq!(alias.split('-').count(), 3 + extra);
+                    assert!(alias.split('-').all(|w| SHORT.contains(&w)), "{alias}");
+                    expected.insert(e, alias);
+                }
+            }
+            let addresses: Vec<String> = pair.iter().chain(&triple).cloned().collect();
+            for turn in 0..2 * addresses.len() {
+                // Each address first in turn, forwards and backwards.
+                let mut order = addresses.clone();
+                order.rotate_left(turn % addresses.len());
+                if turn >= addresses.len() {
+                    order.reverse();
+                }
+                let v = json!({ "messages": [{ "to": order, "subject": "x" }] });
+                let out = run_as(Tool::SearchThreads, None, &Names::default(), v);
+                let shown: Vec<&str> = out["messages"][0]["to"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|a| a.as_str().unwrap())
+                    .collect();
+                let distinct: BTreeSet<&str> = shown.iter().copied().collect();
+                assert_eq!(distinct.len(), 5, "{shown:?}");
+                assert_eq!(out["entities"].as_object().unwrap().len(), 5, "{out}");
+                let got: BTreeMap<String, String> = order
+                    .iter()
+                    .cloned()
+                    .zip(shown.iter().map(ToString::to_string))
+                    .collect();
+                assert_eq!(got, expected, "{order:?}");
+            }
+        });
     }
 
     #[test]
