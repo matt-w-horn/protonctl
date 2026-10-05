@@ -35,12 +35,6 @@ maintainer.
   ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D8).
   It should be listed through the CLI, or say that its contents are not
   on this computer.
-- B23 (here) In aliases mode, a phone or card number written in another
-  script's digits passes raw: "+١ ٤١٥ ٥٥٥ ٠١٢٣" and "٤١١١ ١١١١ ١١١١ ١١١١"
-  (Arabic-Indic) are not found, while their ASCII forms are. `phone` in
-  `src/privacy/detect/pattern.rs` counts ASCII digits only, and the card
-  check reads digits with `char::to_digit`, which is ASCII only. An SSN in
-  such digits is found. A fix needs each script's digit values.
 - B24 (here) In aliases mode, a 40- or 64-hex digest or a Proton message
   ID written in free text passes raw: no detector in
   `src/privacy/detect/pattern.rs` covers them. R16 and R17 cover them in

@@ -9,6 +9,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::{Detector, Kind, Mention};
+use crate::privacy::canon;
 use crate::privacy::ident::EntityType;
 
 fn re(pattern: &str) -> Regex {
@@ -126,7 +127,7 @@ pub fn find(text: &str, out: &mut Vec<Mention>) {
         }
     }
     for m in CARD.find_iter(text) {
-        let digits: Vec<u32> = m.as_str().chars().filter_map(|c| c.to_digit(10)).collect();
+        let digits: Vec<u32> = m.as_str().chars().filter_map(canon::digit).collect();
         if (13..=19).contains(&digits.len()) && luhn(&digits) {
             entity(out, text, m.start(), m.end(), EntityType::Card);
         }
@@ -137,7 +138,7 @@ pub fn find(text: &str, out: &mut Vec<Mention>) {
         }
     }
     for c in SSN.captures_iter(text) {
-        let (area, group, serial) = (&c[1], &c[2], &c[3]);
+        let [area, group, serial] = [&c[1], &c[2], &c[3]].map(canon::ascii_digits);
         if area != "000"
             && area != "666"
             && !area.starts_with('9')
@@ -171,6 +172,7 @@ pub fn find(text: &str, out: &mut Vec<Mention>) {
 /// A phone number in E.164 when it is a valid number: with a country code
 /// as written, or else in the local region.
 pub fn phone(s: &str) -> Option<String> {
+    let s = &canon::ascii_digits(s);
     let digits = s.chars().filter(char::is_ascii_digit).count();
     if !(7..=15).contains(&digits) {
         return None;
@@ -311,6 +313,42 @@ mod tests {
         // Arabic-Indic and Devanagari threes, of two and three bytes.
         for text in ["GB3\u{663}ABCDEFGHIJK", "GB\u{969}\u{969}ABCDEFGHIJK"] {
             assert_eq!(found(text), Vec::new(), "{text}");
+        }
+    }
+
+    /// A number in another script's digits is found as its ASCII form is,
+    /// with the same value, and refused by the same rules (B23).
+    #[test]
+    fn numbers_in_another_script_s_digits_are_found() {
+        let arabic = |s: &str| -> String {
+            s.chars()
+                .map(|c| {
+                    c.to_digit(10)
+                        .map_or(c, |d| char::from_u32(0x660 + d).unwrap())
+                })
+                .collect()
+        };
+        let values = |text: &str| -> Vec<(Kind, String)> {
+            let mut out = Vec::new();
+            find(text, &mut out);
+            let mut v: Vec<_> = super::super::settle(out)
+                .into_iter()
+                .map(|m| (m.kind, crate::privacy::canon::compact(&m.value)))
+                .collect();
+            v.sort_by(|a, b| a.1.cmp(&b.1));
+            v
+        };
+        for text in [
+            "Call +1 415 555 0123 now",
+            "Card 4111 1111 1111 1111 ok",
+            "SSN 123-45-6789 ok",
+        ] {
+            let ascii = values(text);
+            assert_eq!(ascii.len(), 1, "{text}");
+            assert_eq!(values(&arabic(text)), ascii, "{}", arabic(text));
+        }
+        for refused in ["SSN 666-12-3456", "Card 4111 1111 1111 1112"] {
+            assert_eq!(found(&arabic(refused)), Vec::new(), "{refused}");
         }
     }
 

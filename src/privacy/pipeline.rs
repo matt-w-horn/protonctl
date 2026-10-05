@@ -1732,6 +1732,31 @@ mod tests {
         eprint!("{said}");
     }
 
+    /// B23: one number written in two scripts' digits is one entity, and
+    /// neither form is left in the result.
+    #[test]
+    fn a_number_in_two_scripts_has_one_alias() {
+        let out = run_as(
+            Tool::SearchThreads,
+            None,
+            &Names::default(),
+            json!({ "messages": [{ "snippet":
+                "Call +1 415 555 0123, or +\u{0661} \u{0664}\u{0661}\u{0665} \u{0665}\u{0665}\u{0665} \u{0660}\u{0661}\u{0662}\u{0663}." }] }),
+        );
+        let text = out.to_string();
+        assert!(
+            !text.contains("415") && !text.contains('\u{0664}'),
+            "{text}"
+        );
+        let phones = out["entities"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter(|e| e["type"] == "phone")
+            .count();
+        assert_eq!(phones, 1, "{text}");
+    }
+
     /// R17: an intact file's keyed local SHA-1 equals its keyed claim,
     /// whatever case the claim's hex is in, and one changed byte makes
     /// them differ, so Claude can still compare them.

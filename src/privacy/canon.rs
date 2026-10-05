@@ -3,7 +3,9 @@
 //! two people, so it errs toward keeping forms apart.
 
 use std::net::IpAddr;
+use std::sync::LazyLock;
 
+use regex::Regex;
 use unicode_normalization::UnicodeNormalization as _;
 use unicode_normalization::char::is_combining_mark;
 
@@ -99,9 +101,43 @@ pub fn email(s: &str) -> String {
     }
 }
 
+/// Whether `c` is a decimal digit in some script (Unicode's `Nd`).
+fn is_decimal(c: char) -> bool {
+    static ND: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\A\p{Nd}\z").expect("a fixed pattern"));
+    ND.is_match(c.encode_utf8(&mut [0; 4]))
+}
+
+/// The value of a decimal digit in any script. Unicode encodes each
+/// script's digits as one run from 0 to 9, so a digit's value is how far
+/// it is from the start of its run.
+pub fn digit(c: char) -> Option<u32> {
+    if c.is_ascii() {
+        return c.to_digit(10);
+    }
+    if !is_decimal(c) {
+        return None;
+    }
+    let mut at = u32::from(c);
+    let mut below = 0;
+    while char::from_u32(at - 1).is_some_and(is_decimal) {
+        at -= 1;
+        below += 1;
+    }
+    Some(below % 10)
+}
+
+/// `s` with each decimal digit, in any script, as an ASCII digit.
+pub fn ascii_digits(s: &str) -> String {
+    s.chars()
+        .map(|c| digit(c).and_then(|d| char::from_digit(d, 10)).unwrap_or(c))
+        .collect()
+}
+
 /// A card number or IBAN: digits and capital letters only.
 pub fn compact(s: &str) -> String {
-    s.chars()
+    ascii_digits(s)
+        .chars()
         .filter(char::is_ascii_alphanumeric)
         .map(|c| c.to_ascii_uppercase())
         .collect()
@@ -109,7 +145,10 @@ pub fn compact(s: &str) -> String {
 
 /// A secret, national ID or account name: as found, without whitespace.
 pub fn plain(s: &str) -> String {
-    s.chars().filter(|c| !c.is_whitespace()).collect()
+    ascii_digits(s)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
 }
 
 /// A domain name: lower case, without a trailing dot.
@@ -188,6 +227,40 @@ mod tests {
             url("HTTPS://Example.COM/Path?q=A#frag"),
             "https://example.com/Path?q=A"
         );
+    }
+
+    /// Each script's decimal digits read as their values. `digit` relies on
+    /// every run of decimal digits being whole runs of 0 to 9.
+    #[test]
+    fn every_script_s_digits_read_as_their_values() {
+        for (c, v) in [
+            ('0', 0),
+            ('9', 9),
+            ('\u{0663}', 3),  // Arabic-Indic
+            ('\u{06F7}', 7),  // Extended Arabic-Indic
+            ('\u{0969}', 3),  // Devanagari
+            ('\u{09EB}', 5),  // Bengali
+            ('\u{0E55}', 5),  // Thai
+            ('\u{FF19}', 9),  // fullwidth
+            ('\u{1D7D5}', 7), // mathematical bold, the second of five runs
+        ] {
+            assert_eq!(digit(c), Some(v), "{c}");
+        }
+        for c in ['a', '\u{00B2}', '\u{00BD}', '\u{2167}'] {
+            assert_eq!(digit(c), None, "{c}");
+        }
+        let mut run = 0;
+        for c in (0..=0x0010_FFFF).filter_map(char::from_u32) {
+            if digit(c).is_some() {
+                run += 1;
+            } else {
+                assert_eq!(run % 10, 0, "a run of digits ends before {c:?}");
+                run = 0;
+            }
+        }
+        assert_eq!(ascii_digits("+\u{0661} \u{0664}\u{0661}\u{0665}"), "+1 415");
+        assert_eq!(compact("\u{0664}\u{0661}\u{0661}\u{0661} 1111"), "41111111");
+        assert_eq!(plain("\u{0661}\u{0662}\u{0663}-45"), "123-45");
     }
 
     proptest! {
