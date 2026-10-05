@@ -510,10 +510,12 @@ missing ones:
   appears as typed only as a key of `queryEntities`, paired with its
   alias. `a_name_typed_in_the_query_is_paired_with_its_alias` in
   `src/privacy/pipeline.rs` tests this on a search's `from` field.
-- Guidance: present in exactly the cases R23 names. Built for a name typed
-  in a query (`a_name_typed_in_the_query_is_paired_with_its_alias`). A
-  result cut short or paged carries no `guidance`
-  ([docs/todo.md](../todo.md), B22).
+- Guidance: present in exactly the cases R23 names. Built: after a name
+  typed in a query (`a_name_typed_in_the_query_is_paired_with_its_alias`),
+  and when a result has a page token to follow, or a page, a body or a
+  Drive index marked as cut, with both lines together under 200
+  characters (`guidance_comes_when_more_exists`, both in
+  `src/privacy/pipeline.rs`).
 - No disk, in aliases mode: every tool runs with a throwaway home and temporary folder,
   compared before and after; any new file fails the test (shown to fail
   against the 2026-10-03 download folder). The helpers run with a cleared

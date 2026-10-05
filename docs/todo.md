@@ -35,11 +35,6 @@ maintainer.
   ([section 9](rfc-0001/09-rollout.md#phase-2-defects-found-on-real-results), defect D8).
   It should be listed through the CLI, or say that its contents are not
   on this computer.
-- B22 (here) In aliases mode, `guidance` comes only after a name typed in a
-  query (`src/privacy/pipeline.rs`). R23 also asks for it when a result
-  was cut short or paged, and
-  [section 6](rfc-0001/06-privacy.md#guidance) gives its text; no code
-  adds it.
 - B23 (here) In aliases mode, a phone or card number written in another
   script's digits passes raw: "+١ ٤١٥ ٥٥٥ ٠١٢٣" and "٤١١١ ١١١١ ١١١١ ١١١١"
   (Arabic-Indic) are not found, while their ASCII forms are. `phone` in

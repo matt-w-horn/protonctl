@@ -815,6 +815,7 @@ fn hints(e: &Entity, key: &EntityKey, you: Option<&str>) -> Vec<Hint> {
 
 /// Rewrite one result. `keys` are the call's (R20).
 pub fn run(mut value: Value, keys: &Keys, ctx: &Context) -> Result<Value, PipelineError> {
+    let more = more_exists(&value);
     let mut st = State {
         stage: Stage::Names,
         tool: ctx.tool,
@@ -884,11 +885,19 @@ pub fn run(mut value: Value, keys: &Keys, ctx: &Context) -> Result<Value, Pipeli
     if !query_entities.is_empty() {
         out.insert("queryEntities".into(), Value::Object(query_entities));
     }
-    if !typed.is_empty() {
-        out.insert(
-            "guidance".into(),
-            json!("A name typed in a query stays in the transcript; to search for someone without naming them, use ref: with a ref from an entities table."),
-        );
+    // R23, in section 6's words; both lines together stay under 200
+    // characters.
+    let guidance: Vec<&str> = [
+        (!typed.is_empty()).then_some(
+            "A name typed in a query stays in the transcript; to search for someone without naming them, use ref: with a ref from an entities table.",
+        ),
+        more.then_some("More results exist. Narrow by topic or date before paging."),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if !guidance.is_empty() {
+        out.insert("guidance".into(), json!(guidance.join(" ")));
     }
     if !st.dropped.is_empty() {
         out.insert("dropped".into(), json!(st.dropped));
@@ -897,6 +906,21 @@ pub fn run(mut value: Value, keys: &Keys, ctx: &Context) -> Result<Value, Pipeli
         return Err(PipelineError::TooLarge);
     }
     Ok(value)
+}
+
+/// Whether a result was cut short or paged (R23): it has a page token to
+/// follow, or a page, a body or a Drive index marked as cut.
+fn more_exists(v: &Value) -> bool {
+    match v {
+        Value::Object(map) => map.iter().any(|(k, child)| match (k.as_str(), child) {
+            ("nextPageToken", Value::String(_))
+            | ("truncated" | "bodyTruncated", Value::Bool(true))
+            | ("complete", Value::Bool(false)) => true,
+            _ => more_exists(child),
+        }),
+        Value::Array(items) => items.iter().any(more_exists),
+        _ => false,
+    }
 }
 
 /// String fields `tool`'s result holds that no policy names, for the
@@ -1284,13 +1308,44 @@ mod tests {
                 .starts_with(alias)
         );
         assert!(out["guidance"].as_str().unwrap().len() < 200);
+        let mut whole = search();
+        whole["nextPageToken"] = Value::Null;
         let plain = run_as(
             Tool::SearchThreads,
             Some("contract"),
             &Names::default(),
-            search(),
+            whole,
         );
         assert!(plain.get("queryEntities").is_none() && plain.get("guidance").is_none());
+    }
+
+    /// R23: `guidance` also comes when a result was cut short or paged, in
+    /// section 6's words, and after both, in one line under 200 characters.
+    #[test]
+    fn guidance_comes_when_more_exists() {
+        const MORE: &str = "More results exist. Narrow by topic or date before paging.";
+        let none = Names::default();
+        let guidance = |tool, query, v| run_as(tool, query, &none, v)["guidance"].clone();
+        let mut whole = search();
+        whole["nextPageToken"] = Value::Null;
+        assert_eq!(guidance(Tool::SearchThreads, None, whole), Value::Null);
+        assert_eq!(guidance(Tool::SearchThreads, None, search()), MORE);
+        let page = json!({ "content": "notes", "offset": 0, "nextOffset": 5, "truncated": true });
+        assert_eq!(guidance(Tool::ReadFileContent, None, page), MORE);
+        let last =
+            json!({ "content": "notes", "offset": 5, "nextOffset": null, "truncated": false });
+        assert_eq!(guidance(Tool::ReadFileContent, None, last), Value::Null);
+        let thread = json!({ "messages": [{ "body": "notes", "bodyTruncated": true }],
+            "nextPageToken": null });
+        assert_eq!(guidance(Tool::GetThread, None, thread), MORE);
+        let files = json!({ "files": [], "nextPageToken": null, "complete": false });
+        assert_eq!(guidance(Tool::SearchFiles, None, files), MORE);
+        let both = guidance(Tool::SearchThreads, Some("from:\"Dana Ruiz\""), search());
+        let both = both.as_str().unwrap();
+        assert!(
+            both.ends_with(MORE) && both.contains("ref:") && both.len() < 200,
+            "{both}"
+        );
     }
 
     #[test]
@@ -1490,8 +1545,119 @@ mod tests {
         );
     }
 
-    /// The pipeline's time on the largest page a tool returns: 40,000
-    /// characters (`maxChars`' limit) dense with names, addresses and phone
+    /// First and last names for `time_on_a_full_page`: 5,000 people.
+    const FIRST: [&str; 50] = [
+        "Dana", "Sam", "Ana", "Jon", "Mia", "Leo", "Ivy", "Max", "Zoe", "Eli", "Ada", "Kai", "Noa",
+        "Ren", "Uma", "Ola", "Tess", "Hugo", "Lena", "Omar", "Ines", "Yuki", "Ravi", "Sofia",
+        "Pablo", "Grace", "Felix", "Clara", "Mateo", "Hana", "Luca", "Nora", "Aria", "Emil",
+        "Iris", "Theo", "Vera", "Wade", "Xena", "Yara", "Zane", "Bea", "Cyrus", "Dora", "Ezra",
+        "Fay", "Gus", "Hope", "Ian", "Jade",
+    ];
+    const LAST: [&str; 100] = [
+        "Ruiz",
+        "Okafor",
+        "Chen",
+        "Patel",
+        "Novak",
+        "Silva",
+        "Kim",
+        "Haddad",
+        "Larsen",
+        "Moreau",
+        "Rossi",
+        "Tanaka",
+        "Weber",
+        "Costa",
+        "Ivanova",
+        "Nguyen",
+        "Kowalski",
+        "Dubois",
+        "Schmidt",
+        "Fischer",
+        "Romero",
+        "Bauer",
+        "Sato",
+        "Ito",
+        "Ahmed",
+        "Ali",
+        "Khan",
+        "Singh",
+        "Mehta",
+        "Rao",
+        "Bose",
+        "Das",
+        "Gupta",
+        "Iyer",
+        "Joshi",
+        "Kapoor",
+        "Lal",
+        "Malik",
+        "Nair",
+        "Pillai",
+        "Reddy",
+        "Sharma",
+        "Verma",
+        "Yadav",
+        "Abbott",
+        "Baker",
+        "Carter",
+        "Dawson",
+        "Ellis",
+        "Foster",
+        "Gibson",
+        "Hayes",
+        "Irwin",
+        "Jensen",
+        "Keller",
+        "Lowe",
+        "Mason",
+        "Nolan",
+        "Owens",
+        "Price",
+        "Quinn",
+        "Reyes",
+        "Shaw",
+        "Tate",
+        "Underwood",
+        "Vance",
+        "Walsh",
+        "Young",
+        "Zimmer",
+        "Adler",
+        "Brandt",
+        "Cohen",
+        "Dahl",
+        "Eder",
+        "Frey",
+        "Graf",
+        "Hahn",
+        "Imhof",
+        "Jung",
+        "Kraus",
+        "Lang",
+        "Mayer",
+        "Nagel",
+        "Otto",
+        "Pohl",
+        "Roth",
+        "Stein",
+        "Thiel",
+        "Ulrich",
+        "Vogel",
+        "Wolf",
+        "Ziegler",
+        "Arnaud",
+        "Blanc",
+        "Caron",
+        "Dumas",
+        "Fabre",
+        "Girard",
+        "Henry",
+        "Leroy",
+    ];
+
+    /// The pipeline's time on pages of 20,000 and 40,000 characters
+    /// (`maxChars`' default and limit) dense with names, addresses and phone
     /// numbers, against a dictionary of 5,000 correspondents. A measurement,
     /// not a gate:
     /// `cargo test --release time_on_a_full_page -- --ignored --nocapture`.
@@ -1499,27 +1665,6 @@ mod tests {
     #[ignore = "a measurement; run it with --release"]
     fn time_on_a_full_page() {
         use std::fmt::Write as _;
-        const FIRST: [&str; 50] = [
-            "Dana", "Sam", "Ana", "Jon", "Mia", "Leo", "Ivy", "Max", "Zoe", "Eli", "Ada", "Kai",
-            "Noa", "Ren", "Uma", "Ola", "Tess", "Hugo", "Lena", "Omar", "Ines", "Yuki", "Ravi",
-            "Sofia", "Pablo", "Grace", "Felix", "Clara", "Mateo", "Hana", "Luca", "Nora", "Aria",
-            "Emil", "Iris", "Theo", "Vera", "Wade", "Xena", "Yara", "Zane", "Bea", "Cyrus",
-            "Dora", "Ezra", "Fay", "Gus", "Hope", "Ian", "Jade",
-        ];
-        const LAST: [&str; 100] = [
-            "Ruiz", "Okafor", "Chen", "Patel", "Novak", "Silva", "Kim", "Haddad", "Larsen",
-            "Moreau", "Rossi", "Tanaka", "Weber", "Costa", "Ivanova", "Nguyen", "Kowalski",
-            "Dubois", "Schmidt", "Fischer", "Romero", "Bauer", "Sato", "Ito", "Ahmed", "Ali",
-            "Khan", "Singh", "Mehta", "Rao", "Bose", "Das", "Gupta", "Iyer", "Joshi", "Kapoor",
-            "Lal", "Malik", "Nair", "Pillai", "Reddy", "Sharma", "Verma", "Yadav", "Abbott",
-            "Baker", "Carter", "Dawson", "Ellis", "Foster", "Gibson", "Hayes", "Irwin",
-            "Jensen", "Keller", "Lowe", "Mason", "Nolan", "Owens", "Price", "Quinn", "Reyes",
-            "Shaw", "Tate", "Underwood", "Vance", "Walsh", "Young", "Zimmer", "Adler", "Brandt",
-            "Cohen", "Dahl", "Eder", "Frey", "Graf", "Hahn", "Imhof", "Jung", "Kraus", "Lang",
-            "Mayer", "Nagel", "Otto", "Pohl", "Roth", "Stein", "Thiel", "Ulrich", "Vogel",
-            "Wolf", "Ziegler", "Arnaud", "Blanc", "Caron", "Dumas", "Fabre", "Girard", "Henry",
-            "Leroy",
-        ];
         let people: Vec<String> = FIRST
             .iter()
             .flat_map(|f| LAST.iter().map(move |l| format!("{f} {l}")))
@@ -1578,7 +1723,9 @@ mod tests {
             // The work measured is the whole pipeline's: with 50 people the
             // page passes, with every name, address and number found.
             if distinct == 50 {
-                let found = out.as_ref().map(|v| v["entities"].as_object().unwrap().len());
+                let found = out
+                    .as_ref()
+                    .map(|v| v["entities"].as_object().unwrap().len());
                 assert!(found.is_ok_and(|n| n == 3 * 50), "{said}");
             }
         }
