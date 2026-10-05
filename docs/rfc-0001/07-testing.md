@@ -377,7 +377,7 @@ and the coverage floor failed when set to 99%.
 
 Planned for the privacy layer, each shown to fail on a constructed bad input
 before it is trusted. Each item says which of its tests exist on
-2026-10-05, by function name; [docs/todo.md](../todo.md) lists the
+2026-10-05, by function name; [the issues labeled tests](https://github.com/matt-w-horn/protonctl/issues?q=label%3Atests) list the
 missing ones:
 
 - Settings (Phase 2): a `privacy-mode` item holding neither `off` nor
@@ -549,7 +549,7 @@ missing ones:
   test binary again with a throwaway home and temporary folder, makes
   every call, and fails on a new file in either or on anything left in
   the memory folder after a call. It allows the Drive CLI's lock file
-  while the file is empty ([docs/todo.md](../todo.md), Decisions). It
+  while the file is empty ([#26](https://github.com/matt-w-horn/protonctl/issues/26)). It
   does not watch the folders a reader finds through the system: on
   Linux the readers can write only to `/dev/null` (Landlock), and on macOS they run
   unconfined until Phase 4.
@@ -616,7 +616,7 @@ missing ones:
   digests in every result, fails on a missing `detectors`, a `dropped`
   field or content after the JSON, and searches again by a sender's
   `ref`. Phone numbers, a `ref` in every entity and a second server run
-  are not checked ([docs/todo.md](../todo.md), T18); `--reveal` comes
+  are not checked ([#14](https://github.com/matt-w-horn/protonctl/issues/14)); `--reveal` comes
   with Phase 3.
 
 R1 is tested for both services that reach the account. The stand-in
@@ -632,11 +632,11 @@ LIST, EXAMINE, STATUS, UID SEARCH, UID FETCH and LOGOUT, with no fetch of
 `BODY[` or an `RFC822` item; `commands_that_can_change_the_account_are_refused`
 in `src/mail/read.rs` pins that the check refuses the others.
 
-Not built, each in [docs/todo.md](../todo.md): a hermetic IMAP test
+Not built: a hermetic IMAP test
 against Dovecot in podman seeded with a synthetic Bridge-shaped mailbox
-(T11); an optional prompt-injection drill (about 5 Claude runs), extended
+([#10](https://github.com/matt-w-horn/protonctl/issues/10)); an optional prompt-injection drill (about 5 Claude runs), extended
 to check that injected text gets no raw content without Touch ID, and
-sends nothing out through the host's other tools (T12).
+sends nothing out through the host's other tools ([#11](https://github.com/matt-w-horn/protonctl/issues/11)).
 The sandbox-only live write tests are withdrawn with the writes.
 
 ---

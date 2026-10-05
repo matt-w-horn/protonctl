@@ -45,15 +45,15 @@ flowchart TB
 | Phase | Contents | State |
 |---|---|---|
 | 0 | Install Bridge, log in, enable All Mail, IMAP over SSL; measure the `--noninteractive` cold start; record `X-Pm-*` headers, UIDPLUS, label-removal semantics on a sandbox message, BODY search on encoded parts; record the CLI's path format, JSON shapes and `fs info` fields; create a dedicated calendar link and note its caching headers. Findings go in [Appendix A](appendix-a-phase-0.md). | Recorded ([Appendix A](appendix-a-phase-0.md)), except the label-removal semantics, which moved to Phase 1b because measuring them writes to the mailbox; withdrawn with Phase 1b |
-| 1a | `serve`, `setup`, `doctor`, `status`, `logout`; read tools for Mail, Drive and Calendar; registration in both hosts; Cowork local and cloud test | Calendar, Drive and Mail reads built, `download_file` included, 18 tools; the 17 built by then passed `scripts/live-check.py` (2026-10-03), and `list_drive_tree` and PDF page images came after; the full live run and the Claude Code and Cowork tests have not run (M1.1, M1.2; [docs/todo.md](../todo.md), M3) |
+| 1a | `serve`, `setup`, `doctor`, `status`, `logout`; read tools for Mail, Drive and Calendar; registration in both hosts; Cowork local and cloud test | Calendar, Drive and Mail reads built, `download_file` included, 18 tools; the 17 built by then passed `scripts/live-check.py` (2026-10-03), and `list_drive_tree` and PDF page images came after; the full live run and the Claude Code and Cowork tests have not run (M1.1, M1.2; [#18](https://github.com/matt-w-horn/protonctl/issues/18)) |
 | 1b | The maintainer writes the policy table: a class for each write tool, and what the server does with each class; Mail and Drive write tools; sandbox write tests | withdrawn 2026-10-04: protonctl is read-only (Q5) |
-| 2 | The privacy setting (R26) and `setup drive`; then aliases mode: the privacy pipeline for all three services at once, at `reply()`, over results, errors and page tokens, failing closed: privacy key, aliases, references, handles, sealed page tokens, keyed digests, the `entities` table, `detectors` and `guidance`; regex with validators and the name dictionary; `download_file`, `export_drive_manifest`, the CLI's `drive manifest`, the `export` and `inline` options, the export and download folders, page images, image content and inline bytes absent in aliases mode and kept in off mode; a panic hook in both modes (R25); the leak test and the `live-check.py` checks. The CLI may be tokenized here too, ahead of Phase 3, since in Phase 2 it is the easy way around the pipeline in Claude Code | built and tested on Linux 2026-10-04; on a Mac the same day, M2.8 (cloud-only reads), the setup commands, signing (Q12) and the aliases-mode live run passed; the off-mode live run, the role-play on real results and the other Mac checks have not run ([docs/todo.md](../todo.md), M1 to M4); the defects below are open; the CLI is not tokenized |
+| 2 | The privacy setting (R26) and `setup drive`; then aliases mode: the privacy pipeline for all three services at once, at `reply()`, over results, errors and page tokens, failing closed: privacy key, aliases, references, handles, sealed page tokens, keyed digests, the `entities` table, `detectors` and `guidance`; regex with validators and the name dictionary; `download_file`, `export_drive_manifest`, the CLI's `drive manifest`, the `export` and `inline` options, the export and download folders, page images, image content and inline bytes absent in aliases mode and kept in off mode; a panic hook in both modes (R25); the leak test and the `live-check.py` checks. The CLI may be tokenized here too, ahead of Phase 3, since in Phase 2 it is the easy way around the pipeline in Claude Code | built and tested on Linux 2026-10-04; on a Mac the same day, M2.8 (cloud-only reads), the setup commands, signing (Q12) and the aliases-mode live run passed; the off-mode live run, the role-play on real results and the other Mac checks have not run ([#16](https://github.com/matt-w-horn/protonctl/issues/16), [#17](https://github.com/matt-w-horn/protonctl/issues/17), [#18](https://github.com/matt-w-horn/protonctl/issues/18), [#19](https://github.com/matt-w-horn/protonctl/issues/19) and [#20](https://github.com/matt-w-horn/protonctl/issues/20)); the defects below are open; the CLI is not tokenized |
 | 3 | In aliases mode, the `reveal_*` tools, and the CLI tokenized with `--raw` and `--out` behind user presence; Claude Code sandbox settings documented (Q17) | to do; answer Q15 first |
 | 4 | PDFKit and `textutil` under a sandbox profile, directly or behind `protonctl convert`, in both modes; Vision OCR for images and scans in aliases mode; on Linux, poppler and pandoc in `protonctl convert` (MP4) and Tesseract for OCR | to do on macOS; answer Q13 first. On Linux the readers were built 2026-10-05, ahead of this phase (MP4); OCR is to do |
 | 5 | GLiNER (multilingual) through `gline-rs`; short forms within an item; `maybeSameAs`; recall measured on a labeled synthetic corpus | to do; answer Q23 first |
 | 6 | Summary and question views from a local model, written with aliases; finer domain types and titles from signatures as hints | to do; Q23 names the runtime |
 | 7 | A Linux VM helper for the riskiest formats; Privacy Filter as the second check; an optional allowlist of names kept in plaintext | to do |
-| P0 to P5 | Linux ([section 11](11-platforms.md)): P1 builds and tests on Linux before Phase 2; P2 Mail and Calendar; P3 Drive; P4 converters with Phase 4; P5 presence with Phase 3 | P0 and P1 done 2026-10-04, with Q30 to Q35 decided; P2 to P4 built 2026-10-05, without OCR, and the live checks of P2 and P3 have not run ([docs/todo.md](../todo.md), L1, L2); P5 to do |
+| P0 to P5 | Linux ([section 11](11-platforms.md)): P1 builds and tests on Linux before Phase 2; P2 Mail and Calendar; P3 Drive; P4 converters with Phase 4; P5 presence with Phase 3 | P0 and P1 done 2026-10-04, with Q30 to Q35 decided; P2 to P4 built 2026-10-05, without OCR, and the live checks of P2 and P3 have not run ([#27](https://github.com/matt-w-horn/protonctl/issues/27) and [#28](https://github.com/matt-w-horn/protonctl/issues/28)); P5 to do |
 
 ## Milestones
 
@@ -69,10 +69,10 @@ that question is answered in [section 10](10-open-questions.md).
   Check whether the allow rules' globs (`mcp__proton__get_*`) match, and
   record where each host keeps tool results and stderr. Exit: findings in
   [Appendix A](appendix-a-phase-0.md); the allow rules in [section 4](04-design.md) and the README corrected if the
-  globs do not match. Not run ([docs/todo.md](../todo.md), M3).
+  globs do not match. Not run ([#18](https://github.com/matt-w-horn/protonctl/issues/18)).
 - M1.2 A full `scripts/live-check.py` run over all 18 tools, with
   `list_drive_tree` and PDF page images. Exit: every check passes. Not
-  run ([docs/todo.md](../todo.md), M3).
+  run ([#18](https://github.com/matt-w-horn/protonctl/issues/18)).
 - M1.3 Say read-only where the model reads it: the server's
   `instructions` (`src/serve.rs`) and `get_status`'s `cannot`
   (`src/main.rs`) still list only send, share and permanent delete; the
@@ -140,7 +140,7 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
   Keychain calls compile in the macOS lint and run only on a Mac. There,
   on 2026-10-04, `setup privacy` made the key and then kept it, and
   `rotate-key` refused without a terminal; a rotation under a running
-  server has not been checked there ([docs/todo.md](../todo.md), M2).
+  server has not been checked there ([#17](https://github.com/matt-w-horn/protonctl/issues/17)).
 - M2.2 Identifiers, in a new `src/privacy/` module: canonical form, alias,
   `ref`, handle, sealed page token, keyed digest, the curated word list
   compiled in. Settle `ring` or RustCrypto for HMAC and HKDF ([section 3](03-options.md)).
@@ -220,7 +220,7 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
   passed on a Mac on 2026-10-04, all 16 tools of that mode, after a fix
   for page edges that cut an address in two (in `f0414dd`). The off-mode
   live run and the role-play have not run
-  ([docs/todo.md](../todo.md), M3).
+  ([#18](https://github.com/matt-w-horn/protonctl/issues/18)).
 - M2.11 The setting (R26): the Keychain item `privacy-mode` (Q28), and no
   mode until the user sets one (Q27); `setup privacy` and `setup privacy --off` in
   `src/main.rs`; the mode in `status`, `doctor`, `get_status` and the
@@ -236,13 +236,13 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
 Found on 2026-10-04 by the first aliases-mode reads of the maintainer's
 own Drive, Mail and Calendar ([Appendix C](appendix-c-roleplay.md#first-real-results-2026-10-04)).
 Examples here are synthetic. Each is open until a test or the evaluation
-(D1) shows it fixed: D1 is T15 in [docs/todo.md](../todo.md), and D2 to
-D8 are B15 to B21 there.
+(D1) shows it fixed: D1 is [#13](https://github.com/matt-w-horn/protonctl/issues/13), and D2 to
+D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://github.com/matt-w-horn/protonctl/issues/7).
 
 - D1 No evaluation of the privacy layer. Nothing measures what passes
   raw: the leak test plants exact values, and Phase 5's recall
   measurement (M5.2) comes after the gaps below. Not built
-  ([docs/todo.md](../todo.md), T15).
+  ([#13](https://github.com/matt-w-horn/protonctl/issues/13)).
 - D2 Short forms of a name pass raw. The dictionary holds correspondents'
   full display names, so a surname alone ("Lee v. Acme", "Dr. Lee") and a
   given name alone are not found. M5.2 planned short forms within an
@@ -328,7 +328,7 @@ D8 are B15 to B21 there.
   `privacy_mode_changed` after a change, `rotate-key` and `logout` all
   worked against it. With no Secret Service, setup refuses and writes no
   file. The live check, on a Linux desktop with Bridge signed in, has not
-  run ([docs/todo.md](../todo.md), L1).
+  run ([#27](https://github.com/matt-w-horn/protonctl/issues/27)).
 - MP3 Drive on Linux as Q33 decides. Exit: the Drive tests against the
   stand-in CLI, and a live check if the CLI exists for Linux. Built
   2026-10-05: `setup drive` pins the CLI's SHA-256 in `[drive]` and pins
@@ -337,7 +337,7 @@ D8 are B15 to B21 there.
   tests (a changed CLI never runs again, and one with no pin never runs)
   and the Drive tests pass against stand-in CLIs. The live check, on a
   Linux machine signed in to Proton, has not run
-  ([docs/todo.md](../todo.md), L2).
+  ([#28](https://github.com/matt-w-horn/protonctl/issues/28)).
 - MP4 Converters and their sandbox on Linux (Q34), with Phase 4. Exit: the
   converter sandbox test on Linux. Built 2026-10-05, ahead of Phase 4
   ([section 11](11-platforms.md#the-document-readers-as-built-p4)):

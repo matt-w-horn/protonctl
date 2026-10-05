@@ -1,9 +1,9 @@
-//! Every aliases-mode tool, called through the server (docs/todo.md T1, T2,
-//! T7, T8 and T9). One harness plants a corpus in everything the tools
-//! read: a scripted Bridge, a calendar feed, the Proton Drive app's folder
-//! and a stand-in Proton Drive CLI. It calls each tool the aliases-mode
-//! server registers, with the calls that fail among them, since errors
-//! leave through the same path; each test then checks every result.
+//! Every aliases-mode tool, called through the server. One harness plants
+//! a corpus in everything the tools read: a scripted Bridge, a calendar
+//! feed, the Proton Drive app's folder and a stand-in Proton Drive CLI.
+//! It calls each tool the aliases-mode server registers, with the calls
+//! that fail among them, since errors leave through the same path; each
+//! test then checks every result.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;

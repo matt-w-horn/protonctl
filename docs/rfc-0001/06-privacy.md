@@ -271,7 +271,7 @@ sequenceDiagram
 From Phase 2 until Phase 4, a scan or an image has no text to give, and
 `reveal_*` returns no images, so neither is readable through protonctl.
 Whether a reveal may return page images after Touch ID, as raw text is
-returned, is not decided ([docs/todo.md](../todo.md), Decisions).
+returned, is not decided ([#25](https://github.com/matt-w-horn/protonctl/issues/25)).
 
 ### Guidance
 

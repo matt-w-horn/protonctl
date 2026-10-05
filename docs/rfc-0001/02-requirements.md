@@ -32,7 +32,7 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   returned. In memory each is a `secrecy`
   secret type (`SecretString` for the password and the links): its `Debug`
   output is redacted (a test holds this), and its README says it is wiped
-  on drop (not tested; [docs/todo.md](../todo.md), T14). Copies
+  on drop (not tested; [#12](https://github.com/matt-w-horn/protonctl/issues/12)). Copies
   made inside the Security framework, the `secret-service` crate and its
   D-Bus session, async-imap, rustls and curl's stdin pipe are beyond its
   reach.
@@ -220,8 +220,7 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   in one second). The
   password calls protonctl makes today target the file-based login
   keychain, whose items iCloud does not sync, so "does not synchronize"
-  should hold without more (not confirmed; [docs/todo.md](../todo.md),
-  M6); but any program running
+  should hold without more (not confirmed; [#19](https://github.com/matt-w-horn/protonctl/issues/19)); but any program running
   as the user can read such an item after one Always Allow,
   `/usr/bin/security` included ([section 5](05-security.md)). Binding the item to user
   presence would need the data-protection keychain, and so an entitlement

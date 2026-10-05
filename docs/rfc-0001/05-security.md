@@ -116,8 +116,7 @@ flowchart LR
   result into the session's transcript under `~/.claude/projects/` (deleted
   after `cleanupPeriodDays`, 30 by default); Claude Desktop keeps each
   server's stderr, and has been seen to log whole MCP messages, under
-  `~/Library/Logs/Claude/` (not confirmed; M1.1 in
-  [docs/todo.md](../todo.md), Not started). Typed names and approved
+  `~/Library/Logs/Claude/` (not confirmed; [#18](https://github.com/matt-w-horn/protonctl/issues/18)). Typed names and approved
   raw text land there in plaintext, and Time Machine copies both. R10
   cannot reach these files.
 - Approving Touch ID can become a habit too. Each prompt names one item,
@@ -132,6 +131,9 @@ flowchart LR
   the memory folder under `$XDG_RUNTIME_DIR` stays until the next
   protonctl process to use one finds its process gone and the folder
   unchanged for 10 minutes, or until logout.
+- On Linux before 6.12, Landlock cannot scope signals, so a document
+  reader taken over by a document can signal the user's other processes:
+  denial of service only.
 
 ---
 

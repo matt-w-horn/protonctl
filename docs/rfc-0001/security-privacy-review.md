@@ -262,11 +262,11 @@ The cheat sheet's review questions, answered for this model:
 | Question | Answer |
 |---|---|
 | Does the data-flow diagram reflect the system? | Yes: drawn from the code at 7786b3e, and checked again at cac0a1f (2026-10-05). That check added the memory folder, the Secret Service and `protonctl convert`, and the off-mode download and export folders, which the first drawing left out. It is checked again when each phase closes. |
-| Have all threats been identified? | No: the Cowork cloud path and where each host stores results (M1.1), how LocalAuthentication is reached (Q15), and how Claude Desktop's Linux beta and Cowork's virtual machine reach a local server are not measured ([docs/todo.md](../todo.md), Not started, M5 and L3). |
+| Have all threats been identified? | No: the Cowork cloud path and where each host stores results (M1.1), how LocalAuthentication is reached (Q15), and how Claude Desktop's Linux beta and Cowork's virtual machine reach a local server are not measured ([#18](https://github.com/matt-w-horn/protonctl/issues/18), [#22](https://github.com/matt-w-horn/protonctl/issues/22) and [#29](https://github.com/matt-w-horn/protonctl/issues/29)). |
 | Does each threat have a response? | Yes: every row in section 3 names one. The accepted risks are the linking, identifying and non-repudiation rows the design takes on for stability, the calendar link, Keychain readability, and repudiation. |
 | Do the mitigations reduce risk to an acceptable level? | Off mode: as the user chose it. Aliases mode: not until Phase 5 for names that appear only in free text, though the process-wide dictionary (Q22) narrows that gap to names that never appear in a header or invitation; the "high" rows say so. |
 | Is the model documented and accessible? | This file, with the RFC; it is versioned in the repository. |
-| Can the mitigations be tested? | Every invariant names its check. Built checks: I1, I3 to I7, I10 to I13, I15, I16, I17 on Linux and I18 for P1 to P4, some of them in part, as the table says; I2 and I8 are checked by reading the code. Not built: I9's test, I14 (Phase 3) and I17 on macOS (Phase 4). [Section 7](07-testing.md) says which planned tests exist, and [docs/todo.md](../todo.md) lists the missing ones. |
+| Can the mitigations be tested? | Every invariant names its check. Built checks: I1, I3 to I7, I10 to I13, I15, I16, I17 on Linux and I18 for P1 to P4, some of them in part, as the table says; I2 and I8 are checked by reading the code. Not built: I9's test, I14 (Phase 3) and I17 on macOS (Phase 4). [Section 7](07-testing.md) says which planned tests exist, and [the issues labeled tests](https://github.com/matt-w-horn/protonctl/issues?q=label%3Atests) list the missing ones. |
 
 ---
 

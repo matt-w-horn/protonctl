@@ -10,8 +10,8 @@ leaves a choice open, this draft names the choice it is written with and
 the question that can change it; each such choice stays inside one module.
 
 Code locations are `file:line` at that commit. Phase 2 is now built
-([section 9](09-rollout.md)), and its open checks are in
-[docs/todo.md](../todo.md); the code is
+([section 9](09-rollout.md)), and its open checks are
+[issues](https://github.com/matt-w-horn/protonctl/issues); the code is
 the reference for how it behaves, and [As built](#as-built) lists where it
 differs from this draft. Phases 3 to 5 below are still a design.
 

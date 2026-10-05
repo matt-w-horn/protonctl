@@ -255,7 +255,7 @@
     tagged commit on `main` for each release.
 
 - Open, to check before the phase that depends on each
-  ([docs/todo.md](../todo.md), M5 and Decisions):
+  ([#21](https://github.com/matt-w-horn/protonctl/issues/21), [#22](https://github.com/matt-w-horn/protonctl/issues/22), [#23](https://github.com/matt-w-horn/protonctl/issues/23) and [#24](https://github.com/matt-w-horn/protonctl/issues/24)):
   - Q13 (Phase 4): `sandbox-exec` is marked deprecated in its man page.
     Check that it still enforces a profile on the current macOS, and that
     Vision, PDFKit through `osascript`, and `textutil` run under a profile
