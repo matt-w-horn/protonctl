@@ -31,7 +31,7 @@ use serde::Deserialize;
 
 use crate::digest::Sha256;
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// IANA zone for calendar output and floating times. Defaults to this computer's zone.
@@ -45,14 +45,14 @@ pub struct Config {
 
 /// The export folder (RFC R10's one exception): the only place outside the
 /// download folder that protonctl writes Proton content to, and never cleans.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExportConfig {
     /// An absolute path, outside the Proton Drive app's folder and the download cache.
     pub folder: PathBuf,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MailConfig {
     /// The IMAP username Bridge shows for the account.
@@ -71,7 +71,7 @@ fn default_imap_port() -> u16 {
     DEFAULT_IMAP_PORT
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DriveConfig {
     /// The Proton Drive app's folder. Found automatically when omitted.
@@ -86,7 +86,7 @@ pub struct DriveConfig {
     pub exclude: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CalendarConfig {
     pub id: String,
@@ -196,48 +196,25 @@ pub fn set_cli_pin(pin: Sha256) -> Result<()> {
     let text = read(&p)?.with_context(|| format!("there is no config at {}", p.display()))?;
     let new = with_cli_pin(&text, pin)
         .with_context(|| format!("edit cli_sha256 in [drive] of {} by hand", p.display()))?;
-    std::fs::write(&p, new).with_context(|| format!("cannot write {}", p.display()))
+    replace(&p, &new)
 }
 
-/// `text` with `cli_sha256` in `[drive]` set to `pin`: any line for it there
-/// is dropped and one is put after the table's header. The result must
-/// read back with the new pin and every other value unchanged.
+/// `text` with `cli_sha256` in `[drive]` set to `pin`, edited as TOML, so
+/// comments, layout and every other value stay as they were. The result
+/// must read back as the same config but for the pin, or it is refused.
 fn with_cli_pin(text: &str, pin: Sha256) -> Result<String> {
-    let mut out = String::new();
-    let mut in_drive = false;
-    for line in text.lines() {
-        let code = line.split('#').next().unwrap_or_default().trim();
-        if code.starts_with('[') {
-            in_drive = code.replace(' ', "") == "[drive]";
-            out.push_str(line);
-            out.push('\n');
-            if in_drive {
-                writeln!(out, "cli_sha256 = \"{pin}\"").expect("writing to a String cannot fail");
-            }
-            continue;
-        }
-        if in_drive
-            && code
-                .split_once('=')
-                .is_some_and(|(k, _)| k.trim() == "cli_sha256")
-        {
-            continue;
-        }
-        out.push_str(line);
-        out.push('\n');
+    let mut doc: toml_edit::DocumentMut = text.parse()?;
+    doc.get_mut("drive")
+        .and_then(toml_edit::Item::as_table_like_mut)
+        .context("there is no [drive] table")?
+        .insert("cli_sha256", toml_edit::value(pin.to_string()));
+    let out = doc.to_string();
+    let mut wanted: Config = toml::from_str(text)?;
+    if let Some(drive) = wanted.drive.as_mut() {
+        drive.cli_sha256 = Some(pin);
     }
-    let before: Config = toml::from_str(text)?;
     let after: Config = toml::from_str(&out).context("the edited config does not parse")?;
-    let (Some(b), Some(a)) = (before.drive, after.drive) else {
-        bail!("there is no [drive] table");
-    };
-    anyhow::ensure!(
-        a.cli_sha256 == Some(pin)
-            && (a.folder, a.cli, a.exclude) == (b.folder, b.cli, b.exclude)
-            && before.mail.map(|m| m.cert_sha256) == after.mail.map(|m| m.cert_sha256)
-            && before.calendar.len() == after.calendar.len(),
-        "the edit changed more than cli_sha256"
-    );
+    anyhow::ensure!(after == wanted, "the edit changed more than cli_sha256");
     Ok(out)
 }
 
@@ -261,7 +238,27 @@ fn append(p: &Path, entry: &str) -> Result<()> {
         text.push('\n');
     }
     text.push_str(entry);
-    std::fs::write(p, text).with_context(|| format!("cannot write {}", p.display()))
+    replace(p, &text)
+}
+
+/// Write `text` as the file at `p` in one step: into a new file beside the
+/// one it replaces, then renamed over it, so a failed write (a full disk,
+/// say) leaves the old config whole. A symlink stays one: the file it
+/// points to is replaced, keeping its permissions.
+fn replace(p: &Path, text: &str) -> Result<()> {
+    use std::io::Write as _;
+    let target = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let dir = target.parent().context("the config path has no folder")?;
+    let mut new = tempfile::NamedTempFile::new_in(dir)
+        .with_context(|| format!("cannot write in {}", dir.display()))?;
+    new.write_all(text.as_bytes())?;
+    new.as_file().sync_all()?;
+    if let Ok(old) = std::fs::metadata(&target) {
+        new.as_file().set_permissions(old.permissions())?;
+    }
+    new.persist(&target)
+        .with_context(|| format!("cannot write {}", target.display()))?;
+    Ok(())
 }
 
 /// The `[[calendar]]` table `add_calendar` appends, with both values TOML-escaped.
@@ -328,6 +325,16 @@ mod tests {
         assert_eq!(drive.exclude, ["/Private"]);
         assert_eq!(cfg.calendar[0].id, "cli_sha256");
         assert_eq!(cfg.time_zone.as_deref(), Some("UTC"));
+        // A name that holds a `[drive]` line is a multi-line string, and
+        // stays one; the line-by-line edit once wrote the pin into it.
+        let tricky = "Team\n[drive]\ncli_sha256 = \"x\"\nnotes";
+        let text = format!(
+            "[drive]\ncli_sha256 = \"{old}\"\nexclude = []\n{}",
+            calendar_entry("team", tricky)
+        );
+        let cfg: Config = toml::from_str(&with_cli_pin(&text, new).unwrap()).unwrap();
+        assert_eq!(cfg.calendar[0].name, tricky);
+        assert_eq!(cfg.drive.unwrap().cli_sha256, Some(new));
         // A config without the pin gains one; one without [drive] is refused.
         let unpinned = "[drive]\nexclude = []\n";
         assert!(
@@ -353,6 +360,28 @@ mod tests {
                 .unwrap()
                 .contains("[[calendar]]")
         );
+    }
+
+    /// A config kept elsewhere behind a symlink, as dotfiles often are,
+    /// stays behind it, with its permissions.
+    #[test]
+    fn a_rewrite_keeps_a_symlinked_config_and_its_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let (real, link) = (dir.path().join("real.toml"), dir.path().join("config.toml"));
+        std::fs::write(&real, "old").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        replace(&link, "new").unwrap();
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "new");
+        let mode = std::fs::metadata(&real).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]
