@@ -290,7 +290,12 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
 - D8 A folder made online-only in the Drive app lists as empty, with no
   note, in both modes: its listing is not on the Mac, and `entries_in` in
   `src/drive/mod.rs` returns nothing when `read_dir` gives nothing
-  ([Appendix A](appendix-a-phase-0.md#memory-disk-m28)).
+  ([Appendix A](appendix-a-phase-0.md#memory-disk-m28)). Fixed
+  2026-10-04: `list_folder` lists such a folder through the CLI, with a
+  note, or says its contents are not on this computer when the CLI
+  cannot, and a tree row marks it `cloudOnly`; not yet checked live, since
+  no folder was online-only that day
+  ([#7](https://github.com/matt-w-horn/protonctl/issues/7)).
 
 ### Phase 3: raw reads
 

@@ -2,7 +2,7 @@
 
 # 7. Testing
 
-Built (on macOS on 2026-10-04, `cargo test` ran 246 tests: 237 unit, 9
+Built (on macOS on 2026-10-04, `cargo test` ran 247 tests: 238 unit, 9
 against the built binary, and 3 ignored. On Linux on 2026-10-05 it ran 217: 208 unit, 9
 against the built binary; 4 more are ignored by default: one lists Drive
 through the real CLI, two reach a Secret Service and run in
@@ -158,6 +158,15 @@ passed in aliases mode on a Mac, all 16 tools of that mode. The tests:
     back, and the folder and then the disk are gone (shown to fail with
     the download folder used, as before, which aliases mode refuses).
     macOS only; Claude Code's sandbox refuses the RAM disk.
+  - B21 (D8): a folder made online-only in the app, whose listing is not
+    on this computer, is listed through the CLI with a note, or, when the
+    CLI cannot list it, comes back empty with a note saying its contents
+    are not here; in a tree its row carries `cloudOnly: true` (shown to
+    fail with no folder taken as online-only, the empty listing with no
+    note that D8 found). The test stands in a folder for a dataless one,
+    a flag only the system sets. Built:
+    `a_folder_only_in_the_cloud_is_listed_through_the_cli_or_said_to_be`
+    in `src/drive/mod.rs`.
   - Two handles on the CLI lock file exclude each other, and a CLI run
     waits while another holds it (shown to fail with no lock taken, and
     with the run not taking it).
