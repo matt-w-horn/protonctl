@@ -212,16 +212,24 @@ fn open_token(keys: &Keys, tool: Tool, token: Option<&str>) -> Result<Option<Str
 static REF: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\bref:([A-Za-z0-9_-]+)").expect("a fixed pattern"));
 
-/// A query with each `ref:REF` replaced by the value it holds, quoted when
-/// it has a space.
-fn expand_refs(keys: &Keys, query: &str) -> Result<String, Fault> {
+/// How `expand_refs` writes a value with a space: quoted, as the mail and
+/// calendar query languages take a phrase, or as it is, for a Drive name
+/// search, which matches quotes literally.
+#[derive(Clone, Copy)]
+enum Quote {
+    IfSpaced,
+    Never,
+}
+
+/// A query with each `ref:REF` replaced by the value it holds.
+fn expand_refs(keys: &Keys, query: &str, quote: Quote) -> Result<String, Fault> {
     let mut out = String::with_capacity(query.len());
     let mut at = 0;
     for c in REF.captures_iter(query) {
         let m = c.get(0).expect("group 0");
         let (_, value) = keys.open_ref(&c[1]).map_err(|Unopened| Fault::InvalidRef)?;
         out.push_str(&query[at..m.start()]);
-        if value.contains(char::is_whitespace) {
+        if matches!(quote, Quote::IfSpaced) && value.contains(char::is_whitespace) {
             out.push('"');
             out.push_str(&value);
             out.push('"');
@@ -530,7 +538,7 @@ impl Server {
         let typed = req.query.clone();
         self.call(Tool::SearchEvents, Some(typed), |s| async move {
             if let Some(k) = s.keys.as_deref() {
-                req.query = expand_refs(k, &req.query)?;
+                req.query = expand_refs(k, &req.query, Quote::IfSpaced)?;
                 req.window.page_token =
                     open_token(k, Tool::SearchEvents, req.window.page_token.as_deref())?;
             }
@@ -575,7 +583,7 @@ impl Server {
         let typed = req.query.clone();
         self.call(Tool::SearchThreads, Some(typed), |s| async move {
             if let Some(k) = s.keys.as_deref() {
-                req.query = expand_refs(k, &req.query)?;
+                req.query = expand_refs(k, &req.query, Quote::IfSpaced)?;
                 req.page_token = open_token(k, Tool::SearchThreads, req.page_token.as_deref())?;
             }
             self.app.mail()?.search_threads(&req).await
@@ -598,7 +606,7 @@ impl Server {
         let typed = req.query.clone();
         self.call(Tool::CountMessages, Some(typed), |s| async move {
             if let Some(k) = s.keys.as_deref() {
-                req.query = expand_refs(k, &req.query)?;
+                req.query = expand_refs(k, &req.query, Quote::IfSpaced)?;
             }
             self.app.mail()?.count_messages(&req).await
         })
@@ -858,7 +866,7 @@ impl Server {
         self.call(Tool::SearchFiles, Some(typed), |s| async move {
             let k = s.keys()?;
             let req = SearchFilesReq {
-                query: expand_refs(k, &req.query)?,
+                query: expand_refs(k, &req.query, Quote::Never)?,
                 path: drive_path(k, req.folder_id.as_deref(), Param::FolderId)?,
                 kind: req.kind,
                 modified_after: req.modified_after,
@@ -1585,6 +1593,25 @@ mod tests {
         for leak in ["Jane", "jane", "example", "415", pipeline::PLANTED_PANIC] {
             assert!(!text(&out).contains(leak), "{leak} in {}", text(&out));
         }
+    }
+
+    /// A Drive search by the ref of a name with a space finds the file it
+    /// names: the name is matched as it is, as Drive search matches quotes
+    /// literally, where the mail and calendar queries get it quoted.
+    #[tokio::test]
+    async fn a_drive_search_by_a_two_word_name_s_ref_finds_its_file() {
+        use crate::privacy::{canon, ident::EntityType};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Dana Ruiz notes.txt"), "notes").unwrap();
+        let server = Server::new(aliases_app(dir.path()));
+        let keys = server.app.privacy.check().unwrap().keys.unwrap();
+        let reference = keys.reference(EntityType::Person, &canon::name("Dana Ruiz"));
+        let req = SearchFilesAliases {
+            query: format!("ref:{reference}"),
+            ..Default::default()
+        };
+        let found = json_of(&server.search_files_aliases(Parameters(req)).await.unwrap());
+        assert_eq!(found["files"].as_array().map(Vec::len), Some(1), "{found}");
     }
 
     /// R8 in aliases mode: a call whose operation panics, before the
