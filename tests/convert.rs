@@ -39,6 +39,11 @@ fn protonctl() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_protonctl"));
     c.env_clear()
         .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent");
+    // Under cargo-llvm-cov, where the binary writes its coverage; without
+    // it, a profile lands in the working folder.
+    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+        c.env("LLVM_PROFILE_FILE", profile);
+    }
     c
 }
 
