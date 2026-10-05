@@ -72,9 +72,6 @@ const PANDOC: Reader = Reader {
     package: "pandoc",
 };
 
-/// Every reader, for `doctor`.
-const READERS: [Reader; 3] = [PDFTOTEXT, PDFTOPPM, PANDOC];
-
 impl Job {
     /// The reader and its arguments; `None` for `Check`. Each reads stdin
     /// (`-`) and writes stdout, and pandoc's own `--sandbox` also keeps it
@@ -159,6 +156,8 @@ pub enum Outcome {
     Unreadable,
     /// It is not installed; this package installs it.
     Missing(&'static str),
+    /// It could not run in the sandbox here; `doctor` says why.
+    NoSandbox,
 }
 
 /// In the parent: run `job` on `input` in the sandbox, as a child of this
@@ -180,47 +179,78 @@ pub async fn read(job: Job, input: &[u8]) -> Result<Outcome> {
     };
     match status.code() {
         Some(0) => Ok(Outcome::Read(out)),
-        Some(SANDBOX_FAILED) => {
-            bail!("the document readers' sandbox could not be set up; `protonctl doctor` says why")
-        }
+        Some(SANDBOX_FAILED) => Ok(Outcome::NoSandbox),
         _ => Ok(Outcome::Unreadable),
     }
 }
 
-/// For `protonctl doctor`: the sandbox can be entered, and which readers
-/// are installed.
+/// Small documents for `doctor` to read: the two-page PDF the tests use,
+/// and a one-word RTF.
+const SAMPLE_PDF: &[u8] = include_bytes!("../tests/fixtures/two-pages.pdf");
+const SAMPLE_RTF: &[u8] = b"{\\rtf1 protonctl}";
+
+/// For `protonctl doctor`: the sandbox can be entered, and each installed
+/// reader reads a sample inside it, as a call would; a failure quotes the
+/// child's own words, which can say why a reader cannot start.
 pub async fn check() -> Result<String> {
-    let out = tokio::process::Command::new("/proc/self/exe")
-        .args(Job::Check.argv())
-        .env_clear()
-        .stdin(std::process::Stdio::null())
-        .output()
-        .await?;
-    if !out.status.success() {
-        bail!(
-            "the sandbox could not be set up: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+    let jobs = [
+        (Job::Check, &b""[..]),
+        (Job::PdfText, SAMPLE_PDF),
+        (Job::PdfPage { page: 1, edge: 100 }, SAMPLE_PDF),
+        (
+            Job::Document {
+                format: Format::Rtf,
+            },
+            SAMPLE_RTF,
+        ),
+    ];
+    let (mut read, mut missing, mut failed) = (Vec::new(), Vec::new(), Vec::new());
+    for (job, sample) in jobs {
+        let reader = job.command().map(|(r, _)| r);
+        if let Some(r) = reader
+            && !Path::new(r.path).exists()
+        {
+            missing.push(r.package);
+            continue;
+        }
+        let name = reader.map_or("the sandbox", |r| r.path);
+        let mut child = tokio::process::Command::new("/proc/self/exe")
+            .args(job.argv())
+            .env_clear()
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            use tokio::io::AsyncWriteExt as _;
+            stdin.write_all(sample).await?;
+        }
+        let out = child.wait_with_output().await?;
+        if out.status.success() && (reader.is_none() || !out.stdout.is_empty()) {
+            read.extend(reader.map(|r| r.path));
+        } else if out.status.code() == Some(SANDBOX_FAILED) {
+            let said = String::from_utf8_lossy(&out.stderr);
+            failed.push(format!("{name} cannot run in the sandbox: {}", said.trim()));
+        } else {
+            failed.push(format!(
+                "{name} could not read its sample in the sandbox ({})",
+                out.status
+            ));
+        }
     }
-    let mut missing: Vec<&str> = READERS
-        .iter()
-        .filter(|r| !Path::new(r.path).exists())
-        .map(|r| r.package)
-        .collect();
+    if !failed.is_empty() {
+        bail!("{}", failed.join("; "));
+    }
     missing.dedup();
-    Ok(if missing.is_empty() {
-        "poppler-utils and pandoc found; the sandbox holds".into()
+    let mut said = if read.is_empty() {
+        "the sandbox holds".to_string()
     } else {
-        format!(
-            "the sandbox holds; install {} to read {}",
-            missing.join(" and "),
-            if missing == ["pandoc"] {
-                "Word, RTF and OpenDocument files"
-            } else {
-                "PDFs (poppler-utils) and Word, RTF and OpenDocument files (pandoc)"
-            }
-        )
-    })
+        format!("{} each read a sample in the sandbox", read.join(", "))
+    };
+    if !missing.is_empty() {
+        said = format!("{said}; install {} to read the rest", missing.join(" and "));
+    }
+    Ok(said)
 }
 
 #[cfg(test)]

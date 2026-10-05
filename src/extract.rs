@@ -313,6 +313,10 @@ async fn pdf(bytes: &[u8]) -> Result<Content> {
     Ok(Content::Text(doc))
 }
 
+/// Why a reader that cannot run in its sandbox here reads nothing.
+const NO_SANDBOX: &str =
+    "the document readers cannot run in their sandbox on this computer; protonctl doctor says why";
+
 /// Why a reader that is not installed reads nothing.
 fn missing(package: &str) -> &'static str {
     if package == "pandoc" {
@@ -332,6 +336,7 @@ async fn poppler_pdf(bytes: &[u8]) -> Result<Content> {
             ));
         }
         Outcome::Missing(package) => return Ok(Content::Other(missing(package))),
+        Outcome::NoSandbox => return Ok(Content::Other(NO_SANDBOX)),
     };
     let text = String::from_utf8(out).context("pdftotext did not return UTF-8")?;
     let pages = pages_of(&text);
@@ -369,6 +374,7 @@ async fn pandoc_document(bytes: &[u8], extension: &str) -> Result<Content> {
         Outcome::Read(out) => out,
         Outcome::Unreadable => return Ok(Content::Other("pandoc could not read the document")),
         Outcome::Missing(package) => return Ok(Content::Other(missing(package))),
+        Outcome::NoSandbox => return Ok(Content::Other(NO_SANDBOX)),
     };
     let text = String::from_utf8(out).context("pandoc did not return UTF-8")?;
     Ok(Content::Text(Document::new(&[text], TextFrom::Pandoc)))
@@ -439,6 +445,7 @@ async fn poppler_pages(pdf: &Pdf, first: usize) -> Result<Vec<Vec<u8>>> {
             Outcome::Read(out) => out,
             Outcome::Unreadable => bail!("poppler could not read the PDF"),
             Outcome::Missing(package) => bail!("{}", missing(package)),
+            Outcome::NoSandbox => bail!("{NO_SANDBOX}"),
         };
         if !jpeg.starts_with(b"\xFF\xD8\xFF") {
             bail!("pdftoppm did not return a JPEG for page {page}");
