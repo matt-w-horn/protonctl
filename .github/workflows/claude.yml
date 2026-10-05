@@ -1,0 +1,57 @@
+name: claude
+
+# Hand an issue to Claude by giving it the `claude` label, or ask in a comment
+# with @claude. Only the repository owner can do either: labels need triage
+# access, and comments are checked for the owner's association. Claude works
+# on a claude/ branch and comments a link to open the pull request.
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  claude:
+    if: >-
+      (github.event_name == 'issues' && github.event.label.name == 'claude') ||
+      (github.event_name != 'issues' && contains(github.event.comment.body, '@claude') &&
+       github.event.comment.author_association == 'OWNER')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      # The action trades the workflow's OIDC token for the Claude app's token.
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      # What scripts/check.sh needs on Linux, as in ci.yml, so Claude can run it.
+      - run: sudo apt-get update && sudo apt-get install -y poppler-utils pandoc dbus gnome-keyring
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-llvm-cov
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # No co-author line, no attribution and no session link in commits or pull requests.
+          settings: |
+            {"attribution": {"commit": "", "pr": ""}}
+          claude_args: >-
+            --append-system-prompt "docs/rfc-0001.md is the design, and code cites its requirements as RFC R1 to R26.
+            Run scripts/check.sh before each commit; it must pass.
+            Lint overrides are expect attributes with a reason, at the site.
+            Test fixtures are synthetic.
+            When tests change, update the records and test counts in docs/rfc-0001/07-testing.md.
+            A changed tool name, description or parameter fails tool_surface_snapshot and writes a .snap.new in src/snapshots: review it, move it over the .snap, and delete its assertion_line header.
+            Commit messages: an imperative subject of at most 72 characters, a blank line, then a plain-English body saying what changed and why."
