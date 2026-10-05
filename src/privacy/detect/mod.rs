@@ -39,6 +39,9 @@ pub enum Form {
     /// A short form of these full names: a given name, a surname, the name
     /// without its middle names, or initials.
     Short(Vec<String>),
+    /// A misspelling of these full names, from typing or OCR: never joined
+    /// to them, only linked.
+    Near(Vec<String>),
 }
 
 /// A span of one text, in byte offsets, and the value it holds.

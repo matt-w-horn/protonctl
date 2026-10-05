@@ -139,8 +139,11 @@ parentheses, numbered within the result, with no word alias and no
   name the result does not hold counts only inside a sentence, where its
   capital says it is a name. Two aliases for one person cost a missed
   link; one alias for two people silently mixes their words. The rule
-  accepts the first error to avoid the second. Names that appear in no
-  header reach the dictionary only through Phase 5's model.
+  accepts the first error to avoid the second. A misspelling of a known
+  person's name, by typing (a swap, a letter added or lost) or by OCR (0
+  for o, 1 for i, rn for m), is never joined: it gets its own alias,
+  linked by `maybeSameAs`. Names that appear in no header reach the
+  dictionary only through Phase 5's model.
 - Known limits: inflected names (a German genitive, Slavic case endings) and
   names written in another script get their own aliases unless an email
   address links them.

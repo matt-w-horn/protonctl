@@ -2,7 +2,7 @@
 
 # 7. Testing
 
-Built (on macOS on 2026-10-04, `cargo test` ran 244 tests: 235 unit, 9
+Built (on macOS on 2026-10-04, `cargo test` ran 245 tests: 236 unit, 9
 against the built binary, and 3 ignored. On Linux on 2026-10-05 it ran 217: 208 unit, 9
 against the built binary; 4 more are ignored by default: one lists Drive
 through the real CLI, two reach a Secret Service and run in
@@ -622,7 +622,13 @@ missing ones:
   `short_forms_and_initials_are_found` in `src/privacy/detect/dict.rs`,
   shown to fail with no short forms made, and
   `a_short_form_joins_its_full_name_only_when_one_local_name_fits` in
-  `src/privacy/pipeline.rs`, shown to fail with joining off.
+  `src/privacy/pipeline.rs`, shown to fail with joining off. B17 (built
+  2026-10-04): a known name misspelled by typing or OCR is found as near
+  it, and a name that differs more, another known name spelled right, or
+  a run in lower case is not. Built:
+  `misspelled_names_are_found_as_near_their_name` in
+  `src/privacy/detect/dict.rs`, shown to fail with the misspelling pass
+  off.
 - Evaluation (Phase 2, defect D1 in [section 9](09-rollout.md#phase-2-defects-found-on-real-results)):
   aliases mode over a labeled synthetic corpus that plants each person,
   organization and project in every form D2 to D7 name (surname, given

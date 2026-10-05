@@ -479,7 +479,7 @@ impl State<'_> {
                             let value = self.resolved(m).to_string();
                             let key = self.reg.add(*t, &value, role);
                             // A form not joined may still be its full name.
-                            if let (Some(key), Form::Short(of)) = (key, &m.form) {
+                            if let (Some(key), Form::Short(of) | Form::Near(of)) = (key, &m.form) {
                                 for full in of {
                                     if let Some(other) = Registry::key(*t, full) {
                                         self.reg.maybe_same(&key, &other);
