@@ -325,9 +325,11 @@ static MEMORY: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 /// once `memory_base` has checked it, so this makes a 0700 folder there for
 /// the process and `mount`, where macOS mounts its RAM disk, is not used.
 pub fn memory_disk(_mount: &Path) -> Result<PathBuf> {
-    let dir = memory_base()?.join(format!("protonctl-{}", std::process::id()));
+    let base = memory_base()?;
+    let dir = base.join(format!("protonctl-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    sweep_memory(&base, std::time::SystemTime::now());
     *MEMORY
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(dir.clone());
@@ -365,9 +367,48 @@ fn memory_base() -> Result<PathBuf> {
             .context("$XDG_RUNTIME_DIR is not set, so there is no folder in memory for the Drive CLI to write to")?
     };
     private_memory(&dir)?;
-    let swaps = std::fs::read_to_string("/proc/swaps").context("cannot read /proc/swaps")?;
+    // The test machine's own swap is not the tests' to judge; the rules are
+    // tested on a synthetic sysfs instead.
+    let swaps = if cfg!(test) {
+        String::new()
+    } else {
+        std::fs::read_to_string("/proc/swaps").context("cannot read /proc/swaps")?
+    };
     private_swap(&swaps, Path::new("/sys"), device_of)?;
     Ok(dir)
+}
+
+/// How long a dead process's folder is left, in case its process ID is not
+/// visible here (another PID namespace sharing the folder).
+const MEMORY_LEFTOVER_AGE: std::time::Duration = std::time::Duration::from_mins(10);
+
+/// Delete the `protonctl-<pid>` folders in `base` whose process is gone and
+/// that no one has changed for `MEMORY_LEFTOVER_AGE`: what a server killed
+/// before it could clean up left, which can hold a file it was reading.
+fn sweep_memory(base: &Path, now: std::time::SystemTime) {
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix("protonctl-"))
+            .and_then(|p| p.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let alive = Path::new("/proc").join(pid.to_string()).exists();
+        let old = std::fs::symlink_metadata(entry.path())
+            .ok()
+            .filter(std::fs::Metadata::is_dir)
+            .and_then(|m| m.modified().ok())
+            .and_then(|m| now.duration_since(m).ok())
+            .is_some_and(|age| age > MEMORY_LEFTOVER_AGE);
+        if !alive && old {
+            std::fs::remove_dir_all(entry.path()).ok();
+        }
+    }
 }
 
 /// The user this process runs as: the owner of its own `/proc` entry.
@@ -409,7 +450,34 @@ fn device_of(name: &Path, kind: &str) -> Result<(u32, u32)> {
         "file" => meta.dev(),
         other => bail!("swap {} is of the unknown type {other}", name.display()),
     };
-    Ok((rustix::fs::major(dev), rustix::fs::minor(dev)))
+    let dev = (rustix::fs::major(dev), rustix::fs::minor(dev));
+    if kind == "partition" || Path::new(&format!("/sys/dev/block/{}:{}", dev.0, dev.1)).exists() {
+        return Ok(dev);
+    }
+    // A file system with no block device of its own, as btrfs, reports an
+    // anonymous one; its mount names the real device. btrfs keeps a swap
+    // file only on a single-device file system, so that is the one.
+    let info = std::fs::read_to_string("/proc/self/mountinfo")?;
+    let source = mount_source(&info, dev)
+        .with_context(|| format!("no mount names the device under swap {}", name.display()))?;
+    let rdev = std::fs::metadata(&source)
+        .with_context(|| format!("cannot read {}", source.display()))?
+        .rdev();
+    Ok((rustix::fs::major(rdev), rustix::fs::minor(rdev)))
+}
+
+/// The source of the mount whose device is `dev`, from `/proc/self/mountinfo`
+/// ("id parent major:minor root point options ... - type source options").
+fn mount_source(mountinfo: &str, dev: (u32, u32)) -> Option<PathBuf> {
+    let wanted = format!("{}:{}", dev.0, dev.1);
+    mountinfo.lines().find_map(|line| {
+        let (head, tail) = line.split_once(" - ")?;
+        (head.split(' ').nth(2)? == wanted).then_some(())?;
+        let source = tail.split(' ').nth(1)?;
+        source
+            .starts_with('/')
+            .then(|| PathBuf::from(unescape(source)))
+    })
 }
 
 /// Every swap in `/proc/swaps` must be in memory (zram) or on dm-crypt at
@@ -444,9 +512,10 @@ fn private_device(sys: &Path, dev: &str) -> bool {
     let name = std::fs::read_link(&block)
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
-    if name.is_some_and(|n| n.starts_with("zram"))
-        || std::fs::read_to_string(block.join("dm/uuid")).is_ok_and(|u| u.starts_with("CRYPT-"))
-    {
+    // zram compresses into memory, unless it writes pages back to a disk.
+    let zram = name.is_some_and(|n| n.starts_with("zram"))
+        && std::fs::read_to_string(block.join("backing_dev")).map_or(true, |d| d.trim() == "none");
+    if zram || std::fs::read_to_string(block.join("dm/uuid")).is_ok_and(|u| encrypting(&u)) {
         return true;
     }
     let Ok(below) = std::fs::read_dir(block.join("slaves")) else {
@@ -462,6 +531,18 @@ fn private_device(sys: &Path, dev: &str) -> bool {
         any = true;
     }
     any
+}
+
+/// Whether a device-mapper UUID is cryptsetup's for a device that encrypts:
+/// "CRYPT-<type>-...". Its integrity-only and verity types also start with
+/// "CRYPT-" and encrypt nothing.
+fn encrypting(uuid: &str) -> bool {
+    const ENCRYPTING: [&str; 7] = [
+        "LUKS1", "LUKS2", "PLAIN", "LOOPAES", "TCRYPT", "BITLK", "FVAULT2",
+    ];
+    uuid.strip_prefix("CRYPT-")
+        .and_then(|rest| rest.split('-').next())
+        .is_some_and(|kind| ENCRYPTING.contains(&kind))
 }
 
 /// A name from `/proc/swaps`, where a space, tab, newline or backslash is
@@ -532,22 +613,36 @@ mod tests {
         assert!(secret_delete(S, "async").unwrap());
     }
 
-    /// A sysfs tree: zram0 (252:0); sda2 (8:2), a plain partition; dm-0
-    /// (253:0), LUKS on sda3; dm-1 (253:1), LVM on dm-0; dm-2 (253:2), LVM
-    /// on dm-0 and sda2.
+    /// A sysfs tree: zram0 (252:0); zram1 (252:1), with a backing disk;
+    /// sda2 (8:2), a plain partition; dm-0 (253:0), LUKS on sda3; dm-1
+    /// (253:1), LVM on dm-0; dm-2 (253:2), LVM on dm-0 and sda2; dm-3 and
+    /// dm-4 (253:3, 253:4), integrity-only and verity on sda3.
     fn sysfs() -> tempfile::TempDir {
         let sys = tempfile::tempdir().unwrap();
         let block = sys.path().join("dev/block");
         let class = sys.path().join("class/block");
-        std::fs::create_dir_all(sys.path().join("devices/virtual/block/zram0")).unwrap();
         std::fs::create_dir_all(&block).unwrap();
-        std::os::unix::fs::symlink("../../devices/virtual/block/zram0", block.join("252:0"))
-            .unwrap();
+        // zram0 keeps its pages in memory; zram1 writes them back to sdb1.
+        for (zram, backing) in [("0", "none\n"), ("1", "/dev/sdb1\n")] {
+            let dir = sys.path().join(format!("devices/virtual/block/zram{zram}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("backing_dev"), backing).unwrap();
+            let target = format!("../../devices/virtual/block/zram{zram}");
+            std::os::unix::fs::symlink(target, block.join(format!("252:{zram}"))).unwrap();
+        }
         for (dev, name, uuid, below) in [
             ("8:2", "sda2", None, &[][..]),
             ("253:0", "dm-0", Some("CRYPT-LUKS2-abc-luks"), &["sda3"][..]),
             ("253:1", "dm-1", Some("LVM-xyz"), &["dm-0"][..]),
             ("253:2", "dm-2", Some("LVM-xyz2"), &["dm-0", "sda2"][..]),
+            // cryptsetup's integrity-only and verity devices encrypt nothing.
+            (
+                "253:3",
+                "dm-3",
+                Some("CRYPT-INTEGRITY-abc-int"),
+                &["sda3"][..],
+            ),
+            ("253:4", "dm-4", Some("CRYPT-VERITY-abc-ver"), &["sda3"][..]),
         ] {
             let d = block.join(dev);
             std::fs::create_dir_all(d.join("slaves")).unwrap();
@@ -576,6 +671,9 @@ mod tests {
         let devices = |name: &Path, _: &str| -> Result<(u32, u32)> {
             Ok(match name.to_str().unwrap() {
                 "/dev/zram0" => (252, 0),
+                "/dev/zram1" => (252, 1),
+                "/dev/dm-3" => (253, 3),
+                "/dev/dm-4" => (253, 4),
                 "/dev/sda2" => (8, 2),
                 "/dev/dm-0" => (253, 0),
                 "/swap file" => (253, 1),
@@ -599,6 +697,53 @@ mod tests {
         ]));
         // LVM across an encrypted and a plain device.
         assert!(!ok(&["/dev/dm-2 partition 8G 0 -2"]));
+        // zram that writes pages back to a disk, and dm devices that only
+        // check what they hold.
+        assert!(!ok(&["/dev/zram1 partition 8G 0 100"]));
+        assert!(!ok(&["/dev/dm-3 partition 8G 0 -2"]));
+        assert!(!ok(&["/dev/dm-4 partition 8G 0 -2"]));
+    }
+
+    /// A swap file on btrfs reports an anonymous device; its mount names the
+    /// real one.
+    #[test]
+    fn a_mount_names_the_device_under_an_anonymous_one() {
+        let info = "29 1 0:26 / / rw,relatime shared:1 - btrfs /dev/mapper/root rw,ssd\n\
+                    30 29 0:27 / /home rw shared:2 - btrfs /dev/mapper/a\\040b rw\n\
+                    31 29 0:28 / /run rw shared:3 - tmpfs tmpfs rw\n";
+        assert_eq!(
+            mount_source(info, (0, 26)),
+            Some(PathBuf::from("/dev/mapper/root"))
+        );
+        assert_eq!(
+            mount_source(info, (0, 27)),
+            Some(PathBuf::from("/dev/mapper/a b"))
+        );
+        // A source that is not a path, and a device no mount has.
+        assert_eq!(mount_source(info, (0, 28)), None);
+        assert_eq!(mount_source(info, (0, 99)), None);
+    }
+
+    /// A folder whose process is gone is deleted once no one has changed it
+    /// for a while; a live process's folder, a fresh one and other names stay.
+    #[test]
+    fn a_dead_process_s_memory_folder_is_swept() {
+        let base = tempfile::tempdir().unwrap();
+        // Above the kernel's largest process ID, so never alive.
+        let dead = base.path().join(format!("protonctl-{}", u32::MAX));
+        let alive = base
+            .path()
+            .join(format!("protonctl-{}", std::process::id()));
+        let other = base.path().join("protonctl-notes");
+        for dir in [&dead, &alive, &other] {
+            std::fs::create_dir_all(dir.join("drive-x")).unwrap();
+        }
+        let now = std::time::SystemTime::now();
+        sweep_memory(base.path(), now);
+        assert!(dead.exists(), "a fresh folder was swept");
+        sweep_memory(base.path(), now + std::time::Duration::from_hours(1));
+        assert!(!dead.exists(), "the dead process's folder stayed");
+        assert!(alive.exists() && other.exists());
     }
 
     #[test]
