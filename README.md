@@ -30,7 +30,7 @@ flowchart LR
     P -->|"signature-checked"| CLI["Proton Drive CLI"]
     P -->|"read-only"| DF["Proton Drive<br/>app folder"]
     P -->|"link on stdin"| CURL["/usr/bin/curl"]
-    P --- KC[("macOS Keychain:<br/>Bridge password,<br/>calendar links")]
+    P --- KC[("macOS Keychain or<br/>Linux Secret Service:<br/>Bridge password,<br/>calendar links,<br/>privacy key and setting")]
     B --> API[("Proton")]
     CLI --> API
     CURL -->|"HTTPS GET"| API

@@ -505,11 +505,10 @@ missing ones:
   in `src/serve.rs` lists and reads a file, changes the key under the
   running server, and expects the new key's alias, a new `fileId`, and
   the old `fileId` and ref refused.
-- Names in queries: a typed name is plaintext in that call's result and an
-  alias in the next call's. As built, the result shows the typed name as
-  its alias too, paired with it in `queryEntities`;
-  `a_name_typed_in_the_query_is_paired_with_its_alias` in
-  `src/privacy/pipeline.rs` tests that ([docs/todo.md](../todo.md), W8).
+- Names in queries: a typed name gets its alias in that call's result, and
+  appears as typed only as a key of `queryEntities`, paired with its
+  alias. `a_name_typed_in_the_query_is_paired_with_its_alias` in
+  `src/privacy/pipeline.rs` tests this on a search's `from` field.
 - Guidance: present in exactly the cases R23 names. Built for a name typed
   in a query (`a_name_typed_in_the_query_is_paired_with_its_alias`). A
   result cut short or paged carries no `guidance`

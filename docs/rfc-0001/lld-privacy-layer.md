@@ -575,8 +575,9 @@ part is rewritten from the unescaped name and escaped (R6) afterwards; the
 leaf's handle goes in a sibling `fileId`.
 
 `queryEntities` pairs each name the caller typed in this call's query with
-its alias, when the name matches an entity in the result; those names stay
-as typed in this result only (R13, Q21).
+its alias, when the name matches an entity in the result. As typed, those
+names appear only there; every other field shows their aliases (R13,
+Q21).
 
 ### Size
 

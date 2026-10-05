@@ -121,13 +121,12 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   each phase detects is listed in [section 6](06-privacy.md); from Phase 2 that includes
   US Social Security numbers, labelled one-time codes and passwords, and
   local account names (Q22).
-  Dates, times and amounts stay plaintext. Two exceptions: a name typed in
-  the current call's query
-  appears as typed in that call's result, whose `queryEntities` maps it to
-  its alias; and `reveal_*` results after user presence (R18), whose
-  names stay as written while R16's handles and R17's keyed digests still
-  apply. Either
-  pairing of a name with its alias holds in every transcript made under
+  Dates, times and amounts stay plaintext. One exception: `reveal_*`
+  results after user presence (R18), whose names stay as written while
+  R16's handles and R17's keyed digests still apply. A name typed in the
+  current call's query gets its alias in that call's result too; as
+  typed, it appears only as a key of `queryEntities`, which maps it to its
+  alias. Either pairing of a name with its alias holds in every transcript made under
   the same key ([section 5](05-security.md); Q21). No entity stays plaintext for being
   public: a minister and a major newspaper get aliases too.
 - R14. From Phase 2, an alias MUST be three words from the curated word list

@@ -1,8 +1,8 @@
 # To do
 
-Every open item in one place: bugs, documentation that states something
-wrong, missing tests, reviews, the checks that need a Mac or a Linux
-desktop, decisions, and work not started. Milestone states live in
+Every open item in one place: bugs, missing tests, reviews, the checks
+that need a Mac or a Linux desktop, decisions, and work not started.
+Documentation that states something wrong is a bug. Milestone states live in
 [RFC section 9](rfc-0001/09-rollout.md); this file lists what is left.
 When an item is done, delete it; the commit that does it says so.
 
@@ -46,22 +46,6 @@ maintainer.
   `src/privacy/detect/pattern.rs` counts ASCII digits only, and the card
   check reads digits with `char::to_digit`, which is ASCII only. An SSN in
   such digits is found. A fix needs each script's digit values.
-
-## Documentation that states something wrong
-
-- W8 (here) `02-requirements.md` R13 and `06-privacy.md` ("Names in the
-  chat") say that a name typed in a query appears as typed in that call's
-  result. As built, every field of the result shows its alias, and the
-  name as typed is only a key of `queryEntities`
-  (`a_name_typed_in_the_query_is_paired_with_its_alias` in
-  `src/privacy/pipeline.rs`).
-- W9 (here) `README.md`, "How it fits together": the diagram's store is
-  the macOS Keychain with the Bridge password and the calendar links only.
-  It lacks the privacy key and setting, and the Secret Service on Linux.
-- W10 (here) `04-design.md`: the components diagram and the MCP tools
-  table name only macOS's readers (PDFKit and `textutil`). On Linux,
-  poppler and pandoc run in `protonctl convert`'s sandbox
-  ([section 11](rfc-0001/11-platforms.md#the-document-readers-as-built-p4)).
 
 ## Tests the RFC plans that do not exist
 

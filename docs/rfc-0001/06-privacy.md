@@ -215,9 +215,9 @@ A title from a signature, such as "counsel", also waits for Phase 6.
 
 ### Names in the chat
 
-A name typed in the current call's query appears as
-typed in that call's result, and `queryEntities` maps it to its alias.
-Claude carries the pair from then on; the server keeps no record of the
+A name typed in the current call's query gets its alias in that call's
+result, like any other name. As typed, it appears only as a key of
+`queryEntities`, which maps it to its alias. Claude carries the pair from then on; the server keeps no record of the
 names Claude typed. When a query matches by similarity rather than exactly (Phase 5), the
 result keeps the alias and adds `matchedQuery`, so it never discloses a
 spelling the user did not type. The pair also outlives the chat: the alias
