@@ -219,12 +219,16 @@ const READER_READS: [&str; 7] = [
     "/var/cache/fontconfig",
 ];
 
+/// The x32 ABI's mark on an `x86_64` system call number.
+const X32_SYSCALL_BIT: i64 = 0x4000_0000;
+
 /// Landlock first, which also sets no-new-privileges, which seccomp needs.
 /// Landlock confines files, TCP, abstract Unix sockets and signals as far
-/// as this kernel supports, and must hold at least for files; seccomp
-/// refuses every new socket and `io_uring`, whose requests seccomp cannot
-/// see, so no network is reached on kernels whose Landlock has no network
-/// rules (before 6.7).
+/// as this kernel supports, and must hold at least for files; it also keeps
+/// the reader from tracing any process outside the sandbox. seccomp refuses
+/// every new socket and `io_uring`, whose requests seccomp cannot see, so no
+/// network and no Unix socket (the session bus, say) is reached, whatever
+/// the kernel's Landlock covers; a 32-bit call ends the process.
 pub fn sandbox() -> Result<()> {
     use landlock::{
         ABI, Access as _, AccessFs, AccessNet, Ruleset, RulesetAttr as _, RulesetCreatedAttr as _,
@@ -247,10 +251,15 @@ pub fn sandbox() -> Result<()> {
         status.ruleset != RulesetStatus::NotEnforced,
         "this kernel does not enforce Landlock, which the document readers need (RFC-0001 R21)"
     );
-    let refused = [libc::SYS_socket, libc::SYS_io_uring_setup]
-        .into_iter()
-        .map(|call| (call, Vec::new()))
-        .collect();
+    let mut calls = vec![libc::SYS_socket, libc::SYS_io_uring_setup];
+    // The filter matches call numbers exactly, and on x86_64 a kernel that
+    // enables the x32 ABI also takes each call with this bit set, which the
+    // check of the architecture does not catch.
+    if cfg!(target_arch = "x86_64") {
+        let x32: Vec<i64> = calls.iter().map(|call| call | X32_SYSCALL_BIT).collect();
+        calls.extend(x32);
+    }
+    let refused = calls.into_iter().map(|call| (call, Vec::new())).collect();
     let filter: BpfProgram = SeccompFilter::new(
         refused,
         SeccompAction::Allow,
