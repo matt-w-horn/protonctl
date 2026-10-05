@@ -894,6 +894,7 @@ pub(crate) mod tests {
     /// hand as `tests/fixtures/two-pages.pdf` was.
     #[cfg(target_os = "linux")]
     fn pdf_titled(title: &str, pages: &[&str]) -> Vec<u8> {
+        use std::fmt::Write as _;
         let kids: Vec<String> = (0..pages.len())
             .map(|i| format!("{} 0 R", 5 + 2 * i))
             .collect();
@@ -923,20 +924,19 @@ pub(crate) mod tests {
         let mut offsets = Vec::new();
         for (i, o) in objects.iter().enumerate() {
             offsets.push(out.len());
-            out.push_str(&format!("{} 0 obj\n{o}\nendobj\n", i + 1));
+            write!(out, "{} 0 obj\n{o}\nendobj\n", i + 1).unwrap();
         }
         let xref = out.len();
-        out.push_str(&format!(
-            "xref\n0 {}\n0000000000 65535 f \n",
-            objects.len() + 1
-        ));
+        write!(out, "xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).unwrap();
         for o in offsets {
-            out.push_str(&format!("{o:010} 00000 n \n"));
+            writeln!(out, "{o:010} 00000 n ").unwrap();
         }
-        out.push_str(&format!(
+        write!(
+            out,
             "trailer\n<< /Size {} /Root 1 0 R /Info 4 0 R >>\nstartxref\n{xref}\n%%EOF\n",
             objects.len() + 1
-        ));
+        )
+        .unwrap();
         out.into_bytes()
     }
 
