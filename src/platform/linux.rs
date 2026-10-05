@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use secret_service::EncryptionType;
-use secret_service::blocking::{Item, SecretService};
+use secret_service::blocking::{Collection, Item, SecretService};
 
 use crate::config::home;
 
@@ -82,6 +82,16 @@ fn search<'a>(store: &'a SecretService<'a>, attrs: HashMap<&str, &str>) -> Resul
     Ok(items)
 }
 
+/// The default collection, unlocked as `search` unlocks items: a locked
+/// collection refuses a new item without showing the unlock prompt.
+fn unlocked_default<'a>(store: &'a SecretService<'a>) -> Result<Collection<'a>> {
+    let collection = store.get_default_collection()?;
+    if collection.is_locked()? {
+        collection.unlock()?;
+    }
+    Ok(collection)
+}
+
 /// The one item for `account`, or `None`. Two would leave a reader to pick
 /// one, so that is an error.
 fn one<'a>(store: &'a SecretService<'a>, service: &str, account: &str) -> Result<Option<Item<'a>>> {
@@ -108,7 +118,7 @@ pub fn secret_set(service: &str, account: &str, value: &[u8]) -> Result<()> {
         match one(store, service, account)? {
             Some(item) => item.set_secret(value, CONTENT_TYPE)?,
             None => {
-                store.get_default_collection()?.create_item(
+                unlocked_default(store)?.create_item(
                     &format!("{service}/{account}"),
                     attributes(service, account),
                     value,
@@ -141,7 +151,7 @@ pub fn secret_set_with_comment(
                 item.set_attributes(attrs)?;
             }
             None => {
-                store.get_default_collection()?.create_item(
+                unlocked_default(store)?.create_item(
                     &format!("{service}/{account}"),
                     attrs,
                     value,
@@ -486,6 +496,87 @@ mod tests {
         secret_set(S, "async", b"x").unwrap();
         assert_eq!(secret_get(S, "async").unwrap().as_deref(), Some(&b"x"[..]));
         assert!(secret_delete(S, "async").unwrap());
+    }
+
+    /// Set in the child that `a_locked_keyring_fails_at_once_without_a_prompt`
+    /// starts.
+    const LOCKED: &str = "PROTONCTL_LOCKED_PROBE";
+
+    /// With the collection locked and no unlock prompt able to show, as in a
+    /// session with no display, every read and write fails at once with the
+    /// prompt dismissed, and none waits; the privacy setting is read this way
+    /// on every call (R8, R26). A first write unlocks as a read does, rather
+    /// than failing on the locked collection without a prompt. A collection
+    /// cannot be unlocked again without the prompt, so the probe runs in a
+    /// keyring of its own: this test binary again, with only `locked_probe`
+    /// selected, in a private D-Bus session with no display and its own
+    /// home and runtime folders. Run with `--nocapture` to see each call's
+    /// time.
+    #[test]
+    #[ignore = "needs dbus-run-session and gnome-keyring-daemon; scripts/check.sh runs it"]
+    fn a_locked_keyring_fails_at_once_without_a_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = std::process::Command::new("dbus-run-session");
+        child
+            .args(["--", "sh", "-c"])
+            .arg("printf test | gnome-keyring-daemon --unlock --components=secrets >/dev/null && exec \"$@\"")
+            .arg("sh")
+            .arg(std::env::current_exe().unwrap())
+            .args(["platform::linux::tests::locked_probe", "--exact"])
+            .args(["--include-ignored", "--nocapture", "--test-threads=1"])
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .envs(["HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"].map(|k| (k, dir.path())))
+            .env(LOCKED, "1");
+        if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+            child.env("LLVM_PROFILE_FILE", profile);
+        }
+        let out = child.output().unwrap();
+        let (said, logged) = (
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        eprint!("{logged}");
+        assert!(out.status.success(), "{said}{logged}");
+        assert!(said.contains("1 passed"), "{said}");
+    }
+
+    #[test]
+    #[ignore = "runs only as the child of a_locked_keyring_fails_at_once_without_a_prompt"]
+    fn locked_probe() {
+        use std::time::{Duration, Instant};
+        if std::env::var_os(LOCKED).is_none() {
+            return;
+        }
+        secret_set(S, "kept", b"x").unwrap();
+        with_store(S, "lock", Carries::Attributes, |store| {
+            Ok(store.get_default_collection()?.lock()?)
+        })
+        .unwrap();
+        let calls: [(&str, &dyn Fn() -> Result<()>); 7] = [
+            ("a read", &|| secret_get(S, "kept").map(drop)),
+            ("a comment's read", &|| secret_comment(S, "kept").map(drop)),
+            ("a search", &|| secret_accounts(S).map(drop)),
+            ("a delete", &|| secret_delete(S, "kept").map(drop)),
+            ("a change", &|| secret_set(S, "kept", b"y")),
+            ("a first write", &|| secret_set(S, "new", b"y")),
+            ("a first write with a comment", &|| {
+                secret_set_with_comment(S, "new", b"y", "c")
+            }),
+        ];
+        for (what, call) in calls {
+            let started = Instant::now();
+            let err = call().expect_err(what);
+            let took = started.elapsed();
+            eprintln!("{what} failed after {} ms: {err:#}", took.as_millis());
+            assert!(
+                took < Duration::from_secs(10),
+                "{what} took {} ms",
+                took.as_millis()
+            );
+            let said = format!("{err:#}");
+            assert!(said.contains("prompt dismissed"), "{what}: {said}");
+        }
     }
 
     /// A sysfs tree: zram0 (252:0); sda2 (8:2), a plain partition; dm-0
