@@ -10,7 +10,7 @@ use regex::Regex;
 
 use super::{Detector, Kind, Mention};
 use crate::privacy::canon;
-use crate::privacy::ident::EntityType;
+use crate::privacy::ident::{Algorithm, EntityType};
 
 fn re(pattern: &str) -> Regex {
     Regex::new(pattern).expect("a fixed pattern compiles")
@@ -41,6 +41,16 @@ static SECRET: LazyLock<Regex> = LazyLock::new(|| {
     )
 });
 static ACCOUNT: LazyLock<Regex> = LazyLock::new(|| re(r#"(?:/Users/|/home/)([^/\s"'<>]+)"#));
+/// A SHA-1 or SHA-256 digest in hex, a whole run of hex digits.
+static DIGEST: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)\b(?:[0-9a-f]{64}|[0-9a-f]{40})\b"));
+/// Proton's message ID, `X-Pm-Internal-Id`: 86 base64 characters and
+/// "==", not inside a longer run of them (Appendix A).
+static PROTON_ID: LazyLock<Regex> =
+    LazyLock::new(|| re(r"(?:^|[^A-Za-z0-9+/_=-])([A-Za-z0-9+/_-]{86}==)"));
+
+/// Characters of a Proton message ID that a messageId shows, as the mail
+/// tools take it.
+pub const MESSAGE_ID_SHOWN: usize = 16;
 
 /// Top-level domains taken as a domain in plain text. A name such as
 /// "report.pdf" or "main.rs" must not read as a domain, so this is a short
@@ -166,6 +176,20 @@ pub fn find(text: &str, out: &mut Vec<Mention>) {
     for c in ACCOUNT.captures_iter(text) {
         let m = c.get(1).expect("group 1");
         entity(out, text, m.start(), m.end(), EntityType::Account);
+    }
+    for m in DIGEST.find_iter(text) {
+        let algorithm = if m.len() == 64 {
+            Algorithm::Sha256
+        } else {
+            Algorithm::Sha1
+        };
+        let value = m.as_str().to_string();
+        push(out, m.start(), m.end(), Kind::Digest(algorithm), value);
+    }
+    for c in PROTON_ID.captures_iter(text) {
+        let m = c.get(1).expect("group 1");
+        let value = m.as_str().to_string();
+        push(out, m.start(), m.end(), Kind::MessageId, value);
     }
 }
 
@@ -349,6 +373,28 @@ mod tests {
         }
         for refused in ["SSN 666-12-3456", "Card 4111 1111 1111 1112"] {
             assert_eq!(found(&arabic(refused)), Vec::new(), "{refused}");
+        }
+    }
+
+    /// B24: a digest in hex and a Proton message ID written in text are
+    /// found, and a longer run of either kind of character is not.
+    #[test]
+    fn digests_and_message_ids_in_text_are_found() {
+        let sha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709";
+        let sha256 = "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855";
+        let id = format!("{}==", "aZ0-_".repeat(17) + "a");
+        let text = format!("sha1 {sha1}; sha-256 {sha256}. Message {id} moved.");
+        let kinds: Vec<(String, Kind)> = found(&text);
+        assert_eq!(
+            kinds,
+            vec![
+                (sha256.to_string(), Kind::Digest(Algorithm::Sha256)),
+                (id.clone(), Kind::MessageId),
+                (sha1.to_string(), Kind::Digest(Algorithm::Sha1)),
+            ]
+        );
+        for text in [format!("{sha1}0"), format!("x{id}")] {
+            assert_eq!(found(&text), Vec::new(), "{text}");
         }
     }
 

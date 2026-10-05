@@ -5,14 +5,18 @@
 pub mod dict;
 pub mod pattern;
 
-use super::ident::EntityType;
+use super::ident::{Algorithm, EntityType};
 
 /// What a mention is: an entity, or a link, which is numbered rather than
-/// aliased (RFC Q19).
+/// aliased (RFC Q19), or an identifier written in text, which becomes
+/// what the same value in a field becomes: a digest its keyed form (R17),
+/// a Proton message ID a handle (R16).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kind {
     Entity(EntityType),
     Link,
+    Digest(Algorithm),
+    MessageId,
 }
 
 /// A detector, as `detectors` names it. The order of the variants is the
