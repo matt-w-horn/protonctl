@@ -47,7 +47,9 @@ jobs:
           # No co-author line, no attribution and no session link in commits or pull requests.
           settings: |
             {"attribution": {"commit": "", "pr": ""}}
+          # Pinned, so a change of the account's default model does not change this.
           claude_args: >-
+            --model claude-opus-5-5
             --append-system-prompt "docs/rfc-0001.md is the design, and code cites its requirements as RFC R1 to R26.
             Run scripts/check.sh before each commit; it must pass.
             Lint overrides are expect attributes with a reason, at the site.
