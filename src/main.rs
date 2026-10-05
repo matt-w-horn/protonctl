@@ -74,7 +74,7 @@ impl App {
         Ok(Self {
             calendars: Calendars::new(cfg.calendar, zone),
             drive,
-            drive_cli: drive::cli::Cli::new(drive::cli::path(cfg.drive.as_ref())),
+            drive_cli: drive::cli::Cli::new(cfg.drive.as_ref()),
             mail: cfg.mail.map(mail::Mail::new),
             export,
             privacy: privacy::Privacy::stored(),
@@ -407,15 +407,19 @@ fn rotate_key() -> Result<Value> {
     Ok(json!({ "rotated": true, "keyId": &id[..8] }))
 }
 
-/// Check the CLI's signature and that it is signed in, find the app's folder,
-/// then write `[drive]`. Signing in is the CLI's own step (`proton-drive auth
-/// login`), so protonctl never sees the Proton password.
+/// Check that the CLI is Proton's and signed in, find the app's folder, then
+/// write `[drive]`. On Linux the CLI's SHA-256 is pinned here (Q33), and a
+/// later run pins an updated CLI. Signing in is the CLI's own step
+/// (`proton-drive auth login`), so protonctl never sees the Proton password.
 async fn setup_drive(folder: Option<PathBuf>, cli: Option<PathBuf>) -> Result<Value> {
-    if config::load()?.drive.is_some() {
-        bail!(
-            "Drive is already set up; edit [drive] in {} to change it",
-            config::path().display()
-        );
+    if let Some(set) = config::load()?.drive {
+        if cfg!(target_os = "macos") || folder.is_some() || cli.is_some() {
+            bail!(
+                "Drive is already set up; edit [drive] in {} to change it",
+                config::path().display()
+            );
+        }
+        return repin_drive_cli(set).await;
     }
     // The server resolves a path from its own working directory, so each is
     // written whole; a symlink stays one, so a CLI updated behind it is used.
@@ -426,12 +430,16 @@ async fn setup_drive(folder: Option<PathBuf>, cli: Option<PathBuf>) -> Result<Va
     {
         bail!("--folder {} is not a folder", f.display());
     }
-    let wanted = config::DriveConfig {
+    let mut wanted = config::DriveConfig {
         folder: folder.clone(),
         cli: cli.clone(),
         ..Default::default()
     };
-    let drive_cli = drive::cli::Cli::new(drive::cli::path(Some(&wanted)));
+    if !cfg!(target_os = "macos") {
+        let path = drive::cli::path(Some(&wanted));
+        wanted.cli_sha256 = Some(content::blocking(move || digest::Sha256::of_file(&path)).await??);
+    }
+    let drive_cli = drive::cli::Cli::new(Some(&wanted));
     let version = drive_cli.check().await?;
     drive_cli
         .json(&["filesystem", "list", "-j", "/my-files"].map(std::ffi::OsStr::new))
@@ -440,7 +448,7 @@ async fn setup_drive(folder: Option<PathBuf>, cli: Option<PathBuf>) -> Result<Va
             "the Proton Drive CLI is not signed in; run `proton-drive auth login`, then try again",
         )?;
     let root = Drive::new(Some(&wanted))?.root().map(Path::to_path_buf);
-    config::add_drive(folder.as_deref(), cli.as_deref())?;
+    config::add_drive(folder.as_deref(), cli.as_deref(), wanted.cli_sha256)?;
     Ok(json!({
         "folder": match root {
             Some(r) => json!(r),
@@ -448,8 +456,29 @@ async fn setup_drive(folder: Option<PathBuf>, cli: Option<PathBuf>) -> Result<Va
         },
         "cli": drive_cli.path(),
         "cliVersion": version,
+        "cliSha256": wanted.cli_sha256,
         "signedIn": true,
     }))
+}
+
+/// `setup drive` once Drive is set up, on Linux: pin the CLI as it is now,
+/// after the user confirms it is a build from Proton (Q33).
+async fn repin_drive_cli(mut set: config::DriveConfig) -> Result<Value> {
+    let path = drive::cli::path(Some(&set));
+    let found = {
+        let path = path.clone();
+        content::blocking(move || digest::Sha256::of_file(&path)).await??
+    };
+    if set.cli_sha256 != Some(found) {
+        confirm(&format!(
+            "{} now has SHA-256 {found}; pin it only if you installed this CLI from Proton",
+            path.display()
+        ))?;
+    }
+    set.cli_sha256 = Some(found);
+    let version = drive::cli::Cli::new(Some(&set)).check().await?;
+    config::set_cli_pin(found)?;
+    Ok(json!({ "cli": path, "cliVersion": version, "cliSha256": found }))
 }
 
 /// Pin Bridge's certificate on first contact, prove the login works, then
@@ -470,11 +499,11 @@ async fn setup_mail(address: &str, port: u16) -> Result<Value> {
         .await
         .ok();
     secret::set(&Account::Bridge(address.to_string()), &password)?;
-    config::add_mail(address, port, &hex::encode(fingerprint))?;
+    config::add_mail(address, port, fingerprint)?;
     Ok(json!({
         "address": address,
         "port": port,
-        "certificateSha256": hex::encode(fingerprint),
+        "certificateSha256": fingerprint,
         "passwordStored": true,
     }))
 }
@@ -506,7 +535,9 @@ async fn doctor(app: &App) -> bool {
         );
         check(
             "drive cli",
-            drive::cli::verify(app.drive_cli.path())
+            app.drive_cli
+                .check()
+                .await
                 .map(|v| format!("{} {v}", app.drive_cli.path().display())),
         );
     }
@@ -693,7 +724,10 @@ impl App {
         App {
             calendars: Calendars::new(Vec::new(), Zone::Local),
             drive: Err("not set up".into()),
-            drive_cli: drive::cli::Cli::new(PathBuf::from("/nonexistent")),
+            drive_cli: drive::cli::Cli::new(Some(&config::DriveConfig {
+                cli: Some("/nonexistent".into()),
+                ..Default::default()
+            })),
             mail: None,
             export: None,
             privacy,

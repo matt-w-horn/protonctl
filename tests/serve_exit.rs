@@ -20,7 +20,10 @@ fn start(
     let config = home.join("config.toml");
     std::fs::write(
         &config,
-        "[mail]\naddress = \"t@example.test\"\ncert_sha256 = \"00\"\n",
+        format!(
+            "[mail]\naddress = \"t@example.test\"\ncert_sha256 = \"{}\"\n",
+            "0".repeat(64)
+        ),
     )
     .unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_protonctl"))

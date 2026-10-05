@@ -66,12 +66,14 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
 - R8. Every tool call MUST finish within 150 s. A wait for user presence
   (R18) counts toward the limit; an unanswered prompt ends as
   `declined_by_user`.
-- R9. protonctl MUST verify the `proton-drive` binary's code signature (Team ID
-  `2SB5Z68H26`) and its version range before first use in a process, and MUST
-  pin Bridge's TLS certificate. Later runs start the binary by path, and
-  the default path, `~/bin/proton-drive`, is one the user can write, so a
-  binary swapped in after the check is not seen. From Phase 2 the check
-  runs before every run of the CLI (Q24).
+- R9. Before every run of `proton-drive` (Q24), protonctl MUST verify that
+  the binary is Proton's: on macOS by its code signature (Team ID
+  `2SB5Z68H26`), and on Linux by the SHA-256 pinned at `setup drive`
+  (Q33). It MUST check the CLI's version range once per process, and MUST
+  pin Bridge's TLS certificate. The default path, `~/bin/proton-drive`, is
+  one the user can write, so a binary swapped in between the check and the
+  run is not seen; the check runs under the CLI's lock, just before the
+  run, to keep that window short.
 - R10. In aliases mode, from Phase 2, protonctl MUST NOT write message or
   file content, or text derived from it, to disk. Content goes from Bridge, the Drive app's
   folder or the CLI into memory, and leaves in a tool result.

@@ -149,7 +149,7 @@ runs.
 | I2 | protonctl never holds the Proton password or private keys (R2) | both | Bridge and the Drive CLI hold the session | by reading the code | built |
 | I3 | Secrets live only in the Keychain and never reach argv, the environment, logs or results (R2, R3, R20, R25) | both | `secrecy` types; curl reads the link on stdin; the CLI runs with a cleared environment | the redaction test; the environment test on the stand-in CLI | built for two secrets; the privacy key planned |
 | I4 | protonctl's sockets go only to 127.0.0.1; one HTTPS GET goes to `proton.me` through `/usr/bin/curl` (R3) | both | no HTTP crate; host check | `cargo deny` bans; the host property test | built |
-| I5 | Bridge is pinned and the Drive CLI is Proton's (R9) | both | certificate pin; Team ID and version check | pin tests against a fake Bridge | built; the CLI check runs once per process, and before every run from Phase 2 (Q24) |
+| I5 | Bridge is pinned and the Drive CLI is Proton's (R9) | both | certificate pin; Team ID on macOS, pinned SHA-256 on Linux; version check | pin tests against a fake Bridge; the per-run pin test against a stand-in CLI | built; the CLI check runs before every run (Q24, Q33) |
 | I6 | An excluded item cannot be told from a missing one, in every tool (R7) | both | `resolve` checks the requested and the resolved path | exclusion and symlink tests; planned: through handles | built |
 | I7 | Third-party text is marked as data and has no hidden characters (R6) | both | `clean`, `escape_hidden`, `provenance` | content property tests | built, except three Drive errors: a path shown unescaped and the Drive CLI's own text passed on uncleaned (milestone M1.5) |
 | I8 | Every call ends within 150 s (R8) | both | `CALL_LIMIT` in `reply()` | by reading the code | built |
@@ -171,7 +171,7 @@ runs.
 | STRIDE | Threat | Where | Response | Control | Residual |
 |---|---|---|---|---|---|
 | Spoofing | A local process answers on Bridge's port and collects the password | F2 | mitigate | certificate pin; loopback only (I5) | low |
-| Spoofing | A fake `proton-drive` earlier on PATH, or swapped in after the check | F3 | mitigate | absolute path, Team ID, version (I5); from Phase 2 a check before every run (Q24) | medium until Phase 2, then low |
+| Spoofing | A fake `proton-drive` earlier on PATH, or swapped in after the check | F3 | mitigate | absolute path; Team ID or pinned SHA-256 before every run, and the version (I5, Q24, Q33) | low; a swap between the check and the run remains |
 | Spoofing | A look-alike calendar host | F13 | mitigate | host check and its property test (I4) | low |
 | Spoofing | A subject or file name written to make the Touch ID prompt look harmless | Phase 3 prompt | mitigate | protonctl writes the prompt; the name comes last, cleaned, cut and quoted (R18) | low |
 | Spoofing | A replaced `protonctl` binary whose Keychain prompt looks like a rebuild's | F7 | mitigate | a self-signed signing identity from Phase 2, so a prompt after a rebuild stops being routine (Q12) | medium until Phase 2 |

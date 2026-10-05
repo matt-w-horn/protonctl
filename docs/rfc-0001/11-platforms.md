@@ -59,7 +59,7 @@ records. After P1:
 | Cloud-only files | `st_flags() & SF_DATALESS` | `src/platform/macos.rs` | none, since no Drive app makes placeholders |
 | Download expiry (R10) | the time in each download folder's name, on both systems | `src/content.rs` | the same |
 | Drive folder discovery | `~/Library/CloudStorage/ProtonDrive-*` | `src/platform/macos.rs` | no place to look: the CLI-only mode |
-| Drive CLI check (R9) | `/usr/bin/codesign` and Apple Team ID `2SB5Z68H26` | `src/drive/cli.rs` | refused, naming Q33 |
+| Drive CLI check (R9) | `/usr/bin/codesign` and Apple Team ID `2SB5Z68H26`, before every run (Q24) | `src/drive/cli.rs` | the SHA-256 pinned at `setup drive`, before every run (Q33, built 2026-10-05) |
 | Bridge on demand (Q2) | `/usr/bin/open -g -j -b com.protonmail.bridge` | `src/mail/mod.rs` | refused when Bridge is not running, naming Q32 |
 | PDF text and page images; Word, RTF, OpenDocument | `/usr/bin/osascript` with PDFKit; `/usr/bin/textutil` | `src/extract.rs` | "no reader for PDF, Word, RTF or OpenDocument files yet" (Q34); text and images read as on macOS |
 | Cache folder | `~/Library/Caches/protonctl` | `src/platform/macos.rs` | `$XDG_CACHE_HOME/protonctl`, else `~/.cache/protonctl` |
@@ -199,7 +199,7 @@ more.
 | P0 | Answer Q30 to Q35; confirm the Linux availability of Claude Desktop, Bridge's core and the Drive CLI. Done 2026-10-04 | P1 |
 | P1 | Builds and tests on Linux: `src/platform/`; target-specific dependencies; Linux implementations that report "not available on Linux"; the macOS-only tests behind `cfg`; download expiry by the time in the folder name; `deny.toml` targets; `scripts/check.sh` on Linux, with the macOS build checked from there. Done 2026-10-04 | Phase 2, so the privacy layer is built and tested in Linux containers |
 | P2 | Mail and Calendar on Linux: the secret store (Q31), Bridge started by the user (Q32), `setup`, `doctor` and `status` | alongside Phase 2 |
-| P3 | Drive on Linux, as Q33 decides | after P2 |
+| P3 | Drive on Linux, as Q33 decides. Built 2026-10-05; the live check waits for a Linux machine signed in to Proton | after P2 |
 | P4 | Converters and their sandbox on Linux (Q34) | with Phase 4 |
 | P5 | User presence on Linux (Q35), or no `reveal_*` there | with Phase 3 |
 

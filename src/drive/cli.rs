@@ -1,10 +1,11 @@
-//! The official Proton Drive CLI. Before protonctl runs it, the binary must be
-//! signed by Proton's Apple team and report a version this code was tested
-//! against (RFC R9), so a look-alike earlier on PATH never sees the session.
+//! The official Proton Drive CLI. Before every run protonctl checks that the
+//! binary is Proton's (RFC R9, Q24): on macOS, signed by Proton's Apple team;
+//! on Linux, where Proton publishes no signature or checksum, the SHA-256
+//! that `setup drive` pinned (Q33). Its version is checked once per process,
+//! since `--version` also asks proton.me for updates (RFC Appendix A).
 //! Downloads go through it, and so do listing and stat when the Proton Drive
-//! app's folder is absent; the write operations arrive in Phase 1b.
-//! Every run holds a lock file, so two protonctl processes (the Claude app's
-//! server and Claude Code's) never run it at once.
+//! app's folder is absent. Every run holds a lock file, so two protonctl
+//! processes (the Claude app's server and Claude Code's) never run it at once.
 
 use std::ffi::OsStr;
 use std::fs::File;
@@ -17,6 +18,7 @@ use tokio::sync::Mutex;
 
 use crate::config::{DriveConfig, cache_dir, home};
 use crate::content::clean;
+use crate::digest::Sha256;
 
 /// Proton AG's Apple Developer team, shared by Proton Drive.app and the CLI.
 const PROTON_TEAM: &str = "2SB5Z68H26";
@@ -79,14 +81,32 @@ fn lock(path: &Path) -> Result<File> {
     Ok(file)
 }
 
-/// Check the signature and version; returns the version string. `--version`
-/// also asks proton.me whether a newer CLI exists (RFC Appendix A).
-pub fn verify(cli: &Path) -> Result<String> {
-    if !cfg!(target_os = "macos") {
-        bail!(
-            "the Drive CLI is checked with macOS's codesign, and Linux has no check yet (RFC-0001 Q33)"
-        );
+/// What shows that a file is Proton's CLI (R9).
+#[derive(Clone, Debug)]
+enum Proof {
+    /// macOS: signed by Proton's Apple team.
+    Signature,
+    /// Linux: this SHA-256, pinned at `setup drive`; `None` when `[drive]`
+    /// has none (Q33).
+    Pinned(Option<Sha256>),
+    /// A stand-in the tests build.
+    #[cfg(test)]
+    Trusted,
+}
+
+impl Proof {
+    /// It blocks, so async callers run it off the async threads.
+    fn check(&self, cli: &Path) -> Result<()> {
+        match self {
+            Self::Signature => signed_by_proton(cli),
+            Self::Pinned(pin) => matches_pin(cli, *pin),
+            #[cfg(test)]
+            Self::Trusted => Ok(()),
+        }
     }
+}
+
+fn signed_by_proton(cli: &Path) -> Result<()> {
     let requirement =
         format!("=anchor apple generic and certificate leaf[subject.OU] = \"{PROTON_TEAM}\"");
     let sig = Command::new("/usr/bin/codesign")
@@ -104,14 +124,35 @@ pub fn verify(cli: &Path) -> Result<String> {
             String::from_utf8_lossy(&sig.stderr).trim()
         );
     }
-    let held = lock(&lock_path())?;
+    Ok(())
+}
+
+fn matches_pin(cli: &Path, pin: Option<Sha256>) -> Result<()> {
+    let Some(pin) = pin else {
+        bail!(
+            "no SHA-256 is pinned for the Proton Drive CLI (cli_sha256 in [drive]); run `protonctl setup drive`"
+        );
+    };
+    let found = Sha256::of_file(cli)?;
+    if found != pin {
+        bail!(
+            "{} has SHA-256 {found}, not the {pin} pinned at setup; if you updated the CLI \
+             from Proton, run `protonctl setup drive` to pin the new one",
+            cli.display()
+        );
+    }
+    Ok(())
+}
+
+/// Run `--version` and check the series. The caller holds the lock.
+fn read_version(cli: &Path) -> Result<String> {
     let out = Command::new(cli)
         .arg("--version")
         .env_clear()
         .envs(environment())
+        .stdin(Stdio::null())
         .output()
         .with_context(|| format!("cannot run {}", cli.display()))?;
-    drop(held);
     let text = String::from_utf8_lossy(&out.stdout);
     let version = text
         .lines()
@@ -126,30 +167,40 @@ pub fn verify(cli: &Path) -> Result<String> {
     Ok(version.to_string())
 }
 
-/// The CLI, verified before its first use in a process (R9) and run one call
-/// at a time, since parallel calls fail with "database is locked" (RFC
-/// principle 6): the mutex orders this process's calls, and `lock` keeps out
-/// other processes.
+/// The CLI, checked before every run (R9, Q24) and run one call at a time,
+/// since parallel calls fail with "database is locked" (RFC principle 6):
+/// the mutex orders this process's calls, and `lock` keeps out other
+/// processes.
+#[derive(Debug)]
 pub struct Cli {
     path: PathBuf,
-    /// Held for each whole call; true once `verify` passed in this process.
-    verified: Mutex<bool>,
+    proof: Proof,
+    /// Held for each whole call; the version once checked in this process.
+    version: Mutex<Option<String>>,
 }
 
 impl Cli {
-    pub fn new(path: PathBuf) -> Self {
+    /// The CLI that `[drive]` names, or the default one.
+    pub fn new(cfg: Option<&DriveConfig>) -> Self {
+        let proof = if cfg!(target_os = "macos") {
+            Proof::Signature
+        } else {
+            Proof::Pinned(cfg.and_then(|c| c.cli_sha256))
+        };
         Self {
-            path,
-            verified: Mutex::new(false),
+            path: path(cfg),
+            proof,
+            version: Mutex::new(None),
         }
     }
 
-    /// A stand-in the tests build, taken as verified.
+    /// A stand-in the tests build, taken as Proton's.
     #[cfg(test)]
     pub fn trusted(path: PathBuf) -> Self {
         Self {
             path,
-            verified: Mutex::new(true),
+            proof: Proof::Trusted,
+            version: Mutex::new(Some("test".into())),
         }
     }
 
@@ -157,26 +208,40 @@ impl Cli {
         &self.path
     }
 
-    /// Check the signature and version now, as the first call would, and
-    /// return the version; later calls in this process need no check.
+    /// Check the binary and its version now, and return the version.
     pub async fn check(&self) -> Result<String> {
-        let mut verified = self.verified.lock().await;
-        let path = self.path.clone();
-        let version = crate::content::blocking(move || verify(&path)).await??;
-        *verified = true;
-        Ok(version)
+        let mut version = self.version.lock().await;
+        let (path, proof) = (self.path.clone(), self.proof.clone());
+        let checked = crate::content::blocking(move || {
+            let _held = lock(&lock_path())?;
+            proof.check(&path)?;
+            read_version(&path)
+        })
+        .await??;
+        *version = Some(checked.clone());
+        Ok(checked)
     }
 
     /// Run one command and parse the JSON it prints, with only `environment()`.
     /// Stdin is empty, so a prompt fails instead of waiting.
     pub async fn json(&self, args: &[&OsStr]) -> Result<Value> {
-        let mut verified = self.verified.lock().await;
-        if !*verified {
-            let path = self.path.clone();
-            crate::content::blocking(move || verify(&path)).await??;
-            *verified = true;
+        let mut version = self.version.lock().await;
+        let (path, proof, known) = (self.path.clone(), self.proof.clone(), version.is_some());
+        let (_held, checked) = crate::content::blocking(move || -> Result<_> {
+            let held = lock(&lock_path())?;
+            // Under the lock, as close to the run as this process can put it.
+            proof.check(&path)?;
+            let checked = if known {
+                None
+            } else {
+                Some(read_version(&path)?)
+            };
+            Ok((held, checked))
+        })
+        .await??;
+        if checked.is_some() {
+            *version = checked;
         }
-        let _held = crate::content::blocking(|| lock(&lock_path())).await??;
         let out = tokio::process::Command::new(&self.path)
             .args(args)
             .env_clear()
@@ -267,6 +332,70 @@ mod tests {
             .to_string();
         assert!(!err.contains('\u{202E}'), "{err:?}");
         assert!(err.contains("cannot read plandm.exe"), "{err}");
+    }
+
+    /// A stand-in that answers `--version` as CLI 0.8.0 does and `{}` to
+    /// anything else, logging each run's arguments to `runs` beside it.
+    fn pinned_stand_in(dir: &Path, pin: Option<Sha256>) -> (Cli, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let (script, runs) = (dir.join("proton-drive"), dir.join("runs"));
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\n\
+                 if [ \"$1\" = --version ]; then echo '@protontech/cli-drive@0.8.0'; else echo '{{}}'; fi\n",
+                runs.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let pin = pin.or_else(|| Some(Sha256::of_file(&script).unwrap()));
+        let cli = Cli {
+            path: script,
+            proof: Proof::Pinned(pin),
+            version: Mutex::new(None),
+        };
+        (cli, runs)
+    }
+
+    /// Q24 and Q33: the pin is checked before every run, not once per
+    /// process, so a CLI changed after the first run is never run again; and
+    /// `--version` runs once per process.
+    #[tokio::test]
+    async fn a_pinned_cli_runs_only_while_it_matches_its_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cli, runs) = pinned_stand_in(dir.path(), None);
+        let list = [OsStr::new("list")];
+        cli.json(&list).await.unwrap();
+        cli.json(&list).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&runs).unwrap(),
+            "--version\nlist\nlist\n"
+        );
+        let mut changed = std::fs::read_to_string(cli.path()).unwrap();
+        changed.push_str("# swapped\n");
+        std::fs::write(cli.path(), changed).unwrap();
+        let err = cli.json(&list).await.unwrap_err().to_string();
+        assert!(err.contains("pinned at setup"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&runs).unwrap(),
+            "--version\nlist\nlist\n"
+        );
+    }
+
+    /// A Linux `[drive]` without a pin is refused before the CLI runs.
+    #[tokio::test]
+    async fn a_cli_with_no_pin_never_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cli, runs) = pinned_stand_in(dir.path(), None);
+        cli.proof = Proof::Pinned(None);
+        let err = cli.check().await.unwrap_err().to_string();
+        assert!(err.contains("run `protonctl setup drive`"), "{err}");
+        assert!(!runs.exists());
+        // And a pin for other bytes is refused the same way.
+        let (cli, runs) = pinned_stand_in(dir.path(), Some(Sha256::of(b"other")));
+        assert!(cli.check().await.is_err());
+        assert!(!runs.exists());
     }
 
     /// Two handles on the lock file exclude each other. flock(2) locks belong

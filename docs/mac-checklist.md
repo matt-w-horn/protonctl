@@ -49,6 +49,10 @@ The functions are `secret_set_with_comment` and `secret_comment` in
    Expect `[drive]` in the config, with the app's folder.
 2. Run `protonctl setup drive` again. Expect a refusal that names the
    config file.
+3. In off mode, call `download_file` twice in Claude Code; it always
+   runs the CLI. The CLI's signature is now checked before every run
+   (Q24), one `codesign` call each. Expect both calls to pass, and note
+   how much time the check adds per call.
 
 ## 5. Live checks (M1.1, M1.2, M2.10)
 

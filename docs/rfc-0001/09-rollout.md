@@ -262,7 +262,13 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
   as Q32 decides, `setup`, `doctor`, `status`. Exit: a live check on a
   Linux machine, counts only.
 - MP3 Drive on Linux as Q33 decides. Exit: the Drive tests against the
-  stand-in CLI, and a live check if the CLI exists for Linux.
+  stand-in CLI, and a live check if the CLI exists for Linux. Built
+  2026-10-05: `setup drive` pins the CLI's SHA-256 in `[drive]` and pins
+  an updated CLI after asking; every run checks the pin under the CLI's
+  lock, and macOS's signature check moved to every run too (Q24). The pin
+  tests (a changed CLI never runs again, and one with no pin never runs)
+  and the Drive tests pass against stand-in CLIs. The live check needs a
+  Linux machine signed in to Proton.
 - MP4 Converters and their sandbox on Linux (Q34), with Phase 4. Exit: the
   converter sandbox test on Linux.
 - MP5 User presence on Linux (Q35), with Phase 3, or no `reveal_*` there.

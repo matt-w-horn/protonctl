@@ -1980,7 +1980,7 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
     #[ignore = "talks to Proton through the real CLI"]
     async fn live_listing_through_the_real_cli() {
         let d = cli_drive(&[]);
-        let cli = Cli::new(cli::path(None));
+        let cli = Cli::new(crate::config::load().unwrap().drive.as_ref());
         let r = d
             .list_folder(&ListFolderReq::default(), &cli)
             .await

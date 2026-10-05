@@ -157,10 +157,14 @@ protonctl never sees your Proton password:
 ~/.cargo/bin/protonctl setup drive
 ```
 
-`setup drive` checks that the CLI is signed by Proton and signed in, finds
-the Proton Drive app's folder if the app is installed (or takes
-`--folder`), and writes `[drive]` to the config. Drive is off until it
-runs. Without the app, listing goes through the CLI and search is off.
+`setup drive` checks that the CLI is Proton's and signed in, finds the
+Proton Drive app's folder if the app is installed (or takes `--folder`),
+and writes `[drive]` to the config. Drive is off until it runs. Without the
+app, listing goes through the CLI and search is off. protonctl checks the
+CLI again before every run: on macOS, that Proton's Apple team signed it.
+On Linux, where Proton publishes no signature or checksum, `setup drive`
+pins the CLI's SHA-256 and every run must match it; after you update the
+CLI, run `setup drive` again to pin the new one. It asks first.
 
 ## Connect Claude
 

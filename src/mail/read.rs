@@ -2573,7 +2573,7 @@ mod tests {
         let mail = Mail::new(MailConfig {
             address: "user@example.test".into(),
             port,
-            cert_sha256: hex::encode(fingerprint),
+            cert_sha256: fingerprint,
         });
         *mail.conn.lock().await = Some(Conn::listing(session).await.unwrap());
         let search = |query: &str| SearchThreadsReq {

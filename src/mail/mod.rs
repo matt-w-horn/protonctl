@@ -55,19 +55,7 @@ impl std::fmt::Display for NotListening {
 
 impl std::error::Error for NotListening {}
 
-pub type Fingerprint = [u8; 32];
-
-fn parse_hex(s: &str) -> Result<Fingerprint> {
-    let mut fp = [0u8; 32];
-    hex::decode_to_slice(s, &mut fp).context("cert_sha256 in the config is not 64 hex digits")?;
-    Ok(fp)
-}
-
-fn sha256(der: &[u8]) -> Fingerprint {
-    let mut fp = [0; 32];
-    fp.copy_from_slice(ring::digest::digest(&ring::digest::SHA256, der).as_ref());
-    fp
-}
+pub use crate::digest::Sha256 as Fingerprint;
 
 /// Accepts one certificate: the pinned one or, when nothing is pinned yet,
 /// whatever Bridge presents (recorded for setup). The handshake signature is
@@ -88,7 +76,7 @@ impl ServerCertVerifier for Pin {
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        let fp = sha256(end_entity);
+        let fp = Fingerprint::of(end_entity);
         if let Ok(mut seen) = self.seen.lock() {
             *seen = Some(fp);
         }
@@ -191,7 +179,7 @@ pub async fn login(tls: TlsStream<TcpStream>, user: &str, password: &str) -> Res
 /// A logged-in session with the stored password, over the pinned connection.
 /// If nothing answers on Bridge's port, the Bridge app is opened hidden first.
 pub async fn open(cfg: &MailConfig) -> Result<Session> {
-    let pinned = parse_hex(&cfg.cert_sha256)?;
+    let pinned = cfg.cert_sha256;
     let account = secret::Account::Bridge(cfg.address.clone());
     let password = crate::content::blocking(move || secret::get(&account))
         .await??
@@ -270,7 +258,7 @@ mod tests {
         let issued = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
         let cert = issued.cert.der().clone();
         let key = PrivateKeyDer::Pkcs8(issued.signing_key.serialize_der().into());
-        let fingerprint = sha256(&cert);
+        let fingerprint = Fingerprint::of(&cert);
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let config = rustls::ServerConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()
@@ -330,7 +318,7 @@ mod tests {
         let (port, fingerprint) = fake_bridge(true).await;
         assert!(connect(port, Some(fingerprint)).await.is_ok());
         let (port, _) = fake_bridge(true).await;
-        let err = connect(port, Some([7; 32])).await.unwrap_err();
+        let err = connect(port, Some(Fingerprint([7; 32]))).await.unwrap_err();
         assert!(format!("{err:#}").contains("does not match"), "{err:#}");
     }
 
@@ -372,14 +360,5 @@ mod tests {
         );
         // The typed cue that makes `open` start the Bridge app.
         assert!(err.downcast_ref::<NotListening>().is_some(), "{err:#}");
-    }
-
-    #[test]
-    fn fingerprints_round_trip_through_hex() {
-        let fp = sha256(b"x");
-        assert_eq!(parse_hex(&hex::encode(fp)).unwrap(), fp);
-        assert!(parse_hex("abc").is_err());
-        assert!(parse_hex(&"zz".repeat(32)).is_err());
-        assert!(parse_hex(&format!("+{}", "0".repeat(63))).is_err());
     }
 }
