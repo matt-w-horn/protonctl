@@ -6,9 +6,10 @@
 
 use std::collections::HashMap;
 use std::fs::Metadata;
-use std::path::PathBuf;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use secret_service::EncryptionType;
 use secret_service::blocking::{Item, SecretService};
 
@@ -208,6 +209,146 @@ pub fn cloud_only(_meta: &Metadata) -> bool {
     false
 }
 
+/// `statfs`'s type for tmpfs, a file system in memory and swap.
+const TMPFS_MAGIC: u64 = 0x0102_1994;
+
+/// `$XDG_RUNTIME_DIR`, once it is on tmpfs, only this user can open it, and
+/// every active swap is encrypted or in memory (R10, Q14).
+pub fn memory_dir() -> Result<PathBuf> {
+    let dir = if cfg!(test) {
+        // /dev/shm is tmpfs too, and the tests' environment has no session.
+        let dir = PathBuf::from(format!("/dev/shm/protonctl-test-{}", own_uid()?));
+        std::fs::create_dir_all(&dir)?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        dir
+    } else {
+        std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .context("$XDG_RUNTIME_DIR is not set, so there is no folder in memory for the Drive CLI to write to")?
+    };
+    private_memory(&dir)?;
+    let swaps = std::fs::read_to_string("/proc/swaps").context("cannot read /proc/swaps")?;
+    private_swap(&swaps, Path::new("/sys"), device_of)?;
+    Ok(dir)
+}
+
+/// The user this process runs as: the owner of its own `/proc` entry.
+fn own_uid() -> Result<u32> {
+    Ok(std::fs::metadata("/proc/self")?.uid())
+}
+
+fn private_memory(dir: &Path) -> Result<()> {
+    let meta = std::fs::metadata(dir).with_context(|| format!("cannot read {}", dir.display()))?;
+    ensure!(meta.is_dir(), "{} is not a folder", dir.display());
+    ensure!(
+        meta.uid() == own_uid()?,
+        "{} belongs to another user",
+        dir.display()
+    );
+    // The group's and others' permission bits.
+    let shared = meta.mode() & 0o077;
+    ensure!(
+        shared == 0,
+        "other users can open {} (mode {:o})",
+        dir.display(),
+        meta.mode() & 0o777
+    );
+    let fs = rustix::fs::statfs(dir).with_context(|| format!("cannot read {}", dir.display()))?;
+    ensure!(
+        u64::try_from(fs.f_type) == Ok(TMPFS_MAGIC),
+        "{} is not on tmpfs, a file system in memory",
+        dir.display()
+    );
+    Ok(())
+}
+
+/// The device, as major and minor numbers, that a swap entry lives on.
+fn device_of(name: &Path, kind: &str) -> Result<(u32, u32)> {
+    let meta =
+        std::fs::metadata(name).with_context(|| format!("cannot read {}", name.display()))?;
+    let dev = match kind {
+        "partition" => meta.rdev(),
+        "file" => meta.dev(),
+        other => bail!("swap {} is of the unknown type {other}", name.display()),
+    };
+    Ok((rustix::fs::major(dev), rustix::fs::minor(dev)))
+}
+
+/// Every swap in `/proc/swaps` must be in memory (zram) or on dm-crypt at
+/// some depth below it (LVM on LUKS, say), so the pages of a file read into
+/// tmpfs never reach a disk in clear (R10). `sys` is where sysfs is.
+fn private_swap(
+    swaps: &str,
+    sys: &Path,
+    device_of: impl Fn(&Path, &str) -> Result<(u32, u32)>,
+) -> Result<()> {
+    for line in swaps.lines().skip(1) {
+        let mut fields = line.split_whitespace();
+        let (Some(name), Some(kind)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        let name = PathBuf::from(unescape(name));
+        let (major, minor) = device_of(&name, kind)?;
+        ensure!(
+            private_device(sys, &format!("{major}:{minor}")),
+            "swap {} is not encrypted, so a file read into memory could reach the disk in clear; \
+             encrypt it or use zram (RFC-0001 R10)",
+            name.display()
+        );
+    }
+    Ok(())
+}
+
+/// Whether the block device `dev` ("major:minor") is zram, dm-crypt, or
+/// built only on devices that are.
+fn private_device(sys: &Path, dev: &str) -> bool {
+    let block = sys.join("dev/block").join(dev);
+    let name = std::fs::read_link(&block)
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+    if name.is_some_and(|n| n.starts_with("zram"))
+        || std::fs::read_to_string(block.join("dm/uuid")).is_ok_and(|u| u.starts_with("CRYPT-"))
+    {
+        return true;
+    }
+    let Ok(below) = std::fs::read_dir(block.join("slaves")) else {
+        return false;
+    };
+    let mut any = false;
+    for entry in below.flatten() {
+        let dev =
+            std::fs::read_to_string(sys.join("class/block").join(entry.file_name()).join("dev"));
+        if !dev.is_ok_and(|d| private_device(sys, d.trim())) {
+            return false;
+        }
+        any = true;
+    }
+    any
+}
+
+/// A name from `/proc/swaps`, where a space, tab, newline or backslash is
+/// written as a backslash and three octal digits.
+fn unescape(name: &str) -> String {
+    let mut out = Vec::with_capacity(name.len());
+    let bytes = name.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let code = name
+            .get(i + 1..i + 4)
+            .filter(|_| bytes[i] == b'\\')
+            .and_then(|o| u8::from_str_radix(o, 8).ok());
+        if let Some(c) = code {
+            out.push(c);
+            i += 4;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Run by `scripts/check.sh` in a private D-Bus session with a throwaway
 /// GNOME Keyring, under their own service name.
 #[cfg(test)]
@@ -252,6 +393,97 @@ mod tests {
         secret_set(S, "async", b"x").unwrap();
         assert_eq!(secret_get(S, "async").unwrap().as_deref(), Some(&b"x"[..]));
         assert!(secret_delete(S, "async").unwrap());
+    }
+
+    /// A sysfs tree: zram0 (252:0); sda2 (8:2), a plain partition; dm-0
+    /// (253:0), LUKS on sda3; dm-1 (253:1), LVM on dm-0; dm-2 (253:2), LVM
+    /// on dm-0 and sda2.
+    fn sysfs() -> tempfile::TempDir {
+        let sys = tempfile::tempdir().unwrap();
+        let block = sys.path().join("dev/block");
+        let class = sys.path().join("class/block");
+        std::fs::create_dir_all(sys.path().join("devices/virtual/block/zram0")).unwrap();
+        std::fs::create_dir_all(&block).unwrap();
+        std::os::unix::fs::symlink("../../devices/virtual/block/zram0", block.join("252:0"))
+            .unwrap();
+        for (dev, name, uuid, below) in [
+            ("8:2", "sda2", None, &[][..]),
+            ("253:0", "dm-0", Some("CRYPT-LUKS2-abc-luks"), &["sda3"][..]),
+            ("253:1", "dm-1", Some("LVM-xyz"), &["dm-0"][..]),
+            ("253:2", "dm-2", Some("LVM-xyz2"), &["dm-0", "sda2"][..]),
+        ] {
+            let d = block.join(dev);
+            std::fs::create_dir_all(d.join("slaves")).unwrap();
+            for b in below {
+                std::fs::create_dir_all(d.join("slaves").join(b)).unwrap();
+            }
+            if let Some(uuid) = uuid {
+                std::fs::create_dir_all(d.join("dm")).unwrap();
+                std::fs::write(d.join("dm/uuid"), uuid).unwrap();
+            }
+            std::fs::create_dir_all(class.join(name)).unwrap();
+            std::fs::write(class.join(name).join("dev"), format!("{dev}\n")).unwrap();
+        }
+        std::fs::create_dir_all(class.join("sda3")).unwrap();
+        std::fs::write(class.join("sda3/dev"), "8:3\n").unwrap();
+        sys
+    }
+
+    /// R10: a file read into memory may reach only swap that is encrypted
+    /// or in memory, at every level below it.
+    #[test]
+    fn only_encrypted_or_memory_swap_passes() {
+        let sys = sysfs();
+        let header = "Filename\tType\tSize\tUsed\tPriority\n";
+        let swaps = |rows: &[&str]| format!("{header}{}", rows.join("\n"));
+        let devices = |name: &Path, _: &str| -> Result<(u32, u32)> {
+            Ok(match name.to_str().unwrap() {
+                "/dev/zram0" => (252, 0),
+                "/dev/sda2" => (8, 2),
+                "/dev/dm-0" => (253, 0),
+                "/swap file" => (253, 1),
+                "/dev/dm-2" => (253, 2),
+                other => panic!("{other}"),
+            })
+        };
+        let ok = |rows: &[&str]| private_swap(&swaps(rows), sys.path(), devices).is_ok();
+        assert!(ok(&[]));
+        assert!(ok(&["/dev/zram0 partition 8G 0 100"]));
+        assert!(ok(&["/dev/dm-0 partition 8G 0 -2"]));
+        // A file on LVM on LUKS; its name holds an escaped space.
+        assert!(ok(&[
+            "/swap\\040file file 8G 0 -2",
+            "/dev/zram0 partition 8G 0 100"
+        ]));
+        assert!(!ok(&["/dev/sda2 partition 8G 0 -2"]));
+        assert!(!ok(&[
+            "/dev/zram0 partition 8G 0 100",
+            "/dev/sda2 partition 8G 0 -2"
+        ]));
+        // LVM across an encrypted and a plain device.
+        assert!(!ok(&["/dev/dm-2 partition 8G 0 -2"]));
+    }
+
+    #[test]
+    fn swap_names_are_unescaped() {
+        assert_eq!(unescape("/a\\040b\\134c"), "/a b\\c");
+        assert_eq!(unescape("/plain"), "/plain");
+        assert_eq!(unescape("/end\\04"), "/end\\04");
+    }
+
+    /// The folder must be on tmpfs and private to this user.
+    #[test]
+    fn the_memory_folder_must_be_tmpfs_and_private() {
+        let dir = memory_dir().unwrap();
+        private_memory(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = private_memory(&dir).unwrap_err().to_string();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(err.contains("other users can open"), "{err}");
+        let disk = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        std::fs::set_permissions(disk.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let err = private_memory(disk.path()).unwrap_err().to_string();
+        assert!(err.contains("not on tmpfs"), "{err}");
     }
 
     #[test]

@@ -104,8 +104,9 @@ model. Choose one:
   opaque handles, and digests are keyed. Each result has an `entities`
   table that gives each alias's type, hints such as `external`, and a
   `ref`, which a query can use in place of the name (`from:ref:REF`).
-  Nothing is saved to disk, so a Drive file that is only in the cloud
-  cannot be read yet, and images come back as a type and a reason.
+  Nothing is saved to disk, so on a Mac a Drive file that is only in the
+  cloud cannot be read yet (on Linux it is read through memory), and
+  images come back as a type and a reason.
 - **Off** (`setup privacy --off`): results as they are, names included.
   It asks first, on a terminal.
 
@@ -246,7 +247,11 @@ The steps above apply, with these differences:
   Then run `systemctl --user enable --now protonmail-bridge`.
 - **Drive** goes through the CLI only, since there is no Proton Drive app
   for Linux, so search is off. `setup drive` pins the CLI's SHA-256; after
-  you update the CLI, run `setup drive` again to pin the new one.
+  you update the CLI, run `setup drive` again to pin the new one. In
+  aliases mode the CLI downloads a file it reads into `$XDG_RUNTIME_DIR`,
+  which must be in memory (tmpfs) and yours alone, and any swap must be
+  encrypted or zram, so the file never reaches a disk in clear; `doctor`
+  checks this.
 - **Not yet on Linux**: the text of PDF, Word, RTF and OpenDocument files
   (Phase P4).
 

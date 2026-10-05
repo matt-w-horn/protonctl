@@ -136,3 +136,10 @@ pub fn cloud_storage() -> Option<PathBuf> {
 pub fn cloud_only(meta: &Metadata) -> bool {
     meta.st_flags() & SF_DATALESS != 0
 }
+
+/// The per-process RAM disk is M2.8's work on a Mac (Q14).
+pub fn memory_dir() -> Result<PathBuf> {
+    Err(anyhow!(
+        "aliases mode reads a file through the Drive CLI only into a RAM disk, which is not built yet (RFC-0001 M2.8)"
+    ))
+}

@@ -890,7 +890,7 @@ impl Server {
         .await
     }
 
-    /// Read a Proton Drive file's text into the conversation, a page at a time; takes a fileId. Reads text files, the text of PDFs, and Word, RTF and OpenDocument documents, up to 64 MiB; names, addresses, numbers and links in the text come back as aliases. Each call returns up to maxChars characters (default 20,000) from offset (default 0), with `totalChars` and `nextOffset`; while `nextOffset` is not null, call again with offset set to it to read on. Images, and PDFs with no text layer, return a `reason` instead of their content. A file that is only in the cloud cannot be read in this mode; the user can open it in Proton.
+    /// Read a Proton Drive file's text into the conversation, a page at a time; takes a fileId. Reads text files, the text of PDFs, and Word, RTF and OpenDocument documents, up to 64 MiB; names, addresses, numbers and links in the text come back as aliases. Each call returns up to maxChars characters (default 20,000) from offset (default 0), with `totalChars` and `nextOffset`; while `nextOffset` is not null, call again with offset set to it to read on. Images, and PDFs with no text layer, return a `reason` instead of their content. A file that is only in the cloud is fetched through the official Proton Drive CLI into memory, where this computer allows that; where it does not, the call says so, and the user can open the file in Proton.
     #[tool(
         name = "read_file_content",
         annotations(

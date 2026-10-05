@@ -868,9 +868,11 @@ the reference.
   Any other error gives `unavailable` for the tool's service. Off mode's
   text is unchanged.
 - **No disk in aliases mode.** The call runs inside a task-local scope in
-  which `content::downloads()` refuses, so no file is saved. Until M2.8's
-  RAM disk, a cloud-only Drive file cannot be read in aliases mode, and
-  without the Proton Drive app no Drive file can.
+  which `content::downloads()` refuses, so no file is saved. A Drive file
+  read through the CLI goes into `content::memory_folder()` instead: on
+  Linux a folder under `$XDG_RUNTIME_DIR` (M2.8); on a Mac, until M2.8's
+  RAM disk, it fails as `DiskForbidden`, so a cloud-only file cannot be
+  read there in aliases mode.
 - **The process dictionary (Q22).** Correspondents' display names come
   from the From, To and Cc headers of All Mail, and attendees' and
   organizers' names from the calendars that can be read. Both sources are

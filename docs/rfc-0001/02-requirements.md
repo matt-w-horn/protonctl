@@ -79,7 +79,8 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   folder or the CLI into memory, and leaves in a tool result.
   `proton-drive` cannot stream a file to stdout (Q14), so it downloads into
   a RAM disk that protonctl creates per process, readable only by the
-  user, and detaches at exit; M2.8 checks that the disk honours ownership,
+  user, and detaches at exit (on Linux, `$XDG_RUNTIME_DIR`, checked as
+  M2.8 says); M2.8 checks that the disk honours ownership,
   stays out of Finder and Spotlight, and that its pages reach only
   encrypted swap, and a read that cannot get such a disk fails. The export folder, the download folder,
   `download_file`, `export_drive_manifest`, the CLI's `drive manifest`,

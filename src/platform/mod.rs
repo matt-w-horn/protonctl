@@ -77,3 +77,9 @@ pub fn cloud_storage() -> Option<PathBuf> {
 pub fn cloud_only(meta: &Metadata) -> bool {
     imp::cloud_only(meta)
 }
+
+/// A folder in memory that only this user can open, where aliases mode
+/// lets the Drive CLI write a file it reads (R10, Q14), or why there is none.
+pub fn memory_dir() -> Result<PathBuf> {
+    imp::memory_dir()
+}

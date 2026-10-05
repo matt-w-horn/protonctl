@@ -154,7 +154,7 @@ flowchart TB
 | Converters | R21 | `osascript` (PDFKit), `textutil`, Vision | poppler-utils (`pdftotext`, `pdftoppm`); pandoc or LibreOffice for documents; Tesseract for OCR; or Rust crates (`pdf-extract`, `lopdf`) inside the sandboxed helper | external tools when installed; otherwise the result says the file cannot be read on this machine, and why | Q34 |
 | Sandbox | R21 | a `sandbox-exec` profile (Q13) | Landlock (files from Linux 5.13, network from 6.7) through the `landlock` crate, with a seccomp filter; or bubblewrap | Landlock and seccomp in `protonctl convert` | Q34 |
 | User presence | R18 | LocalAuthentication: Touch ID or the login password | polkit (`pkcheck --allow-user-interaction`, needs an authentication agent, so a desktop session); fprintd; a FIDO2 security key's touch (works on both systems); none | polkit where an agent runs; otherwise no `reveal_*` tools | Q35 |
-| Content off disk | R10, Q14 | a RAM disk | `memfd_create`, which never touches a filesystem; `/dev/shm`; `$XDG_RUNTIME_DIR`, a per-user memory file system | `$XDG_RUNTIME_DIR`, since the CLI writes into a folder, which a `memfd_create` file is not (Q14) | Q14 |
+| Content off disk | R10, Q14 | a RAM disk | `memfd_create`, which never touches a filesystem; `/dev/shm`; `$XDG_RUNTIME_DIR`, a per-user memory file system | `$XDG_RUNTIME_DIR`, since the CLI writes into a folder, which a `memfd_create` file is not (Q14); used only when it is tmpfs, the user's own with mode 0700, and every swap is zram or dm-crypt (built 2026-10-05) | Q14 |
 | Download expiry | R10 | the time in the folder's name, since MP1 | the same | the time in the name (built) | MP1 |
 | Paths | | `~/Library/Caches` | `$XDG_CACHE_HOME`; the config path is already XDG | XDG | |
 

@@ -159,7 +159,7 @@ runs.
 | I12 | In aliases mode no result holds a Proton ID, `Message-Id`, UID, raw digest or local path (R16, R17) | aliases | field policies; an unlisted string field is dropped and named in `dropped` | leak test with planted IDs; field coverage test | planned |
 | I13 | Identifiers are deterministic under one key, and nothing maps them back on disk (R14, principle 8) | aliases | HMAC and AES-SIV from HKDF subkeys | stability and round-trip tests | planned |
 | I14 | Raw content in aliases mode needs fresh user presence, for one item, with a prompt protonctl writes (R18, R19) | aliases | `Presence`, `Approvals`, the prompt's form | user-presence tests with an injectable checker | planned (Phase 3) |
-| I15 | In aliases mode protonctl writes no content to disk (R10) | aliases | no download or export folder; a RAM disk for cloud-only Drive files (Q14) | the no-disk test | planned |
+| I15 | In aliases mode protonctl writes no content to disk (R10) | aliases | no download or export folder; a RAM disk for cloud-only Drive files (Q14), on Linux `$XDG_RUNTIME_DIR` when it is tmpfs, private, and every swap is encrypted | the no-disk test | built on Linux; the Mac's RAM disk is planned (M2.8) |
 | I16 | Logs and panics carry no content (R25) | both | WARN-level logs; a panic hook | the stderr test; a planted panic | logs built; the panic hook planned |
 | I18 | A feature on Linux meets the same requirement as on macOS, or is absent ([section 11](11-platforms.md)) | both | tools registered per platform; `get_status` names what is absent and why | a surface snapshot per platform and mode | planned (Phase P) |
 | I17 | Converters reach no network, Keychain or file writes (R21) | both | a sandbox profile | the converter sandbox test | planned (Phase 4, Q13) |

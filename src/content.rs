@@ -8,6 +8,7 @@
 use std::fmt::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, bail};
@@ -222,8 +223,9 @@ tokio::task_local! {
 
 /// Run `call` as aliases mode does: the download folder refused, since
 /// every write of content goes through `downloads()`, so this one check
-/// covers a cloud-only Drive read and a saved attachment alike; and no
-/// image made, since none would be returned.
+/// covers a saved attachment and a Drive file alike, which reaches the
+/// Drive CLI only through `memory_folder`; and no image made, since none
+/// would be returned.
 pub async fn restricted<F: Future>(call: F) -> F::Output {
     RESTRICTED.scope(true, call).await
 }
@@ -386,10 +388,33 @@ fn made_at(name: &str) -> Option<SystemTime> {
     UNIX_EPOCH.checked_add(Duration::from_secs(seconds.parse().ok()?))
 }
 
-/// Delete this process's download folder; every command ends with this. A
-/// failure is reported, since the folder can hold message and file content.
+/// This process's folder in memory, once a read has made it.
+static MEMORY: OnceLock<PathBuf> = OnceLock::new();
+
+/// A new folder for one file the Drive CLI fetches in aliases mode, in
+/// memory that only this user can open (R10, Q14). The caller deletes it
+/// once read; what a cancelled read leaves goes with `remove_downloads`.
+/// Where there is no such memory, the error is `DiskForbidden`, with why.
+pub fn memory_folder() -> Result<PathBuf> {
+    let base = crate::platform::memory_dir()
+        .map_err(|e| anyhow::Error::new(DiskForbidden).context(format!("{e:#}")))?;
+    let dir = MEMORY.get_or_init(|| base.join(format!("protonctl-{}", std::process::id())));
+    std::fs::create_dir_all(dir)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    Ok(tempfile::Builder::new()
+        .prefix("drive-")
+        .tempdir_in(dir)?
+        .keep())
+}
+
+/// Delete this process's download folder and its folder in memory; every
+/// command ends with this. A failure is reported, since either can hold
+/// message and file content.
 pub fn remove_downloads() {
     remove(&downloads_path());
+    if let Some(dir) = MEMORY.get() {
+        remove(dir);
+    }
 }
 
 fn remove(dir: &Path) {

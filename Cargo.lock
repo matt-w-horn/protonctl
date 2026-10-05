@@ -1605,6 +1605,7 @@ dependencies = [
  "ring",
  "rmcp",
  "rrule",
+ "rustix",
  "rustls",
  "schemars",
  "secrecy",

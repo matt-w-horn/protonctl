@@ -762,8 +762,9 @@ impl Drive {
 
     /// The bytes of the file `locate` found, at most `MAX_SOURCE`: from this
     /// Mac when they are here, else through the CLI into the download folder,
-    /// whose copy goes as soon as it is read. Read off the async threads,
-    /// where a File Provider stall cannot stop the R8 time limit.
+    /// or in aliases mode a folder in memory, whose copy goes as soon as it
+    /// is read. Read off the async threads, where a File Provider stall
+    /// cannot stop the R8 time limit.
     async fn bytes(&self, local: Option<PathBuf>, real: &str, cli: &Cli) -> Result<Vec<u8>> {
         // A file that is not on this Mac comes through the CLI, never the app's
         // File Provider, whose downloads on demand can stall (RFC principle 5).
@@ -1283,12 +1284,20 @@ impl Drive {
 }
 
 /// Download the file at the real Drive path `real` through the CLI into a
-/// new folder in this process's download folder, or into `dest`, and return
-/// where it is.
+/// new folder in this process's download folder, or in aliases mode in
+/// memory (R10), or into `dest`, and return where it is.
 async fn fetch(cli: &Cli, real: &str, dest: Option<&Path>) -> Result<PathBuf> {
     let Some(dest) = dest else {
-        let dir = download_folder("drive")?;
-        return download(cli, real, &dir).await;
+        let dir = if crate::content::disk_allowed() {
+            download_folder("drive")?
+        } else {
+            crate::content::memory_folder()?
+        };
+        let got = download(cli, real, &dir).await;
+        if got.is_err() {
+            std::fs::remove_dir_all(&dir).ok();
+        }
+        return got;
     };
     // Through a new folder inside `dest`, deleted when this returns, so the
     // move is a rename on one volume and never replaces a file already there.
@@ -3341,6 +3350,67 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
             folder.starts_with(crate::content::downloads().unwrap()),
             "{argv}"
         );
+        assert!(!folder.exists(), "{} is still there", folder.display());
+    }
+
+    /// R10 and Q14: in aliases mode the CLI downloads into memory that only
+    /// this user can open, never the download folder, and the copy goes once
+    /// read. A Mac has no such memory until M2.8, so there the read refuses.
+    #[tokio::test]
+    async fn an_aliases_mode_read_fetches_into_memory_and_leaves_nothing() {
+        let bin = tempfile::tempdir().unwrap();
+        let cli = fake_cli(bin.path());
+        answer(
+            bin.path(),
+            "info",
+            "/notes.txt",
+            &node("notes.txt", Some(5)),
+        );
+        let req = ReadReq {
+            path: "/notes.txt".into(),
+            ..Default::default()
+        };
+        let d = cli_drive(&[]);
+        let read = crate::content::restricted(d.read_file_content(&req, &cli)).await;
+        if cfg!(target_os = "macos") {
+            let err = read.unwrap_err();
+            assert!(
+                err.chain()
+                    .any(|c| c.downcast_ref::<crate::content::DiskForbidden>().is_some()),
+                "{err:#}"
+            );
+            return;
+        }
+        assert_eq!(read.unwrap().json["content"], "hello");
+        let argv = std::fs::read_to_string(bin.path().join("argv.txt")).unwrap();
+        let folder = Path::new(argv.lines().last().unwrap());
+        assert!(
+            folder.starts_with(crate::platform::memory_dir().unwrap()),
+            "{argv}"
+        );
+        assert!(!folder.exists(), "{} is still there", folder.display());
+    }
+
+    /// A download that fails leaves no folder behind, in memory or on disk.
+    #[tokio::test]
+    async fn a_failed_fetch_leaves_no_folder() {
+        let bin = tempfile::tempdir().unwrap();
+        let cli = fake_cli(bin.path());
+        answer(
+            bin.path(),
+            "info",
+            "/notes.txt",
+            &node("notes.txt", Some(5)),
+        );
+        std::fs::write(bin.path().join("fail"), "").unwrap();
+        let req = ReadReq {
+            path: "/notes.txt".into(),
+            ..Default::default()
+        };
+        let d = cli_drive(&[]);
+        assert!(d.read_file_content(&req, &cli).await.is_err());
+        let argv = std::fs::read_to_string(bin.path().join("argv.txt")).unwrap();
+        let folder = Path::new(argv.lines().last().unwrap());
         assert!(!folder.exists(), "{} is still there", folder.display());
     }
 

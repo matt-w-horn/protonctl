@@ -184,8 +184,14 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
   nothing, and a non-text attachment returns its `reason` alone.
 - M2.8 Cloud-only reads through a per-process RAM disk, since the CLI
   cannot write to stdout (Q14), with the checks Q14 lists.
-  Exit: the no-disk test for a cloud-only read. To do, on a Mac: until
-  then aliases mode refuses a cloud-only read with `invalid_argument`.
+  Exit: the no-disk test for a cloud-only read. Linux built 2026-10-05:
+  the CLI writes into a new folder under `$XDG_RUNTIME_DIR`, used only
+  when it is on tmpfs, owned by the user with mode 0700, and every active
+  swap is zram or on dm-crypt at every level below it; the folder goes
+  once read, after a failed download, and at exit, and `doctor` checks it
+  in aliases mode. The no-disk test passes on Linux, and fails when the
+  read goes to the download folder. To do, on a Mac: until then aliases
+  mode refuses a cloud-only read with `invalid_argument`.
 - M2.9 Logs: a panic hook that prints a fixed line, in both modes; keyed
   identifiers in every log line in aliases mode. Exit: the logs and panic
   tests. Done 2026-10-04: the hook prints the code location and never the

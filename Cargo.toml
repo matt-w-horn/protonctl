@@ -46,6 +46,9 @@ security-framework = "3"
 # RFC Q31. The tokio runtime is ours already; crypto-rust encrypts each
 # secret on the D-Bus session with a pure-Rust Diffie-Hellman exchange.
 secret-service = { version = "5.2", default-features = false, features = ["rt-tokio-crypto-rust"] }
+# statfs and device numbers for the memory folder's checks (R10, Q14); in
+# the tree already, through tempfile.
+rustix = { version = "1", default-features = false, features = ["fs", "std"] }
 
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }

@@ -540,6 +540,14 @@ async fn doctor(app: &App) -> bool {
                 .await
                 .map(|v| format!("{} {v}", app.drive_cli.path().display())),
         );
+        // Every Linux read goes through the CLI; a Mac's waits for M2.8.
+        if cfg!(target_os = "linux") && app.privacy.started() == Some(privacy::Mode::Aliases) {
+            check(
+                "drive reads in aliases mode",
+                platform::memory_dir()
+                    .map(|d| format!("through {}, in memory and private", d.display())),
+            );
+        }
     }
     for c in &app.calendars.configs {
         check(

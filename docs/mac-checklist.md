@@ -73,7 +73,10 @@ branches have never run.
 
 1. M2.8: cloud-only Drive reads in aliases mode through a per-process RAM
    disk (Q14). Until then they give `invalid_argument`, and without the
-   Proton Drive app no Drive file can be read in aliases mode.
+   Proton Drive app no Drive file can be read in aliases mode. Build it as
+   `memory_dir` in `src/platform/macos.rs`, which now returns that error;
+   `content::memory_folder` and the Drive read already use it, as the
+   Linux version does.
 2. Q12: a self-signed code-signing certificate, so Keychain approvals
    survive rebuilds.
 
