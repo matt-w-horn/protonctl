@@ -16,7 +16,8 @@ allow = ["Apache-2.0", "BSD-3-Clause", "ISC", "MIT", "Unicode-3.0", "Zlib"]
 confidence-threshold = 0.9
 
 [licenses.private]
-# protonctl itself is publish = false and carries no licence.
+# protonctl's own licence is Apache-2.0. It is publish = false, so it is
+# not checked here.
 ignore = true
 
 [bans]

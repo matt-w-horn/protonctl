@@ -64,8 +64,11 @@ Calendar fetch through `/usr/bin/curl`, not an HTTP crate. Bridge is opened
 on demand when nothing answers on its port (Q2).
 
 **Packaging.** `scripts/install.sh` (build, sign, install; Q12), then one
-`claude mcp add` and one `claude_desktop_config.json` entry. A Claude Code
-plugin only if a skill is added later; MCPB bundles add nothing locally.
+`claude mcp add` and one `claude_desktop_config.json` entry. protonctl is
+also a Claude Code plugin, because Anthropic's plugin directory accepts a
+local MCP server only inside a plugin: a connector must be a remote
+`https://` server, and MCP Bundles are no longer accepted. The plugin's
+launcher, `scripts/serve`, starts the installed binary (Q36).
 Each rebuild changes the ad-hoc signature, so the Keychain asks again for
 every item, and approving that from habit would also approve a replaced
 binary. Only a stable signing identity stops the prompt after a rebuild,

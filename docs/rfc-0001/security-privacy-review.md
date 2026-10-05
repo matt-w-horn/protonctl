@@ -234,7 +234,7 @@ reopen it.
 | Tokenize every entity, public ones included (Q7) | no list of who is public to maintain or leak | "a minister" becomes an alias too | the optional allowlist (Phase 7) |
 | No content on disk in aliases mode | nothing to clean up or back up | no exports, no `download_file` in that mode | a use for files that off mode cannot serve |
 | Calendar through a share link (Q1, Q9) | calendar at all, with no Proton API | Proton decrypts it server-side | Proton ships a calendar API |
-| Login keychain items | works with an ad-hoc signed binary | any program the user approves can read them | protonctl is distributed to others: an Apple Developer ID and the data-protection keychain (Q12) |
+| Login keychain items | works without an Apple Developer ID, with the self-signed identity of Q12 | any program the user approves can read them | a built binary is distributed: an Apple Developer ID and the data-protection keychain; the directory listing distributes source, which each user builds and signs (Q12, Q36) |
 | Fixed fault codes in aliases mode | errors cannot carry names or paths | less detail for the model | `doctor` and `--raw` give the user detail; revisit if the model is often stuck |
 | Linux through a platform module, with traits when needed (Q30) | builds and tests in containers; Linux users; fakes where tests need them | two implementations of each service to keep in step; some Linux mechanisms are weaker (the Secret Service, presence without Touch ID) | a feature that cannot meet its requirement on Linux is absent there, not weaker (I18) |
 | Local models for Phases 5 to 7 | names in free text, summaries | install size, native code, a runtime to choose (Q23) | Q23 |

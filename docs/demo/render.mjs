@@ -1,4 +1,7 @@
 // Renders storyboard.html to protonctl-demo.mp4 and protonctl-demo.gif.
+// The GIF is committed; the MP4 is not, because Anthropic's plugin directory
+// stops validating at any file of 5 MiB or more (RFC-0001 Q36), so
+// publish the MP4 elsewhere and link it from the README.
 //
 // Needs Node, ffmpeg with libx264, and these packages in DEMO_DEPS, a folder
 // outside the repository that holds node_modules:
@@ -59,7 +62,9 @@ await done;
 await browser.close();
 
 const gif = path.join(here, 'protonctl-demo.gif');
-const scale = 'fps=12,scale=960:-1:flags=lanczos';
+// 8 frames per second at 720 pixels keeps the GIF under 5 MiB (4.1 MiB on
+// 2026-10-05); 12 at 720 measured 5.5 MiB.
+const scale = 'fps=8,scale=720:-1:flags=lanczos';
 const palette = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'protonctl-demo-')), 'palette.png');
 const run = args => {
   const r = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', ...args], { stdio: 'inherit' });

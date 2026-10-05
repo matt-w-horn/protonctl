@@ -39,6 +39,7 @@
 | Q33 | Drive on Linux: the CLI, its check, no app folder | decided 2026-10-04 |  |
 | Q34 | Converters and their sandbox on Linux | decided 2026-10-04 |  |
 | Q35 | User presence on Linux | decided 2026-10-04 |  |
+| Q36 | Listing in Anthropic's plugin directory | decided 2026-10-05 |  |
 
 ## Decisions and questions
 
@@ -137,6 +138,11 @@
     `codesign` signs: Always Allow there would let any process sign a
     swapped binary with no prompt, since any process can run `codesign`.
     The premise was checked in a throwaway keychain ([Appendix A](appendix-a-phase-0.md#signing-q12)).
+    Read again on 2026-10-05 for the plugin directory listing (Q36): the
+    listing distributes source, not a binary, and `scripts/install.sh`
+    makes the identity on each user's own Mac, so a swapped binary meets a
+    Keychain prompt for each user. The Apple Developer ID waits until a
+    built binary is distributed.
   - Q14: `proton-drive` cannot write a download to stdout: its
     `filesystem download` takes remote paths and one local folder, and
     nothing else (the CLI's source, `cli/src/commands/fileSystem/commandFileSystemDownload.ts`,
@@ -219,6 +225,32 @@
   - Q35: polkit (`pkcheck --allow-user-interaction`) where an
     authentication agent runs, as in a desktop session; elsewhere Linux
     has no `reveal_*` tools.
+
+- Q36, decided 2026-10-05 by the maintainer: protonctl is listed in
+  Anthropic's plugin directory as a Claude Code plugin
+  ([section 3, Packaging](03-options.md)). The plugin is the repository
+  root. Its `plugin.json` declares one MCP server, which runs
+  `scripts/serve`, a launcher that starts
+  `~/.cargo/bin/protonctl serve`; the plugin holds no binary and no
+  skills.
+  - The name: the plugin's `name` is `protonctl`.
+  - The licence: Apache-2.0.
+  - The files: the directory stops validating a plugin folder that holds
+    any file of 5 MiB or more, and holds for a reviewer any file other
+    than an image or a font of 256 KiB or more. So the demo GIF is
+    rendered at 8 frames per second and 720 pixels wide (4.1 MiB), and
+    the MP4 stays out of the tree. `scripts/plugin-check.sh`, which
+    `scripts/check.sh` runs, checks those limits on the index, that the
+    plugin's version equals the crate's, and `claude plugin validate`.
+  - The binary: users install protonctl themselves with `scripts/install.sh`,
+    which builds it from source and signs it with a self-signed identity
+    made on their own Mac (Q12). A Developer ID package is deferred. Each
+    user builds and signs their own binary, so Q12's property holds for
+    each user: a binary that something else swaps in meets a Keychain
+    prompt. Neither this nor a Developer ID package covers the
+    data-protection keychain.
+  - Releases: the directory tracks a `release` branch, fast-forwarded to a
+    tagged commit on `main` for each release.
 
 - Open, to check before the phase that depends on each:
   - Q13 (Phase 4): `sandbox-exec` is marked deprecated in its man page.
