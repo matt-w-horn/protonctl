@@ -219,6 +219,50 @@ const READER_READS: [&str; 7] = [
     "/var/cache/fontconfig",
 ];
 
+/// System calls a reader never needs, refused by number: a new socket;
+/// `io_uring`, whose requests seccomp cannot see; and every change to a
+/// file's metadata (mode, owner, times, extended attributes) or length by
+/// path, which Landlock does not cover (truncation only from Linux 6.2),
+/// so a reader cannot loosen the mode of a file it cannot open.
+fn refused_calls() -> Vec<i64> {
+    /// The same on every architecture: calls added since Linux 5.1 share
+    /// their numbers, and libc does not name these everywhere yet.
+    const FCHMODAT2: i64 = 452;
+    const SETXATTRAT: i64 = 463;
+    const REMOVEXATTRAT: i64 = 466;
+    let mut calls = vec![
+        libc::SYS_socket,
+        libc::SYS_io_uring_setup,
+        libc::SYS_fchmod,
+        libc::SYS_fchmodat,
+        FCHMODAT2,
+        libc::SYS_fchown,
+        libc::SYS_fchownat,
+        libc::SYS_utimensat,
+        libc::SYS_setxattr,
+        libc::SYS_lsetxattr,
+        libc::SYS_fsetxattr,
+        SETXATTRAT,
+        libc::SYS_removexattr,
+        libc::SYS_lremovexattr,
+        libc::SYS_fremovexattr,
+        REMOVEXATTRAT,
+        libc::SYS_truncate,
+    ];
+    // x86_64 also keeps the older calls that aarch64 replaced with the
+    // `*at` forms above.
+    #[cfg(target_arch = "x86_64")]
+    calls.extend([
+        libc::SYS_chmod,
+        libc::SYS_chown,
+        libc::SYS_lchown,
+        libc::SYS_utime,
+        libc::SYS_utimes,
+        libc::SYS_futimesat,
+    ]);
+    calls
+}
+
 /// The x32 ABI's mark on an `x86_64` system call number.
 const X32_SYSCALL_BIT: i64 = 0x4000_0000;
 
@@ -251,7 +295,7 @@ pub fn sandbox() -> Result<()> {
         status.ruleset != RulesetStatus::NotEnforced,
         "this kernel does not enforce Landlock, which the document readers need (RFC-0001 R21)"
     );
-    let mut calls = vec![libc::SYS_socket, libc::SYS_io_uring_setup];
+    let mut calls = refused_calls();
     // The filter matches call numbers exactly, and on x86_64 a kernel that
     // enables the x32 ABI also takes each call with this bit set, which the
     // check of the architecture does not catch.
@@ -637,6 +681,19 @@ mod tests {
         denied("a read of /etc", std::fs::read("/etc/hostname").map(drop));
         denied("a read of /proc", std::fs::read("/proc/1/status").map(drop));
         denied("a write to /usr", std::fs::write("/usr/probe", "x"));
+        // Landlock leaves a file's metadata alone; seccomp refuses it.
+        denied(
+            "a chmod of the user's file",
+            std::fs::set_permissions(before.path(), std::fs::Permissions::from_mode(0o644)),
+        );
+        let (uid, gid) = {
+            let m = before.as_file().metadata().unwrap();
+            (m.uid(), m.gid())
+        };
+        denied(
+            "a chown of the user's file",
+            std::os::unix::fs::chown(before.path(), Some(uid), Some(gid)),
+        );
         // What a reader needs still works.
         std::fs::read("/etc/ld.so.cache").unwrap();
         assert!(

@@ -90,6 +90,39 @@ fn each_reader_runs_in_its_sandbox() {
     assert!(convert(&["check"], b"").status.success());
 }
 
+/// The reader itself runs confined: `convert` becomes `pdftotext` in the
+/// same process, which then holds a seccomp filter and no new privileges,
+/// the marks `sandbox()` leaves (R21). Read from /proc while the reader
+/// waits on stdin.
+#[test]
+fn the_reader_holds_the_sandbox() {
+    let mut child = protonctl()
+        .args(["convert", "pdf-text"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let proc = PathBuf::from(format!("/proc/{}", child.id()));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::fs::read_link(proc.join("exe")).ok() != Some(PathBuf::from("/usr/bin/pdftotext")) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the reader never started"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let status = std::fs::read_to_string(proc.join("status")).unwrap();
+    drop(child.stdin.take());
+    child.wait().unwrap();
+    for mark in ["Seccomp:\t2", "NoNewPrivs:\t1"] {
+        assert!(
+            status.lines().any(|l| l == mark),
+            "no {mark:?} in\n{status}"
+        );
+    }
+}
+
 /// A damaged PDF is the reader's failure, which the server reports as an
 /// unreadable file, and not the sandbox's, which it reports as an error.
 #[test]
