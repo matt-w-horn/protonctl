@@ -437,6 +437,45 @@ mod tests {
         assert!(unpad(vec![1, 0, 0]).is_err());
     }
 
+    proptest::proptest! {
+        /// R15, R16: any value's ref, and any ID's handle, opens to that
+        /// value under its key, and is refused with one byte changed, under
+        /// another key, or as another kind of handle.
+        #[test]
+        fn any_ref_or_handle_opens_to_its_value_and_nothing_else(
+            value in "\\PC{1,80}",
+            at in proptest::prelude::any::<proptest::sample::Index>(),
+        ) {
+            let (k, other) = (keys(1), keys(2));
+            let changed = |s: &str| {
+                let mut b = s.as_bytes().to_vec();
+                let i = at.index(b.len());
+                b[i] = if b[i] == b'A' { b'B' } else { b'A' };
+                String::from_utf8(b).unwrap()
+            };
+            let reference = k.reference(EntityType::Person, &value);
+            proptest::prop_assert_eq!(k.open_ref(&reference), Ok((EntityType::Person, value.clone())));
+            proptest::prop_assert!(other.open_ref(&reference).is_err());
+            proptest::prop_assert!(k.open_ref(&changed(&reference)).is_err());
+            for kind in [ItemKind::Message, ItemKind::Thread, ItemKind::Event, ItemKind::DrivePath] {
+                let handle = k.handle(kind, &value);
+                proptest::prop_assert_eq!(k.open_handle(kind, &handle), Ok(value.clone()));
+                proptest::prop_assert!(other.open_handle(kind, &handle).is_err());
+                proptest::prop_assert!(k.open_handle(kind, &changed(&handle)).is_err());
+                let another = if kind == ItemKind::Message { ItemKind::Thread } else { ItemKind::Message };
+                proptest::prop_assert!(k.open_handle(another, &handle).is_err());
+            }
+        }
+
+        /// Text that no key sealed opens as nothing.
+        #[test]
+        fn garbage_opens_as_nothing(text in "[A-Za-z0-9_-]{0,90}") {
+            let k = keys(1);
+            proptest::prop_assert!(k.open_ref(&text).is_err());
+            proptest::prop_assert!(k.open_handle(ItemKind::DrivePath, &text).is_err());
+        }
+    }
+
     #[test]
     fn digests_are_keyed() {
         let k = keys(1);

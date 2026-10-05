@@ -165,6 +165,13 @@ mod tests {
         // In Devanagari the marks are letters.
         assert_ne!(name("कमल"), name("कमला"));
         assert_ne!(name("Chen, Alice, Bob"), name("Alice Chen"));
+        // Section 7's cases: honorifics that name different people, a
+        // generational suffix, and a Thai tone mark, which is a letter's
+        // part, not an accent.
+        assert_ne!(name("M. Chen"), name("Mme Chen"));
+        assert_ne!(name("Mr Chen"), name("Ms Chen"));
+        assert_ne!(name("John Smith Sr."), name("John Smith"));
+        assert_ne!(name("\u{0E01}\u{0E32}"), name("\u{0E01}\u{0E48}\u{0E32}"));
     }
 
     #[test]

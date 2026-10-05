@@ -1732,6 +1732,31 @@ mod tests {
         eprint!("{said}");
     }
 
+    /// R17: an intact file's keyed local SHA-1 equals its keyed claim,
+    /// whatever case the claim's hex is in, and one changed byte makes
+    /// them differ, so Claude can still compare them.
+    #[test]
+    fn keyed_digests_still_compare() {
+        let file = b"Lease draft, version 3".to_vec();
+        let claim = crate::digest::bytes(&file).sha1.to_uppercase();
+        let keyed = |bytes: &[u8]| {
+            let out = run_as(
+                Tool::GetFileMetadata,
+                None,
+                &Names::default(),
+                json!({ "sha1": crate::digest::bytes(bytes).sha1, "claimedSha1": claim }),
+            );
+            (out["sha1"].clone(), out["claimedSha1"].clone())
+        };
+        let (local, claimed) = keyed(&file);
+        assert!(local.is_string() && !local.as_str().unwrap().contains(&claim[..8].to_lowercase()));
+        assert_eq!(local, claimed);
+        let mut changed = file.clone();
+        changed[0] ^= 1;
+        let (local, claimed) = keyed(&changed);
+        assert_ne!(local, claimed);
+    }
+
     #[test]
     fn a_result_over_the_cap_is_refused() {
         let big = json!({ "content": "word ".repeat(CAP / 4) });

@@ -65,13 +65,6 @@ maintainer.
   form and per entity type, what came back raw, in part or whole, and
   what was given two aliases. Each fix of B15 to B20 must move its
   number.
-- T16 (here) The rest of the identifier tests that section 7 plans:
-  property tests that any value's `ref` and any ID's handle open to that
-  value, and that a changed byte, another key or garbage is refused (R15,
-  R16); the canonical cases with no test (a Thai mark, "M. Chen" and
-  "Mme Chen", "Mr Chen" and "Ms Chen", "John Smith Sr." and "John
-  Smith"); and an intact file's keyed local SHA-1 equal to its keyed
-  claim, with one changed byte making them differ (R17).
 - T18 (here) `scripts/live-check.py` in aliases mode does not check phone
   numbers, that every `entities` entry has a `ref`, or that a second
   server run gives the same aliases for the same search, as section 7

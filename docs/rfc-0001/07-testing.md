@@ -451,25 +451,25 @@ missing ones:
   `src/privacy/pipeline.rs`.
 - Round trips: property tests that any value's `ref` decrypts to that value
   and any ID's handle to that ID, and that a changed byte, a foreign key or
-  garbage is refused (R15, R16). Built with fixed values, not as property
-  tests: `refs_handles_and_tokens_round_trip_and_refuse_tampering` and
-  `padding_keeps_trailing_zeros` in `src/privacy/ident.rs`. The property
-  tests are not built ([docs/todo.md](../todo.md), T16).
+  garbage is refused (R15, R16). Built: the property tests
+  `any_ref_or_handle_opens_to_its_value_and_nothing_else` (every handle
+  kind, also refused as another kind) and `garbage_opens_as_nothing`, and
+  with fixed values `refs_handles_and_tokens_round_trip_and_refuse_tampering`
+  and `padding_keeps_trailing_zeros`, all in `src/privacy/ident.rs`.
 - Keyed digests: an intact file's keyed local SHA-1 equals its keyed claim,
-  and one changed byte makes them differ. Built in part: `digests_are_keyed`
-  in `src/privacy/ident.rs` shows that another key or another algorithm
-  gives another keyed digest. The intact file is not tested
-  ([docs/todo.md](../todo.md), T16).
+  and one changed byte makes them differ. Built:
+  `keyed_digests_still_compare` in `src/privacy/pipeline.rs`, with the
+  claim in upper-case hex; and `digests_are_keyed` in
+  `src/privacy/ident.rs`, where another key or another algorithm gives
+  another keyed digest.
 - Canonical values: case, diacritics, honorifics and "Last, First" forms
   give one alias; canonicalizing twice changes nothing (property test). And
   the other way: names that differ only by a Devanagari or Thai mark, "M.
   Chen" and "Mme Chen", "Mr Chen" and "Ms Chen", and "John Smith Sr." and
   "John Smith" keep
-  different aliases. Built in part: `spellings_of_one_name_meet`,
-  `rules_never_merge_two_people` ("Mr Chen" and "Mme Chen", and a
-  Devanagari mark) and the property test `canonical_forms_are_fixed_points`
-  in `src/privacy/canon.rs`. The other cases above have no test
-  ([docs/todo.md](../todo.md), T16).
+  different aliases. Built: `spellings_of_one_name_meet`,
+  `rules_never_merge_two_people` (every case above) and the property test
+  `canonical_forms_are_fixed_points` in `src/privacy/canon.rs`.
 - Collisions: with a word list of 4 words, two and three entities that
   share an alias in one result all get distinct aliases, in an order that
   does not depend on the order of the input. Built:
