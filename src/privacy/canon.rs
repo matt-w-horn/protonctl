@@ -18,6 +18,11 @@ const HONORIFICS: &[&str] = &[
     "sri", "smt",
 ];
 
+/// Whether `word` is an honorific, in any case, with or without its dot.
+pub fn is_honorific(word: &str) -> bool {
+    HONORIFICS.contains(&word.trim_end_matches('.').to_lowercase().as_str())
+}
+
 /// A person's, organization's or place's name: NFKC; "Last, First" reordered;
 /// leading honorifics removed before a full name; Unicode case folding
 /// without Turkish rules; diacritics removed from Latin, Greek and Cyrillic
@@ -48,8 +53,7 @@ fn name_pass(s: &str) -> String {
     };
     let mut words: Vec<&str> = s.split_whitespace().collect();
     while words.len() >= 3 {
-        let first = words[0].trim_end_matches('.').to_lowercase();
-        if !HONORIFICS.contains(&first.as_str()) {
+        if !is_honorific(words[0]) {
             break;
         }
         words.remove(0);
