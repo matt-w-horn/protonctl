@@ -270,7 +270,7 @@ The steps above apply, with these differences:
   which must be in memory (tmpfs) and yours alone, and any swap must be
   encrypted or zram, so the file never reaches a disk in clear; `doctor`
   checks this.
-- **Documents** are read by poppler (`pdftotext`, `pdfinfo`, `pdftoppm`)
+- **Documents** are read by poppler (`pdftotext`, `pdftoppm`)
   and pandoc: install `poppler-utils` and `pandoc`. Each runs in a sandbox
   (Landlock and seccomp) that lets it read only the system's programs and
   libraries, write nothing, and reach no network; the kernel must enforce

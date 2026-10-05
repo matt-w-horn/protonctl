@@ -1,6 +1,6 @@
 //! `protonctl convert`: one document reader, run on stdin inside a sandbox
-//! (RFC R21, Q34). On Linux, where the readers are poppler's `pdftotext`,
-//! `pdfinfo` and `pdftoppm` and `pandoc`, the server starts this as a child
+//! (RFC R21, Q34). On Linux, where the readers are poppler's `pdftotext`
+//! and `pdftoppm`, and `pandoc`, the server starts this as a child
 //! for each document it reads. The child enters the sandbox, then becomes
 //! the reader, so a hostile document that takes the reader over can read
 //! only the system's own programs and libraries, write nothing, and reach
@@ -27,8 +27,6 @@ pub enum Job {
     Check,
     /// A PDF's text, each page followed by a form feed.
     PdfText,
-    /// A PDF's metadata, with its page count.
-    PdfInfo,
     /// One page of a PDF as a JPEG.
     PdfPage {
         /// Counted from 1.
@@ -65,10 +63,6 @@ const PDFTOTEXT: Reader = Reader {
     path: "/usr/bin/pdftotext",
     package: "poppler-utils",
 };
-const PDFINFO: Reader = Reader {
-    path: "/usr/bin/pdfinfo",
-    package: "poppler-utils",
-};
 const PDFTOPPM: Reader = Reader {
     path: "/usr/bin/pdftoppm",
     package: "poppler-utils",
@@ -79,7 +73,7 @@ const PANDOC: Reader = Reader {
 };
 
 /// Every reader, for `doctor`.
-const READERS: [Reader; 4] = [PDFTOTEXT, PDFINFO, PDFTOPPM, PANDOC];
+const READERS: [Reader; 3] = [PDFTOTEXT, PDFTOPPM, PANDOC];
 
 impl Job {
     /// The reader and its arguments; `None` for `Check`. Each reads stdin
@@ -93,7 +87,6 @@ impl Job {
                 PDFTOTEXT,
                 args(&["-enc", "UTF-8", "-eol", "unix", "-", "-"]),
             ),
-            Self::PdfInfo => (PDFINFO, args(&["-"])),
             Self::PdfPage { page, edge } => {
                 let page = page.to_string();
                 let edge = edge.to_string();
@@ -126,7 +119,6 @@ impl Job {
         match self {
             Self::Check => argv.push("check".into()),
             Self::PdfText => argv.push("pdf-text".into()),
-            Self::PdfInfo => argv.push("pdf-info".into()),
             Self::PdfPage { page, edge } => argv.extend([
                 "pdf-page".into(),
                 "--page".into(),
@@ -247,7 +239,6 @@ mod tests {
         for job in [
             Job::Check,
             Job::PdfText,
-            Job::PdfInfo,
             Job::PdfPage {
                 page: 3,
                 edge: 2000,

@@ -84,8 +84,15 @@ pub struct Document {
     /// The character offset of each PDF page; empty for other files.
     page_starts: Vec<usize>,
     hidden: usize,
-    /// A PDF's bytes, kept to render its pages as images.
-    pdf: Option<Vec<u8>>,
+    /// A PDF, kept to render its pages as images.
+    pdf: Option<Pdf>,
+}
+
+/// A PDF's bytes, and how many pages its text came from: the count the
+/// reader found, which metadata inside the file cannot change.
+struct Pdf {
+    bytes: Vec<u8>,
+    pages: usize,
 }
 
 impl Document {
@@ -299,7 +306,10 @@ async fn pdf(bytes: &[u8]) -> Result<Content> {
         .map(|p| p.as_str().unwrap_or_default().to_string())
         .collect();
     let mut doc = Document::new(&pages, TextFrom::Pdf);
-    doc.pdf = Some(bytes.to_vec());
+    doc.pdf = Some(Pdf {
+        bytes: bytes.to_vec(),
+        pages: pages.len(),
+    });
     Ok(Content::Text(doc))
 }
 
@@ -324,8 +334,12 @@ async fn poppler_pdf(bytes: &[u8]) -> Result<Content> {
         Outcome::Missing(package) => return Ok(Content::Other(missing(package))),
     };
     let text = String::from_utf8(out).context("pdftotext did not return UTF-8")?;
-    let mut doc = Document::new(&pages_of(&text), TextFrom::Pdf);
-    doc.pdf = Some(bytes.to_vec());
+    let pages = pages_of(&text);
+    let mut doc = Document::new(&pages, TextFrom::Pdf);
+    doc.pdf = Some(Pdf {
+        bytes: bytes.to_vec(),
+        pages: pages.len(),
+    });
     Ok(Content::Text(doc))
 }
 
@@ -409,50 +423,42 @@ async fn pdfkit_pages(bytes: &[u8], first: usize) -> Result<(usize, Vec<Vec<u8>>
     Ok((total, jpegs))
 }
 
-/// The PDF's page count from `pdfinfo`, and up to `PAGE_IMAGES` pages from
-/// `first` as JPEGs from `pdftoppm`, one sandboxed run each.
-async fn poppler_pages(bytes: &[u8], first: usize) -> Result<(usize, Vec<Vec<u8>>)> {
-    let read = async |job| match crate::convert::read(job, bytes).await? {
-        Outcome::Read(out) => Ok(out),
-        Outcome::Unreadable => bail!("poppler could not read the PDF"),
-        Outcome::Missing(package) => bail!("{}", missing(package)),
-    };
-    let info = read(Job::PdfInfo).await?;
-    let total =
-        page_count(&String::from_utf8_lossy(&info)).context("pdfinfo gave no page count")?;
+/// Up to `PAGE_IMAGES` pages of `pdf` from `first` as JPEGs from
+/// `pdftoppm`, one sandboxed run each.
+async fn poppler_pages(pdf: &Pdf, first: usize) -> Result<Vec<Vec<u8>>> {
+    if first > pdf.pages {
+        return Ok(Vec::new());
+    }
     let mut jpegs = Vec::new();
-    for page in first..=total.min(first + PAGE_IMAGES - 1) {
-        let jpeg = read(Job::PdfPage {
+    for page in first..=pdf.pages.min(first.saturating_add(PAGE_IMAGES - 1)) {
+        let job = Job::PdfPage {
             page,
             edge: PAGE_EDGE,
-        })
-        .await?;
+        };
+        let jpeg = match crate::convert::read(job, &pdf.bytes).await? {
+            Outcome::Read(out) => out,
+            Outcome::Unreadable => bail!("poppler could not read the PDF"),
+            Outcome::Missing(package) => bail!("{}", missing(package)),
+        };
         if !jpeg.starts_with(b"\xFF\xD8\xFF") {
             bail!("pdftoppm did not return a JPEG for page {page}");
         }
         jpegs.push(jpeg);
     }
-    Ok((total, jpegs))
-}
-
-/// The "Pages:" line of `pdfinfo`'s output.
-fn page_count(info: &str) -> Option<usize> {
-    info.lines()
-        .find_map(|l| l.strip_prefix("Pages:"))
-        .and_then(|n| n.trim().parse().ok())
+    Ok(jpegs)
 }
 
 /// Pages of the PDF `bytes` from `first` (counted from 1) as JPEG images,
 /// `PAGE_IMAGES` at most, each after a "Page N:" label, and the JSON that
 /// says which pages they are and where the next call starts.
-async fn page_images(bytes: &[u8], first: usize) -> Result<(Value, Vec<Attached>)> {
+async fn page_images(pdf: &Pdf, first: usize) -> Result<(Value, Vec<Attached>)> {
     if first == 0 {
         bail!("page counts from 1");
     }
     let (total, jpegs) = if cfg!(target_os = "macos") {
-        pdfkit_pages(bytes, first).await?
+        pdfkit_pages(&pdf.bytes, first).await?
     } else {
-        poppler_pages(bytes, first).await?
+        (pdf.pages, poppler_pages(pdf, first).await?)
     };
     if first > total {
         bail!("page {first} is past the PDF's {total} pages");
@@ -690,7 +696,10 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_scan_in_aliases_mode_gives_a_reason_and_no_images() {
         let mut scan = Document::new(&[String::new()], TextFrom::Pdf);
-        scan.pdf = Some(b"%PDF-1.4 not rendered".to_vec());
+        scan.pdf = Some(Pdf {
+            bytes: b"%PDF-1.4 not rendered".to_vec(),
+            pages: 1,
+        });
         let (v, images) =
             crate::content::restricted(crate::content::no_mentions(), scan.read(None, None, None))
                 .await
@@ -879,11 +888,81 @@ pub(crate) mod tests {
         assert_eq!(pages_of("one\n\n\u{C}two\n\n\u{C}"), ["one", "two"]);
         assert_eq!(pages_of("\u{C}\u{C}"), ["", ""]);
         assert_eq!(pages_of(""), [""]);
+    }
+
+    /// A PDF with one Helvetica line per page and this Title, written by
+    /// hand as `tests/fixtures/two-pages.pdf` was.
+    #[cfg(target_os = "linux")]
+    fn pdf_titled(title: &str, pages: &[&str]) -> Vec<u8> {
+        let kids: Vec<String> = (0..pages.len())
+            .map(|i| format!("{} 0 R", 5 + 2 * i))
+            .collect();
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            format!(
+                "<< /Type /Pages /Kids [{}] /Count {} >>",
+                kids.join(" "),
+                pages.len()
+            ),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+            format!("<< /Title ({}) >>", title.replace('\n', "\\n")),
+        ];
+        for (i, text) in pages.iter().enumerate() {
+            let body = format!("BT /F1 24 Tf 72 720 Td ({text}) Tj ET");
+            objects.push(format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+                 /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R >>",
+                6 + 2 * i
+            ));
+            objects.push(format!(
+                "<< /Length {} >>\nstream\n{body}\nendstream",
+                body.len()
+            ));
+        }
+        let mut out = String::from("%PDF-1.4\n");
+        let mut offsets = Vec::new();
+        for (i, o) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.push_str(&format!("{} 0 obj\n{o}\nendobj\n", i + 1));
+        }
+        let xref = out.len();
+        out.push_str(&format!(
+            "xref\n0 {}\n0000000000 65535 f \n",
+            objects.len() + 1
+        ));
+        for o in offsets {
+            out.push_str(&format!("{o:010} 00000 n \n"));
+        }
+        out.push_str(&format!(
+            "trailer\n<< /Size {} /Root 1 0 R /Info 4 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        ));
+        out.into_bytes()
+    }
+
+    /// The page count comes from the text, one form feed per page, not from
+    /// metadata a document writes: a Title holding "Pages: 1" once hid the
+    /// rest of a 6-page PDF. And a page past the end is an error, however
+    /// large, not an overflow.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn the_page_count_is_the_pdf_s_not_its_title_s() {
+        let six = ["one", "two", "three", "four", "five", "six"];
+        let pdf = pdf_titled("Report\nPages: 1", &six);
+        let doc = text(content(&pdf, "a.pdf").await.unwrap());
+        let (v, images) = doc.read(None, None, Some(1)).await.unwrap();
         assert_eq!(
-            page_count("Producer: x\nPages:           12\nEncrypted: no\n"),
-            Some(12)
+            (
+                v["pdfPages"].clone(),
+                v["pagesShown"].clone(),
+                v["nextPage"].clone()
+            ),
+            (json!(6), json!([1, 4]), json!(5)),
+            "{v}"
         );
-        assert_eq!(page_count("Pages: many"), None);
+        assert_eq!(images.len(), 4);
+        assert!(doc.read(None, None, Some(7)).await.is_err());
+        assert!(doc.read(None, None, Some(usize::MAX)).await.is_err());
     }
 
     /// The readers run here directly (`convert::read` under test); the

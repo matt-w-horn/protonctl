@@ -70,12 +70,6 @@ fn each_reader_runs_in_its_sandbox() {
         text.contains("Café — accents.\n\n\u{C}Page two here."),
         "{text:?}"
     );
-    let info = String::from_utf8(convert(&["pdf-info"], &pdf).stdout).unwrap();
-    assert!(
-        info.lines()
-            .any(|l| l.split_whitespace().eq(["Pages:", "2"])),
-        "{info}"
-    );
     let page = convert(&["pdf-page", "--page", "2", "--edge", "300"], &pdf);
     assert!(page.stdout.starts_with(b"\xFF\xD8\xFF"), "{page:?}");
     for format in ["docx", "odt", "rtf"] {

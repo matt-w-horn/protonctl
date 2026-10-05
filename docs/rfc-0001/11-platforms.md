@@ -63,7 +63,7 @@ records. After P1:
 | Drive folder discovery | `~/Library/CloudStorage/ProtonDrive-*` | `src/platform/macos.rs` | no place to look: the CLI-only mode |
 | Drive CLI check (R9) | `/usr/bin/codesign` and Apple Team ID `2SB5Z68H26`, before every run (Q24) | `src/drive/cli.rs` | the SHA-256 pinned at `setup drive`, before every run (Q33, built 2026-10-05) |
 | Bridge on demand (Q2) | `/usr/bin/open -g -j -b com.protonmail.bridge` | `src/mail/mod.rs` | never started; when Bridge is not running, the error says to run it as a systemd user unit, which the README shows (Q32) |
-| PDF text and page images; Word, RTF, OpenDocument | `/usr/bin/osascript` with PDFKit; `/usr/bin/textutil` | `src/extract.rs`, `src/convert.rs` | poppler (`pdftotext`, `pdfinfo`, `pdftoppm`) and pandoc, each in `protonctl convert`'s sandbox (Q34, built 2026-10-05); text and images read as on macOS |
+| PDF text and page images; Word, RTF, OpenDocument | `/usr/bin/osascript` with PDFKit; `/usr/bin/textutil` | `src/extract.rs`, `src/convert.rs` | poppler (`pdftotext`, `pdftoppm`) and pandoc, each in `protonctl convert`'s sandbox (Q34, built 2026-10-05); text and images read as on macOS |
 | Cache folder | `~/Library/Caches/protonctl` | `src/platform/macos.rs` | `$XDG_CACHE_HOME/protonctl`, else `~/.cache/protonctl` |
 | Planned | LocalAuthentication (R18), `sandbox-exec` (R21), Vision (R21, R22), a RAM disk (R10, Q14), a Keychain attribute for the key ID (R20) | | |
 
@@ -192,10 +192,12 @@ flowchart TB
   limit. It reads no config, secret or session: it enters the sandbox,
   then `exec`s the reader, which inherits the sandbox.
 - The jobs: `pdf-text` (`pdftotext -enc UTF-8 - -`, one form feed after
-  each page), `pdf-info` (`pdfinfo -`, for the page count), `pdf-page`
-  (`pdftoppm -singlefile -jpeg -scale-to 2000`, one page per run) and
-  `document` (`pandoc --sandbox -t plain`, for `.docx`, `.odt` and `.rtf`).
-  pandoc cannot read `.doc`.
+  each page, which also gives the page count: a glyph a document maps to
+  a form feed comes out as a line break), `pdf-page` (`pdftoppm
+  -singlefile -jpeg -scale-to 2000`, one page per run) and `document`
+  (`pandoc --sandbox -t plain`, for `.docx`, `.odt` and `.rtf`). pandoc
+  cannot read `.doc`. `pdfinfo` is not used: it prints a document's own
+  metadata before the page count, unescaped, so a Title could set it.
 - The sandbox: Landlock lets the reader read and run what is under `/usr`,
   `/lib`, `/lib64` and `/bin`, read `/etc/ld.so.cache`, `/etc/fonts` and
   `/var/cache/fontconfig`, and open `/dev/null`; nothing else, so not the
