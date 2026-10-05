@@ -4,6 +4,7 @@ expression: report()
 ---
 form | type | n | raw | part | split | linked | mistyped
 organization never in mail | organization | 2 | 2 | 0 | 0 | 0 | 0
+organization short name | organization | 1 | 0 | 0 | 0 | 0 | 1
 organization that sends mail | organization | 2 | 0 | 0 | 0 | 0 | 2
 person full, in headers | person | 2 | 0 | 0 | 0 | 0 | 0
 person full, process only | person | 1 | 0 | 0 | 0 | 0 | 0

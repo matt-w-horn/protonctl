@@ -172,6 +172,13 @@ const CASES: &[Case] = &[
         true,
     ),
     case(
+        "organization short name",
+        "organization",
+        "Acme Billing",
+        "Acme",
+        true,
+    ),
+    case(
         "organization never in mail",
         "organization",
         "Globex Corporation",
