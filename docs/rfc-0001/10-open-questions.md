@@ -208,6 +208,8 @@
   - Q24: the Drive CLI's signature is checked before every run, one
     `codesign` call each, rather than once per process; this closes the
     window for a swap after the check and needs no admin-owned folder.
+    The review of 2026-10-06 found the window still open: the CLI is
+    checked, then run again by path ([#72](https://github.com/matt-w-horn/protonctl/issues/72)).
   - Q25: `/security-review` runs on the Phase 2 and Phase 3 changes,
     beside `/code-review`, since they add protonctl's own cryptography and
     user presence. The Phase 2 review ran on 2026-10-06; its findings are

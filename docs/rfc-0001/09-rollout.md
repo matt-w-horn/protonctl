@@ -209,6 +209,8 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
   level below it; the folder goes once read, after a failed download, and
   at exit, and `doctor` checks it in aliases mode. The Linux no-disk test
   passes, and failed when the read went to the download folder.
+  A cloud-only `drive cat` from the CLI still goes to the download
+  folder in aliases mode ([#73](https://github.com/matt-w-horn/protonctl/issues/73)).
 - M2.9 Logs: a panic hook that prints a fixed line, in both modes; keyed
   identifiers in every log line in aliases mode. Exit: the logs and panic
   tests. Done 2026-10-04: the hook prints the code location and never the
