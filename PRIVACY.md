@@ -153,7 +153,8 @@ protonctl answers no call until you choose one of two settings
 
 Aliases mode does not find every name yet. A name that appears only in
 free text, such as a message body, a subject or a file name, can reach
-Claude as written.
+Claude as written. A model that finds such names, planned as the next
+step, narrows this gap but will not close it.
 [RFC-0001, section 5](docs/rfc-0001/05-security.md#residual-risks) lists
 what aliases mode does not hide.
 

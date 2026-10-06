@@ -77,7 +77,7 @@ flowchart LR
 | Calendar link leak | anyone with the URL reads the calendar | a dedicated link for protonctl; `logout` deletes it locally and says how to revoke it in Proton |
 | Alias collision | two entities get one alias | with 3 words from 7,132 (about 3.6 × 10^11 aliases), the chance of any collision is about 0.06% across 20,000 entities, 5% across 200,000 and 75% across a million. URLs get no alias (Q19), so tracking links do not add to the count. Their references differ, so searches stay correct, and a result that holds both adds a fourth word to one of them, so in that result its alias differs. Two colliding entities in different results look like one to Claude; Q19 kept three words, with the fourth only inside one result |
 | Lost or rotated key | old aliases stop matching | old references and handles are refused, not misread (R20); no Proton data is lost |
-| Dependency compromise | malicious crate | small set; `Cargo.lock`; `cargo deny` |
+| Dependency compromise | malicious crate, or from Phase 5 an altered model file | small set; `Cargo.lock`; `cargo deny`; the model and its tokenizer pinned by SHA-256 and checked on load (Q23) |
 | Account friction | throttling, CAPTCHA | official clients only; serialized calls; no remote tree walks; calendar fetched at most every 15 minutes |
 
 ## Residual risks
@@ -93,7 +93,8 @@ flowchart LR
   policy and the privacy layer. Claude Code's docs say deny rules are not
   "a security boundary around the program"; its sandbox narrows this
   (Q17). R19 closes only the path through protonctl's own CLI, and only
-  from Phase 3: in Phase 2 the CLI still prints untokenized output. Cowork
+  from Phase 3: until then, through Phase 5, which comes first (Q40), the
+  CLI still prints untokenized output. Cowork
   has no host shell.
 - Identity can be inferred from context that no alias hides: a job, an
   event, a writing style. Hints add a little to it; summaries (Phase 6)
@@ -102,11 +103,15 @@ flowchart LR
   attendee list or query, stays plaintext: in a body, and also in a
   subject, a file or folder name, a label, or an event's title,
   description or location. Drive is the widest gap: the app's folder names
-  no authors, so its call dictionary holds only the query's names, and in
-  Phase 2 Drive names are tokenized only where regex finds them.
-  Organizations, places and street addresses have no Phase 2 detector
-  unless the dictionary holds them. `detectors` (R24) shows when only
-  `regex` and `dictionary` ran.
+  no authors, so in Drive names and paths a name is found only by regex,
+  or by the process dictionary when a correspondent or attendee bears it
+  (Q22). Organizations, places and street addresses have no Phase 2
+  detector unless the dictionary holds them. `detectors` (R24) shows when
+  only `regex` and `dictionary` ran. Phase 5, built next (Q40), closes
+  most of this gap with one model (Q23), which still misses some names:
+  the proof of concept measured recall of 0.978 on synthetic texts and
+  0.924 on OCR text, on corpora small enough that these numbers are
+  optimistic.
 - Raw content that the user approves reaches the model provider in full, and
   the names in it stay in that transcript. Because aliases are stable, every
   pairing of a name with its alias, through a typed query or a reveal,

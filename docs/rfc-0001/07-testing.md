@@ -654,9 +654,12 @@ missing ones:
   in its row. Built: `what_passes_raw_per_form` in `src/privacy/eval.rs`,
   shown to fail when the process dictionary was emptied (the
   process-only full name came back raw).
-- Recall (Phase 5): per entity type, on a labeled synthetic corpus in
-  English, German, French and one non-Latin script. Results are recorded,
-  with no pass mark until there is a measured baseline. Not built
+- Recall (Phase 5): per entity type and language, on a labeled synthetic
+  corpus in English, German, French and one non-Latin script at least.
+  Results are recorded, with no pass mark until there is a measured
+  baseline. The same measure decides whether another model may replace
+  the one configured (its recall must not fall) and, with the evaluation
+  above, whether a dictionary name rule may go (Q23). Not built
   (Phase 5). The proof of concept for Q23 measured a first baseline in
   Python, outside `cargo test`: `scripts/otter-poc.py` over
   `tests/fixtures/names.jsonl` (57 texts, 14 languages) and

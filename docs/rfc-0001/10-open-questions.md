@@ -316,6 +316,12 @@
     install (1.2 GB in float32) and are never fetched at run time. The
     detector is named `model` in `detectors`, since the model will
     change.
+  - The dictionary's name rules (short forms, initials, misspellings,
+    and an organization named by its own domain; D2 to D4 and D7) stay
+    beside the model. One goes only when the evaluation (D1) shows that
+    nothing it finds passes raw without it, per entity type and language
+    (recorded 2026-10-06,
+    [#53](https://github.com/matt-w-horn/protonctl/issues/53)).
   - Both corpora were written the day they were measured, and are small,
     so these numbers are optimistic. Phase 5 sets the threshold and the
     labels on a larger corpus: `product` gave most of the false positives
