@@ -208,9 +208,13 @@
   - Q24: the Drive CLI's signature is checked before every run, one
     `codesign` call each, rather than once per process; this closes the
     window for a swap after the check and needs no admin-owned folder.
+    The review of 2026-10-06 found the window still open: the CLI is
+    checked, then run again by path ([#72](https://github.com/matt-w-horn/protonctl/issues/72)).
   - Q25: `/security-review` runs on the Phase 2 and Phase 3 changes,
     beside `/code-review`, since they add protonctl's own cryptography and
-    user presence.
+    user presence. The Phase 2 review ran on 2026-10-06; its findings are
+    in the [security and privacy review](security-privacy-review.md#6-phase-2-security-review-q25)
+    ([#15](https://github.com/matt-w-horn/protonctl/issues/15)).
   - Q30: the module per system that P1 built (option B), with traits added
     when a fake or a second backend first needs one (C), and the one-line
     refusals as `cfg!` tests at their call sites (A).
