@@ -4,8 +4,10 @@ Mac's real calendar link, Bridge and Drive. Prints one line per call with its
 outcome, time and counts, never message, event or file content or names.
 
 It runs in the privacy mode the server starts in. In aliases mode it also
-counts raw values that must not appear (addresses, links, local paths, raw
-digests) in every result, and that every result names its detectors.
+counts raw values that must not appear (addresses, phone numbers, links,
+local paths, raw digests) in every result, checks that every result names
+its detectors and every `entities` entry carries a `ref`, and starts a
+second server to check that the same search gives the same aliases.
 
 Run it from a normal terminal, since codesign misreports inside Claude Code's
 sandbox, against the installed binary, which the Claude app also runs, so one
@@ -36,11 +38,20 @@ CONTENT_TOOLS = {
     "count_messages", "get_message", "get_thread", "get_attachment",
 }
 
-server = subprocess.Popen(
-    [BIN, "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-)
-lines: queue.Queue = queue.Queue()
-threading.Thread(target=lambda: [lines.put(line) for line in server.stdout], daemon=True).start()
+
+def start() -> None:
+    """Start a server and read its replies; the second run of aliases mode calls it again."""
+    global server, lines
+    server = subprocess.Popen(
+        [BIN, "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    lines = queue.Queue()
+    threading.Thread(target=lambda out=server.stdout, q=lines: [q.put(line) for line in out], daemon=True).start()
+
+
+server: subprocess.Popen
+lines: queue.Queue
+start()
 last_id = 0
 failures: list[str] = []
 called: set[str] = set()
@@ -56,16 +67,35 @@ RAW = {
     "local paths": re.compile(re.escape(os.path.expanduser("~")) + r"(/|\b)"),
     "raw digests": re.compile(r"\b([0-9a-f]{40}|[0-9a-f]{64})\b"),
 }
+# A phone number: international with a +, North American 3-3-4, or national
+# with a leading 0. Dates, times and handles, which are base64url, do not
+# match. Only text outside `entities` is searched, as section 7 plans.
+PHONE = re.compile(
+    r"(?<![\w+-])(\+\d[\d ().-]{6,16}\d|\(?[2-9]\d\d\)?[ .-][2-9]\d\d[ .-]\d{4}|0\d{2,4}[ -]\d{3,4}[ -]\d{3,4})(?![\w-])"
+)
+
+
+def strings(value, skip: str = "") -> list[str]:
+    """Every string in a result, keys included, leaving out the field named `skip`."""
+    if isinstance(value, dict):
+        return [s for k, v in value.items() if k != skip for s in [k, *strings(v)]]
+    if isinstance(value, list):
+        return [s for v in value for s in strings(v)]
+    return [value] if isinstance(value, str) else []
 
 
 def leak_check(shown: str, text: str, data: dict) -> None:
-    """Aliases mode: count raw values, and require `detectors` and no `dropped`."""
+    """Aliases mode: count raw values, and require `detectors`, a `ref` per entity and no `dropped`."""
     raw = {kind: len(p.findall(text)) for kind, p in RAW.items()}
+    raw["phone numbers"] = sum(len(PHONE.findall(s)) for s in strings(data, skip="entities"))
     found = ", ".join(f"{n} {kind}" for kind, n in raw.items() if n)
     if found:
         failures.append(f"{shown}: {found}")
     if "detectors" not in data:
         failures.append(f"{shown}: no detectors")
+    without_ref = sum(not (e or {}).get("ref") for e in (data.get("entities") or {}).values())
+    if without_ref:
+        failures.append(f"{shown}: {without_ref} entities without a ref")
     if data.get("dropped"):
         failures.append(f"{shown}: {len(data['dropped'])} fields without a policy")
     if blocks:
@@ -132,11 +162,17 @@ def call(name: str, args: dict, describe=counts, label: str = "") -> dict | None
     return data
 
 
-init = rpc("initialize", {
-    "protocolVersion": "2025-11-25", "capabilities": {},
-    "clientInfo": {"name": "live-check", "version": "0"},
-})["result"]
-send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+def handshake() -> dict:
+    """Open the MCP session as a host does."""
+    init = rpc("initialize", {
+        "protocolVersion": "2025-11-25", "capabilities": {},
+        "clientInfo": {"name": "live-check", "version": "0"},
+    })["result"]
+    send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    return init
+
+
+init = handshake()
 tools = {t["name"] for t in rpc("tools/list")["result"]["tools"]}
 print(f"{init['serverInfo']['name']} {init['serverInfo']['version']}: {len(tools)} tools\n")
 
@@ -322,6 +358,10 @@ if aliases:
         call("search_threads", {"query": f"from:ref:{refs[0]} newer_than:30d", "pageSize": 5}, found_again, label="from:ref:")
     else:
         print("skip  search_threads (from:ref:)          no sender's address in the recent rows")
+# The search the second server run repeats: no mail from today, so none that
+# arrives during the run changes its rows.
+SAME = {"query": "older_than:1d newer_than:30d", "pageSize": 10}
+first_run = call("search_threads", SAME, label="for the second run") if aliases else None
 call("list_labels", {})
 call("count_messages", {"query": "newer_than:30d", "by": "fromDomain"}, lambda d: (
     f"messages {d['messages']}, groups {d.get('groupsTotal')}, shown {len(d.get('groups') or [])}"
@@ -349,18 +389,46 @@ elif not aliases:
 untried = sorted(tools - called)
 print(f"\ncalled {len(called)} of {len(tools)} tools" + (f"; not called: {', '.join(untried)}" if untried else ""))
 
-# Stop the way a host does, then check the server cleaned up (R10).
-server.stdin.close()
-try:
-    code = server.wait(timeout=15)
-except subprocess.TimeoutExpired:
-    server.kill()
-    code = None
-    failures.append("exit: did not stop within 15 s")
-leftover = os.path.expanduser(f"~/Library/Caches/protonctl/downloads/{server.pid}")
-if os.path.exists(leftover):
-    failures.append("exit: download folder left behind")
-stderr = server.stderr.read().splitlines()
-print(f"server exited {code}; download folder removed {not os.path.exists(leftover)}; stderr lines {len(stderr)}")
+
+def stop() -> None:
+    """Stop the way a host does, then check the server cleaned up (R10)."""
+    server.stdin.close()
+    try:
+        code = server.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        server.kill()
+        code = None
+        failures.append("exit: did not stop within 15 s")
+    leftover = os.path.expanduser(f"~/Library/Caches/protonctl/downloads/{server.pid}")
+    if os.path.exists(leftover):
+        failures.append("exit: download folder left behind")
+    stderr = server.stderr.read().splitlines()
+    print(f"server exited {code}; download folder removed {not os.path.exists(leftover)}; stderr lines {len(stderr)}")
+
+
+def typed_aliases(d: dict) -> dict:
+    """Each alias in the `entities` table, with its type."""
+    return {alias: e.get("type") for alias, e in (d.get("entities") or {}).items()}
+
+
+stop()
+if first_run is not None:
+    # A second server run gives the same aliases for the same search (RFC
+    # section 7): aliases come from the stored key, not from the process.
+    def same_aliases(d: dict) -> str:
+        before, after = typed_aliases(first_run), typed_aliases(d)
+        differ = sum(before.get(a) != after.get(a) for a in before.keys() | after.keys())
+        if differ:
+            failures.append(f"second run: {differ} aliases differ")
+        return f"aliases {len(after)}, same as the first run {'yes' if before == after else 'NO'}"
+
+    if typed_aliases(first_run):
+        print()
+        start()
+        handshake()
+        call("search_threads", SAME, same_aliases, label="second run")
+        stop()
+    else:
+        print("skip  search_threads (second run)        no aliases in the first run's search")
 print("all calls passed" if not failures else f"{len(failures)} problem(s): {'; '.join(failures)}")
 sys.exit(1 if failures else 0)

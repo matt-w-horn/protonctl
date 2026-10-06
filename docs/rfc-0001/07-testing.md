@@ -673,11 +673,15 @@ missing ones:
   2026-10-03 stay, among them the export folder, `download_file`, raw
   digests and 16-character messageIds. Built in part: in aliases mode the
   script counts addresses, links, local paths and 40- or 64-hex-digit
-  digests in every result, fails on a missing `detectors`, a `dropped`
-  field or content after the JSON, and searches again by a sender's
-  `ref`. Phone numbers, a `ref` in every entity and a second server run
-  are not checked ([#14](https://github.com/matt-w-horn/protonctl/issues/14)); `--reveal` comes
-  with Phase 3.
+  digests in every result, and phone numbers (international with a `+`,
+  North American, or national with a leading 0) in every string outside
+  `entities`; it fails on a missing `detectors`, an entity without a
+  `ref`, a `dropped` field or content after the JSON, and searches again
+  by a sender's `ref`. It then starts a second server and repeats one
+  mail search that leaves out today's mail, failing on any alias that is
+  new, gone or of another type (2026-10-06,
+  [#14](https://github.com/matt-w-horn/protonctl/issues/14); not yet
+  run live). `--reveal` comes with Phase 3.
 
 R1 is tested for both services that reach the account. The stand-in
 `proton-drive` in `src/drive/mod.rs` and `tests/convert.rs` answers only
