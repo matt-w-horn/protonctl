@@ -87,7 +87,9 @@ at its site. Unsafe code is forbidden in this crate (R18 weighs one
 exception for LocalAuthentication, Q15). From Phase 2 the gate
 also runs the leak test in aliases mode ([section 7](07-testing.md)): every tool, run against
 synthetic data that holds planted identifiers, must return none of them.
-The surface snapshot then covers both modes.
+The surface snapshot then covers both modes. On Linux the gate also runs
+the Secret Service tests against a throwaway GNOME Keyring and, where
+podman is installed, every mail read against Dovecot (T11).
 
 **Libraries.** A crate replaces hand-written code where one does the same
 job: `tempfile` for download folders, `hex` for the pinned fingerprint, and

@@ -34,6 +34,13 @@ if [ "$(uname -s)" = Linux ]; then
     else
         echo "check.sh: skipped the Secret Service tests (needs dbus-run-session and gnome-keyring-daemon)" >&2
     fi
+    # The hermetic IMAP test (RFC section 7, T11): every mail read against
+    # Dovecot in a throwaway container.
+    if command -v podman >/dev/null; then
+        scripts/with-dovecot.sh
+    else
+        echo "check.sh: skipped the Dovecot test (needs podman)" >&2
+    fi
 fi
 
 # Line coverage may not fall below the floor: the 2026-10-03 figure, 62.99%,

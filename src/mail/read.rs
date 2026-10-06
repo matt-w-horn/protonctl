@@ -2624,10 +2624,6 @@ pub(crate) mod tests {
     /// snapshots pin each result and the exact commands sent, and every
     /// command sent must be one that changes nothing in the account (R1).
     #[tokio::test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one scripted Bridge session, whose command log the last snapshot holds"
-    )]
     async fn every_operation_against_a_scripted_bridge() {
         let (port, fingerprint, sent) = fake_imap(bridge_boxes(), bridge_messages()).await;
         let (tls, _) = super::super::connect(port, Some(fingerprint))
@@ -2641,7 +2637,24 @@ pub(crate) mod tests {
             port,
             cert_sha256: fingerprint,
         });
-        *mail.conn.lock().await = Some(Conn::listing(session).await.unwrap());
+        mail.use_session(session).await.unwrap();
+        every_operation(&mail).await;
+        insta::assert_json_snapshot!("imap_commands", sent.lock().unwrap().clone());
+        nothing_saved_in_aliases_mode(&mail).await;
+        // Last, so it covers every command, including any whose failure a
+        // call went on past, and holds if the snapshot is ever accepted.
+        let sent = sent.lock().unwrap().clone();
+        let changing: Vec<&String> = sent.iter().filter(|c| !read_only(c)).collect();
+        assert!(
+            changing.is_empty(),
+            "protonctl sent IMAP commands that can change the account (R1): {changing:#?}"
+        );
+    }
+
+    /// Every operation on `mail`, each result held to the scripted Bridge's
+    /// snapshot, so any IMAP server holding `bridge_messages` in
+    /// `bridge_boxes` must give the same results.
+    async fn every_operation(mail: &Mail) {
         let search = |query: &str| SearchThreadsReq {
             query: query.into(),
             ..Default::default()
@@ -2681,7 +2694,8 @@ pub(crate) mod tests {
             ..Default::default()
         };
         insta::assert_json_snapshot!("get_thread", mail.get_thread(&thread).await.unwrap());
-        insta::assert_json_snapshot!("list_labels", mail.list_labels().await.unwrap());
+        let labels = in_bridge_order(mail.list_labels().await.unwrap());
+        insta::assert_json_snapshot!("list_labels", labels);
         // An attachment that is not readable text (this "PDF" is too short
         // for PDFKit) is saved; asked for inline, its bytes come back instead.
         let attach = |inline| AttachmentReq {
@@ -2726,12 +2740,34 @@ pub(crate) mod tests {
             (json!([]), json!("excluded")),
             "{old}"
         );
-        insta::assert_json_snapshot!("imap_commands", sent.lock().unwrap().clone());
-        // Aliases mode saves nothing (RFC R10): the reason alone, in fields
-        // that each have a privacy policy.
+    }
+
+    /// `list_labels`' rows in the order `bridge_boxes` lists their mailboxes.
+    /// IMAP leaves the order of LIST to the server, and Dovecot's is not
+    /// Bridge's; the scripted Bridge's rows are in this order already.
+    fn in_bridge_order(mut labels: Value) -> Value {
+        let boxes = bridge_boxes();
+        let order: Vec<&str> = boxes
+            .iter()
+            .filter_map(|b| b.name.rsplit('/').next())
+            .collect();
+        let rows = labels["labels"].as_array_mut().unwrap();
+        rows.sort_by_key(|row| order.iter().position(|n| row["name"].as_str() == Some(n)));
+        labels
+    }
+
+    /// Aliases mode saves nothing (RFC R10): the reason alone, in fields
+    /// that each have a privacy policy.
+    async fn nothing_saved_in_aliases_mode(mail: &Mail) {
+        let attach = AttachmentReq {
+            message_id: "D".repeat(16),
+            index: 0,
+            ..Default::default()
+        };
+        let no_export = Err(anyhow::anyhow!("no export folder"));
         let unsaved = crate::content::restricted(
             crate::content::no_mentions(),
-            mail.get_attachment(&attach(false), None, no_export()),
+            mail.get_attachment(&attach, None, no_export),
         )
         .await
         .unwrap();
@@ -2745,13 +2781,110 @@ pub(crate) mod tests {
         let unlisted =
             crate::privacy::pipeline::unlisted(crate::tool::Tool::GetAttachment, &unsaved.json);
         assert_eq!(unlisted, Vec::<String>::new(), "{}", unsaved.json);
-        // Last, so it covers every command, including any whose failure a
-        // call went on past, and holds if the snapshot is ever accepted.
-        let sent = sent.lock().unwrap().clone();
-        let changing: Vec<&String> = sent.iter().filter(|c| !read_only(c)).collect();
-        assert!(
-            changing.is_empty(),
-            "protonctl sent IMAP commands that can change the account (R1): {changing:#?}"
+    }
+
+    /// Every mailbox's messages as (mailbox, UID, flags), read with EXAMINE
+    /// and FLAGS only, so reading them changes none of them.
+    async fn every_flag(session: &mut Session) -> Vec<(String, u32, String)> {
+        let names: Vec<String> = session
+            .list(None, Some("*"))
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|n| !n.attributes().contains(&NameAttribute::NoSelect))
+            .map(|n| n.name().to_string())
+            .collect();
+        let mut flags = Vec::new();
+        for name in names {
+            if session.examine(&name).await.unwrap().exists == 0 {
+                continue;
+            }
+            let fetched: Vec<Fetch> = session
+                .uid_fetch("1:*", "(UID FLAGS)")
+                .await
+                .unwrap()
+                .try_collect()
+                .await
+                .unwrap();
+            for f in fetched {
+                let mut held: Vec<String> = f.flags().map(|g| format!("{g:?}")).collect();
+                held.sort();
+                flags.push((name.clone(), f.uid.unwrap(), held.join(" ")));
+            }
+        }
+        flags.sort();
+        flags
+    }
+
+    /// A session on the Dovecot that `scripts/with-dovecot.sh` started, once
+    /// it answers: the container takes a moment to start.
+    async fn dovecot_session(port: u16) -> (Session, super::super::Fingerprint) {
+        let deadline = Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let attempt = async {
+                let (tls, seen) = super::super::connect(port, None).await?;
+                anyhow::Ok((
+                    super::super::login(tls, "user@example.test", "pass").await?,
+                    seen,
+                ))
+            };
+            match attempt.await {
+                Ok(ready) => return ready,
+                Err(e) if Instant::now() >= deadline => panic!("Dovecot never answered: {e:#}"),
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(250)).await,
+            }
+        }
+    }
+
+    /// Every operation against a real IMAP server, Dovecot, holding the
+    /// scripted Bridge's messages in its mailboxes (RFC section 7, T11). The
+    /// results must match the scripted Bridge's snapshots, and no message's
+    /// flags may change, which a server that sets `\Seen` on a fetch would
+    /// show (R1). Run by `scripts/with-dovecot.sh`, which starts Dovecot in
+    /// podman and names its port.
+    #[tokio::test]
+    #[ignore = "needs Dovecot; scripts/with-dovecot.sh runs it"]
+    async fn every_operation_against_dovecot() {
+        let port: u16 = std::env::var("PROTONCTL_DOVECOT_PORT")
+            .expect("PROTONCTL_DOVECOT_PORT, set by scripts/with-dovecot.sh")
+            .parse()
+            .unwrap();
+        let (mut seed, fingerprint) = dovecot_session(port).await;
+        let messages = bridge_messages();
+        for b in bridge_boxes() {
+            // Bridge answers STATUS on the Folders and Labels parents with
+            // "no such mailbox", so they stay names Dovecot makes for their
+            // children; the special-use mailboxes come from
+            // tests/fixtures/dovecot.conf.
+            if b.name.contains('/') {
+                seed.create(b.name).await.unwrap();
+            }
+            for &(_, i) in &b.held {
+                let m = &messages[i];
+                let flags = (!m.flags.is_empty()).then(|| format!("({})", m.flags));
+                let date = format!("\"{}\"", m.date);
+                seed.append(b.name, flags.as_deref(), Some(&date), &m.raw)
+                    .await
+                    .unwrap();
+            }
+        }
+        let before = every_flag(&mut seed).await;
+        let (session, _) = dovecot_session(port).await;
+        let mail = Mail::new(MailConfig {
+            address: "user@example.test".into(),
+            port,
+            cert_sha256: fingerprint,
+        });
+        mail.use_session(session).await.unwrap();
+        every_operation(&mail).await;
+        nothing_saved_in_aliases_mode(&mail).await;
+        assert_eq!(
+            every_flag(&mut seed).await,
+            before,
+            "a read changed the account (R1)"
         );
     }
 }
