@@ -220,7 +220,9 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   in one second). The
   password calls protonctl makes today target the file-based login
   keychain, whose items iCloud does not sync, so "does not synchronize"
-  should hold without more (not confirmed; [#19](https://github.com/matt-w-horn/protonctl/issues/19)); but any program running
+  holds without more (confirmed 2026-10-04: the `privacy-key` item is in
+  `login.keychain-db`, the only keychain on the user's list;
+  [#19](https://github.com/matt-w-horn/protonctl/issues/19)); but any program running
   as the user can read such an item after one Always Allow,
   `/usr/bin/security` included ([section 5](05-security.md)). Binding the item to user
   presence would need the data-protection keychain, and so an entitlement
