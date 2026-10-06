@@ -1,6 +1,6 @@
 //! Detectors find mentions in text (RFC section 6, Pipeline step 3): regex
 //! with validators, and the dictionary of names the result's headers and
-//! the mailbox hold. `GLiNER` joins them in Phase 5.
+//! the mailbox hold. A model, Otter (RFC Q23), joins them in Phase 5.
 
 pub mod dict;
 pub mod pattern;

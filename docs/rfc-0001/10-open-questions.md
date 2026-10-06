@@ -27,7 +27,7 @@
 | Q20 | Drive handles: path or node UID | decided 2026-10-04 |  |
 | Q21 | Pairing names with aliases | decided 2026-10-04 |  |
 | Q22 | Further entity types; dictionary scope | decided 2026-10-04 |  |
-| Q23 | Model runtime for Phases 5 to 7 | open | Phase 5 |
+| Q23 | One model finds names (Otter), run by `tract` | decided 2026-10-05; runtime proposed |  |
 | Q24 | Check the CLI's signature before every run | decided 2026-10-04 |  |
 | Q25 | `/security-review` for Phases 2 and 3 | decided 2026-10-04 |  |
 | Q27 | Mode of a new install | decided 2026-10-04 |  |
@@ -41,6 +41,9 @@
 | Q35 | User presence on Linux | decided 2026-10-04 |  |
 | Q36 | Listing in Anthropic's plugin directory | decided 2026-10-05 |  |
 | Q37 | The Drive CLI's lock file stays in the cache folder | decided 2026-10-05 |  |
+| Q38 | Runtime for the Phase 6 model | open | Phase 6 |
+| Q39 | No second detector in Phase 7 | decided 2026-10-05 |  |
+| Q40 | Build Phase 5 before Phases 3 and 4 | decided 2026-10-05 |  |
 
 ## Decisions and questions
 
@@ -90,8 +93,9 @@
   and export folders (proposed with Q26); the sandboxed converters hold in
   both modes.
 - Q11, decided 2026-10-04: all three services get tokenization at once,
-  with regex and a name dictionary, and GLiNER after; services need not
-  fail closed during the move. Local summaries stay, after GLiNER.
+  with regex and a name dictionary, and a model after (Q23); services
+  need not fail closed during the move. Local summaries stay, after the
+  model.
   Read on review (2026-10-04) as: no service is switched off while Phase 2
   is built, since all three ship together; once Phase 2 ships, a pipeline
   failure fails the call (R13). If a raw fallback was meant instead, R13's
@@ -269,8 +273,77 @@
   empty, so R10 holds, and the no-disk test allows it only while it is
   empty ([section 7](07-testing.md)).
 
+- Q23, decided 2026-10-05 by the maintainer
+  ([#24](https://github.com/matt-w-horn/protonctl/issues/24)): one
+  model finds names in free text, Otter (`whoisjones/otter-cross-mmbert`
+  at commit `8729188`; Apache-2.0; 0.3B parameters on mmBERT-base; more
+  than 100 languages; the entity types are plain words given at run time).
+  The runtime, `tract`, a pure-Rust ONNX runtime in the server process,
+  is proposed with this decision from the measurements below. A proof of
+  concept measured both on 2026-10-05 on an M2 Pro with 16 GB
+  (`scripts/otter-poc.py`, `scripts/otter-ocr-poc.py`):
+  - Names corpus (`tests/fixtures/names.jsonl`: 57 synthetic texts,
+    136 mentions, 14 languages), labels person, organization, project,
+    product and location: recall 0.978 and precision 0.985 at a
+    threshold of 0.2; 0.882 and 0.984 at 0.3; 0.993 and 0.964 at 0.1.
+    Recall counts a mention found when every letter of it lies in a
+    predicted span of any type.
+  - OCR (`tests/fixtures/ocr-docs.jsonl`: 16 synthetic documents in six
+    languages, rendered as scans, faxes and phone photos): on Apple
+    Vision's text, recall 0.924 and precision 0.890 at 0.2; on
+    Tesseract's, 0.906 and 0.871. Joining lines before detection lowered
+    Vision's recall to 0.861, so text goes in as OCR gives it. On faxes,
+    OCR garbled 12 of 21 names past recognition before the model saw
+    them.
+  - Runtimes (`scripts/runtime-bench`), on one window of 604 tokens,
+    each checked against PyTorch's logits (largest difference under 1e-4, the same decisions
+    at 0.2): `tract` 397 ms on five threads; ONNX Runtime through `ort`
+    521 ms on five threads; `burn` 4.1 s on the CPU, and on Metal it
+    stopped on an unsupported data type. `tract` and `burn` are pure
+    Rust; `ort` links a C++ runtime, and its default build downloads it
+    with `ureq`, which `deny.toml` bans. ONNX Runtime with six and eight
+    threads took 4.1 and 5.7 times as long as with four, so the thread
+    count is set, not left to the runtime.
+  - The `tokenizers` crate (0.22, with `fancy-regex` and without its
+    HTTP features) gives Python's token IDs and offsets for all 57
+    texts. The `fix_mistral_regex` option transformers suggests for this
+    tokenizer dropped recall to 0.331, so the tokenizer stays as shipped.
+  - A model is configuration, not code: an ONNX file and a tokenizer,
+    pinned by SHA-256, with its labels and threshold. A new model
+    replaces it when the evaluation's recall per entity type and
+    language does not fall. A change of model changes some aliases, so
+    it raises the format version (Q19). The weights ship with the
+    install (1.2 GB in float32) and are never fetched at run time. The
+    detector is named `model` in `detectors`, since the model will
+    change.
+  - Both corpora were written the day they were measured, and are small,
+    so these numbers are optimistic. Phase 5 sets the threshold and the
+    labels on a larger corpus: `product` gave most of the false positives
+    ("caulk clear", "smoke detectors"). It also decides whether projects
+    and products share Q19's name tag, and whether int8 or float16
+    weights cut the size and the 3.6 s a 20,000-character page is
+    estimated to take.
+
+- Q39, decided 2026-10-05 by the maintainer: Phase 7 has no second
+  detector; OpenAI's Privacy Filter is dropped. A study across 32
+  benchmarks (arXiv 2608.02616) found its F1 0.40 on person names and
+  near zero on non-Latin scripts (0.04 on Arabic), and on the SPY
+  benchmark it scored below GLiNER2-PII (arXiv 2605.09973). It labels
+  private individuals only, where Q7 tokenizes every entity. As a check
+  after Otter it would add a second model to every page, its load and
+  its time, for names Otter already finds.
+
+- Q40, decided 2026-10-05 by the maintainer: Phase 5 is built before
+  Phases 3 and 4. It depends on neither. It closes the residual the
+  [security and privacy review](security-privacy-review.md) rates "high
+  until Phase 5", names that only free text carries, and with it
+  defects D5 and the second half of D7
+  ([#4](https://github.com/matt-w-horn/protonctl/issues/4),
+  [#43](https://github.com/matt-w-horn/protonctl/issues/43)). The phase
+  numbers stay as they are.
+
 - Open, to check before the phase that depends on each
-  ([#21](https://github.com/matt-w-horn/protonctl/issues/21), [#22](https://github.com/matt-w-horn/protonctl/issues/22), [#23](https://github.com/matt-w-horn/protonctl/issues/23) and [#24](https://github.com/matt-w-horn/protonctl/issues/24)):
+  ([#21](https://github.com/matt-w-horn/protonctl/issues/21), [#22](https://github.com/matt-w-horn/protonctl/issues/22) and [#23](https://github.com/matt-w-horn/protonctl/issues/23)):
   - Q13 (Phase 4): `sandbox-exec` is marked deprecated in its man page.
     Check that it still enforces a profile on the current macOS, and that
     Vision, PDFKit through `osascript`, and `textutil` run under a profile
@@ -285,12 +358,9 @@
     Drive app's folder, running `proton-drive`, connecting to Bridge's
     port, writing protonctl's config, running `security` on protonctl's
     Keychain items, and reaching hosts outside an allowlist?
-  - Q23 (Phase 5): the model runtime for GLiNER, the Phase 6 local model
-    and Privacy Filter: in process (`ort`, unsafe code in a dependency
-    only), inside the sandboxed converter, or a local server on 127.0.0.1,
-    which R3 would have to name and `deny.toml`'s HTTP-crate bans would
-    have to allow; weights shipped with the install and pinned by SHA-256;
-    their licences.
+  - Q38 (Phase 6), split from Q23 on 2026-10-05: the runtime for the
+    Phase 6 local model. That model writes text rather than labelling it,
+    so Q23's span runtime need not fit it.
 
 - Declined on 2026-10-03:
   - per-label and per-folder scope levels: out of scope for this package;

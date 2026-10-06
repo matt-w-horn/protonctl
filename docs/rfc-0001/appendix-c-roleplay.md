@@ -18,7 +18,7 @@ alias, with no help from the server beyond its instructions.
   parentheses the first time, say less rather than guess, and never
   guess a real name.
 - Each run received the user's question and the tool results as aliases
-  mode would return them once GLiNER runs (Phase 5), so organization
+  mode would return them once a name model runs (Phase 5), so organization
   names were aliases too, the harder case. It reported its reply, the
   evidence for every role it used, and what the aliases kept it from
   saying.

@@ -100,7 +100,7 @@ const REVIEW_UID: &str = "Wn5Bt8Qc3Rj6Lz1D.review@proton.me";
 const GAPS: [(&str, &str); 2] = [
     // A name only in free text, in no header or invitation: RFC section 6,
     // Pipeline step 2, and security-privacy-review.md ("A name only free
-    // text carries stays plaintext until GLiNER", Phase 5).
+    // text carries stays plaintext until the name model", Phase 5).
     ("Bartholomew Quist", "a name only in free text"),
     // RFC section 6, Pipeline step 3: "Street addresses have no Phase 2
     // detector."

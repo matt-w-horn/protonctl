@@ -66,7 +66,7 @@ members it carries these:
 | Member | When | Type |
 |---|---|---|
 | `entities` | the result holds an alias | object: alias to entity, schema below |
-| `detectors` | always | array of `"regex"`, `"dictionary"`, `"gliner"` (Phase 5) |
+| `detectors` | always | array of `"regex"`, `"dictionary"`, `"model"` (Phase 5) |
 | `dictionaryIncomplete` | a source of the process dictionary could not be read whole within 30 s (Q22) | array of `"mail"`, `"calendar"`: names from it can be missed |
 | `queryEntities` | the call's query named something | object: the text as typed to its alias |
 | `dropped` | a string field had no field policy | array of JSON paths; the fields themselves are removed |
