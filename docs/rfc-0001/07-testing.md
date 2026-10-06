@@ -18,7 +18,9 @@ day all 17 passed again, with the checks added since: 16-character
 messageIds and no `encryption` in search rows, snippets, digests on saved
 files, `count_messages`, an export into the export folder, and a complete
 manifest with its SHA-256, each removed afterwards. On 2026-10-04 it
-passed in aliases mode on a Mac, all 16 tools of that mode. The tests:
+passed in aliases mode on a Mac, all 16 tools of that mode, and later
+that day in off mode, all 18 tools (M1.2 in [section 9](09-rollout.md)).
+The tests:
 
 - Calendar: feed parsing (folding, escapes, VALARM isolation, a VEVENT without
   UID skipped); a weekly series across the DST change with an EXDATE and a
