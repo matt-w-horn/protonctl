@@ -14,3 +14,6 @@ CLAUDE.md
 # Rendered by docs/demo/render.mjs; published outside the repository, since
 # the plugin directory refuses files of 5 MiB or more (RFC-0001 Q36).
 /docs/demo/protonctl-demo.mp4
+
+# The runtime comparison (scripts/runtime-bench) is its own Cargo workspace.
+/scripts/runtime-bench/target
