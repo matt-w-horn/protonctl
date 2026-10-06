@@ -44,6 +44,8 @@
 | Q38 | Runtime for the Phase 6 model | open | Phase 6 |
 | Q39 | No second detector in Phase 7 | decided 2026-10-05 |  |
 | Q40 | Build Phase 5 before Phases 3 and 4 | decided 2026-10-05 |  |
+| Q41 | No Claude Code prompt on `reveal_*` beside Touch ID | decided 2026-10-06 |  |
+| Q42 | A reveal returns text, never page images | decided 2026-10-06 |  |
 
 ## Decisions and questions
 
@@ -347,6 +349,29 @@
   ([#4](https://github.com/matt-w-horn/protonctl/issues/4),
   [#43](https://github.com/matt-w-horn/protonctl/issues/43)). The phase
   numbers stay as they are.
+
+- Decided on 2026-10-06 for Phase 3; the maintainer delegated both to the
+  RFC's existing rules
+  ([#25](https://github.com/matt-w-horn/protonctl/issues/25)).
+  - Q41: `reveal_*` does not set
+    `_meta["anthropic/requiresUserInteraction"]`. Q6 made Touch ID the
+    gate because a host prompt can be answered with "Always allow", and
+    because Claude Desktop and Cowork need the same gate as Claude Code; a
+    second prompt in one host adds nothing to that. It would also undo
+    R18's 10-minute approval, under which paging through an item asks
+    once, by asking on every page, and a prompt on every call teaches the
+    user to approve without reading. The tools still match no allow rule,
+    so Claude Code asks before their first use as for any tool it has not
+    been told to allow.
+  - Q42: a reveal returns text, never page images or image content, after
+    Touch ID as before it. R22 holds in aliases mode without exception.
+    R18's prompt says that the item's full text will reach the model
+    provider, and the `entities` table pairs the names in that text with
+    their aliases (Q21); neither can describe a page image, which carries
+    what no detector reads: faces, signatures, handwriting and the names
+    in them. A scan or an image becomes readable through `reveal_*` in
+    Phase 4, as the text Vision finds in it. A user who wants page images
+    uses off mode (Q26).
 
 - Open, to check before the phase that depends on each
   ([#21](https://github.com/matt-w-horn/protonctl/issues/21), [#22](https://github.com/matt-w-horn/protonctl/issues/22) and [#23](https://github.com/matt-w-horn/protonctl/issues/23)):

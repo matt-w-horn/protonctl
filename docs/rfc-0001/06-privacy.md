@@ -284,8 +284,8 @@ sequenceDiagram
 
 From Phase 2 until Phase 4, a scan or an image has no text to give, and
 `reveal_*` returns no images, so neither is readable through protonctl.
-Whether a reveal may return page images after Touch ID, as raw text is
-returned, is not decided ([#25](https://github.com/matt-w-horn/protonctl/issues/25)).
+A reveal never returns page images, even after Touch ID (Q42); from
+Phase 4 it returns the text Vision finds in a scan or an image, as written.
 
 ### Guidance
 

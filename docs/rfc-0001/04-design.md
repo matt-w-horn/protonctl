@@ -231,10 +231,9 @@ stay on ask; Touch ID gates them either way. Whether Claude Code matches a
 glob inside a tool name, rather than only a whole server or one tool, is
 not checked ([#18](https://github.com/matt-w-horn/protonctl/issues/18)); if it
 does not, the rules list each tool by name. A rule for the whole server (`mcp__proton`) would
-also allow `reveal_*`. Setting `_meta["anthropic/requiresUserInteraction"]`
-on `reveal_*` as well would add Claude Code's own prompt on every call;
-whether that second prompt is worth it is not decided
-([#25](https://github.com/matt-w-horn/protonctl/issues/25)).
+also allow `reveal_*`. `reveal_*` does not set
+`_meta["anthropic/requiresUserInteraction"]`, so Claude Code adds no prompt
+of its own on every call: Touch ID is the one gate (Q41).
 
 ## Results and untrusted content
 
