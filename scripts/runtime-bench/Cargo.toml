@@ -1,0 +1,48 @@
+# The runtime comparison behind RFC-0001 Q23: does each Rust runtime give
+# PyTorch's span logits for Otter, and how fast. Not part of protonctl's build:
+# its own workspace, so the root's cargo, clippy and cargo-deny never see it
+# (ort's default build fetches ONNX Runtime with ureq, which deny.toml bans).
+[package]
+name = "runtime-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"], optional = true }
+ort = { version = "=2.0.0-rc.13", optional = true }
+tract-onnx = { version = "0.23.8", optional = true }
+tract-linalg = { version = "0.23.8", features = ["multithread-mm"], optional = true }
+burn = { version = "0.21", default-features = false, features = ["std", "flex", "metal"], optional = true }
+burn-store = { version = "0.21", features = ["burnpack"], optional = true }
+
+[build-dependencies]
+burn-onnx = { version = "0.21", optional = true }
+
+[features]
+tok = ["dep:tokenizers"]
+ort = ["dep:ort"]
+tract = ["dep:tract-onnx", "dep:tract-linalg"]
+burn = ["dep:burn", "dep:burn-store", "dep:burn-onnx"]
+
+[[bin]]
+name = "tok"
+required-features = ["tok"]
+
+[[bin]]
+name = "ort"
+required-features = ["ort"]
+
+[[bin]]
+name = "tract"
+required-features = ["tract"]
+
+[[bin]]
+name = "burn"
+required-features = ["burn"]
