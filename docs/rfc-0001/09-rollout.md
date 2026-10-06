@@ -10,11 +10,11 @@ flowchart TB
     P1a -.->|withdrawn| P1b["Phase 1b: writes"]
     P1a --> D2{{"M2.0 decisions:<br/>recorded 2026-10-04"}}
     D2 --> P2["Phase 2: the setting, aliases mode"]
-    P2 --> P3["Phase 3: reveal_* behind Touch ID"]
+    P2 --> P5["Phase 5: a name model"]
+    P5 --> P3["Phase 3: reveal_* behind Touch ID"]
     P3 --> P4["Phase 4: sandboxed converters, OCR"]
-    P4 --> P5["Phase 5: GLiNER"]
-    P5 --> P6["Phase 6: local summaries"]
-    P6 --> P7["Phase 7: VM helper, second check"]
+    P4 --> P6["Phase 6: local summaries"]
+    P6 --> P7["Phase 7: VM helper, allowlist"]
     Q15{{"Q15"}} -.-> P3
     Q13{{"Q13"}} -.-> P4
     Q23{{"Q23"}} -.-> P5
@@ -50,9 +50,9 @@ flowchart TB
 | 2 | The privacy setting (R26) and `setup drive`; then aliases mode: the privacy pipeline for all three services at once, at `reply()`, over results, errors and page tokens, failing closed: privacy key, aliases, references, handles, sealed page tokens, keyed digests, the `entities` table, `detectors` and `guidance`; regex with validators and the name dictionary; `download_file`, `export_drive_manifest`, the CLI's `drive manifest`, the `export` and `inline` options, the export and download folders, page images, image content and inline bytes absent in aliases mode and kept in off mode; a panic hook in both modes (R25); the leak test and the `live-check.py` checks. The CLI may be tokenized here too, ahead of Phase 3, since in Phase 2 it is the easy way around the pipeline in Claude Code | built and tested on Linux 2026-10-04; on a Mac the same day, M2.8 (cloud-only reads), the setup commands, signing (Q12) and the aliases-mode live run passed; the off-mode live run, the role-play on real results and the other Mac checks have not run ([#16](https://github.com/matt-w-horn/protonctl/issues/16), [#17](https://github.com/matt-w-horn/protonctl/issues/17), [#18](https://github.com/matt-w-horn/protonctl/issues/18), [#19](https://github.com/matt-w-horn/protonctl/issues/19) and [#20](https://github.com/matt-w-horn/protonctl/issues/20)); the defects below are open; the CLI is not tokenized |
 | 3 | In aliases mode, the `reveal_*` tools, and the CLI tokenized with `--raw` and `--out` behind user presence; Claude Code sandbox settings documented (Q17) | to do; answer Q15 first |
 | 4 | PDFKit and `textutil` under a sandbox profile, directly or behind `protonctl convert`, in both modes; Vision OCR for images and scans in aliases mode; on Linux, poppler and pandoc in `protonctl convert` (MP4) and Tesseract for OCR | to do on macOS; answer Q13 first. On Linux the readers were built 2026-10-05, ahead of this phase (MP4); OCR is to do |
-| 5 | GLiNER (multilingual) through `gline-rs`; short forms within an item; `maybeSameAs`; recall measured on a labeled synthetic corpus | to do; answer Q23 first |
-| 6 | Summary and question views from a local model, written with aliases; finer domain types and titles from signatures as hints | to do; Q23 names the runtime |
-| 7 | A Linux VM helper for the riskiest formats; Privacy Filter as the second check; an optional allowlist of names kept in plaintext | to do |
+| 5 | Otter (multilingual, Q23) through `tract`; short forms within an item; `maybeSameAs`; recall measured on a labeled synthetic corpus | to do; Q23 decided 2026-10-05, after a proof of concept |
+| 6 | Summary and question views from a local model, written with aliases; finer domain types and titles from signatures as hints | to do; Q38 names the runtime |
+| 7 | A Linux VM helper for the riskiest formats; an optional allowlist of names kept in plaintext. Privacy Filter as a second check was dropped on 2026-10-05 (Q39) | to do |
 | P0 to P5 | Linux ([section 11](11-platforms.md)): P1 builds and tests on Linux before Phase 2; P2 Mail and Calendar; P3 Drive; P4 converters with Phase 4; P5 presence with Phase 3 | P0 and P1 done 2026-10-04, with Q30 to Q35 decided; P2 to P4 built 2026-10-05, without OCR, and the live checks of P2 and P3 have not run ([#27](https://github.com/matt-w-horn/protonctl/issues/27) and [#28](https://github.com/matt-w-horn/protonctl/issues/28)); P5 to do |
 
 ## Milestones
@@ -320,18 +320,36 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
 
 ### Phase 5: names in free text
 
-- M5.1 Answer Q23: model runtime, weights shipped and pinned by SHA-256,
-  licences. Exit: a build with no network fetch.
-- M5.2 GLiNER detector, for names in no header; short forms and
+- M5.1 Q23 answered 2026-10-05: Otter through `tract`, weights shipped
+  and pinned by SHA-256, Apache-2.0. Exit: a build with no network
+  fetch.
+- M5.2 The model detector, for names in no header, including
+  organizations, projects and street addresses (D5, D7;
+  [#4](https://github.com/matt-w-horn/protonctl/issues/4),
+  [#43](https://github.com/matt-w-horn/protonctl/issues/43)); short forms and
   `maybeSameAs` of known names were built in Phase 2 (D2, D3). Exit:
-  recall recorded per entity type and language.
+  recall recorded per entity type and language. Requirements:
+  - Text from a result never adds to the model's prompt: before
+    tokenizing, every special token of the tokenizer that appears in the
+    text (`[LABEL]`, `<bos>` and the rest) is replaced by a string of the
+    same byte length that is not a token, so offsets hold. A test plants
+    each one in a message and checks that the names around it are still
+    found. Unescaped, one `[LABEL]` in an email made Otter's own
+    `predict()` refuse the text (Q23).
+  - The model file and tokenizer are checked against their pinned SHA-256
+    when loaded, and the detector runs a fixed sentence at start and
+    refuses to serve unless it finds that sentence's names: a model that
+    finds nothing fails the same way a missing one does, closed (R13).
+  - Inference stops between windows once the call's deadline has passed,
+    so a call cut off at 150 s does not keep the CPU busy.
 
 ### Phases 6 and 7
 
 - M6.1 Summary and question views from a local model, finer hints. Exit:
   the leak test passes over the views.
-- M7.1 The Linux VM helper; M7.2 Privacy Filter as the second check; M7.3
-  the optional allowlist. Exit for each: the leak and recall tests.
+- M7.1 The Linux VM helper; M7.2 the optional allowlist. Exit for each:
+  the leak and recall tests. (M7.2 was Privacy Filter as a second check,
+  dropped on 2026-10-05, Q39.)
 
 ### Phase P: platforms
 

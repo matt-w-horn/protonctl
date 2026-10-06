@@ -65,7 +65,7 @@ New files, under `src/privacy/`:
 | `detect/mod.rs` | the `Detector` trait, `Mention`, the detector registry | 2 |
 | `detect/pattern.rs` | regex with validators: email, phone, card (Luhn), IBAN (mod-97), URL, domain, IP, US Social Security number, a labelled one-time code or password, the local account name in a path (Q22), a SHA-1 or SHA-256 digest in hex and a Proton message ID (R16, R17) | 2 |
 | `detect/dict.rs` | the call dictionary over `aho-corasick` | 2 |
-| `detect/gliner.rs` | GLiNER through `gline-rs` | 5 |
+| `detect/model.rs` | Otter through `tract` (Q23) | 5 |
 | `resolve.rs` | mentions to entities: merge rules, `maybeSameAs` | 2, 5 |
 | `fields.rs` | the field policies: what each result field is (text, address, ID, digest, token, local path) | 2 |
 | `pipeline.rs` | walks a result, applies policies and detectors, builds `entities`, `detectors`, `guidance` | 2 |
@@ -98,7 +98,7 @@ flowchart TB
     priv --> key["key"]
     priv --> pres["presence (Phase 3)"]
     pipe --> fields["fields"]
-    pipe --> det["detect: pattern,<br/>dict, gliner"]
+    pipe --> det["detect: pattern,<br/>dict, model"]
     pipe --> res["resolve"]
     pipe --> ident["ident"]
     pipe --> err["error"]
@@ -201,7 +201,7 @@ impl Session {
 // privacy/detect/mod.rs
 pub struct Mention { pub start: usize, pub end: usize, pub entity: EntityType, pub value: String, pub source: &'static str }
 pub trait Detector: Send + Sync {
-    fn name(&self) -> &'static str;                       // "regex", "dictionary", "gliner"
+    fn name(&self) -> &'static str;                       // "regex", "dictionary", "model"
     fn find(&self, text: &str, out: &mut Vec<Mention>) -> Result<()>;
 }
 ```
@@ -489,7 +489,7 @@ where
 
 `pipeline::run_blocking` runs the pipeline on a blocking thread
 (`spawn_blocking`), so the deadline can end a call while a slow stage
-(GLiNER, Phase 5) works; its late result is dropped. The Session is owned
+(the model, Phase 5) works; its late result is dropped. The Session is owned
 and carries an `Arc` of the keys, so the thread holds the same keys the
 call began with. The sketch shows ownership, not final signatures; M2.4
 settles them.
@@ -506,7 +506,7 @@ flowchart TB
     subgraph run["pipeline::run(tool, value, session)"]
         A["1. walk the Value with rules(tool):<br/>collect Text, Address, Person, DrivePath leaves"]
         B["2. build the call dictionary: names and addresses<br/>from Address and Person leaves, and the query's names"]
-        C["3. detect in every Text leaf:<br/>pattern detectors, the dictionary, GLiNER (Phase 5)"]
+        C["3. detect in every Text leaf:<br/>pattern detectors, the dictionary, the model (Phase 5)"]
         D["4. resolve mentions to entities<br/>(canonical form, merge rules)"]
         E["5. rewrite leaves: mentions to aliases,<br/>Id to handles, Digest to keyed digests,<br/>Token to sealed tokens, LocalPath to placeholders,<br/>Drop removed"]
         F["6. add entities, detectors, queryEntities,<br/>guidance (R23)"]
@@ -547,7 +547,7 @@ lists every rule. Two rules keep the list honest:
 2. Mentions with equal (type class, canonical value) are one entity; the
    type class is `name` for person, organization and location (as the
    alias), so one string typed two ways in one result is one entity, typed
-   by the most specific detector (`dictionary` over `gliner` over
+   by the most specific detector (`dictionary` over `model` over
    `regex`).
 3. An `Address` leaf ("Name <email>") makes two entities, a person and an
    email, and records the email's alias under the person's `addresses`.
@@ -801,7 +801,9 @@ sequenceDiagram
   share its first letter; measured on 2026-10-04 in a release build on
   a Mac, the same pages took a median 54 ms and 89 ms with it, against
   23 ms and 33 ms on that Mac without it.
-- GLiNER (Phase 5) is the one stage with a real cost; its runtime is Q23.
+- The model (Phase 5) is the one stage with a real cost: about 0.4 s per
+  window of 600 tokens with `tract` on five threads, so about 3.6 s for a
+  20,000-character page of nine windows (Q23, an estimate from one window).
 
 ## Testing hooks
 

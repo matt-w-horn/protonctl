@@ -37,7 +37,7 @@
 | Searches by name | no limit; a budget; Touch ID for new names | no limit; `guidance` steers toward topics and references |
 | Images and scans | Vision OCR; a local vision-language model; text layer only | Vision OCR (Phase 4), a model later |
 | Isolating converters | in process; a sandboxed helper; a helper in a Linux VM | sandboxed helper (Phase 4), VM later (Phase 7) |
-| Detectors | regex; a name dictionary; GLiNER; Privacy Filter | regex and a dictionary (Phase 2), GLiNER (Phase 5), Privacy Filter as a second check (Phase 7) |
+| Detectors | regex; a name dictionary; GLiNER; Otter; Privacy Filter | regex and a dictionary (Phase 2), Otter (Phase 5, Q23); Privacy Filter dropped (Q39) |
 | Digests | withhold; keyed; raw | keyed on both ends, as five words |
 | Files on disk | export folder; crypto-shredded cache; RAM disk; none | in aliases mode none but a RAM disk for cloud-only Drive files, since `proton-drive` cannot stream (Q14); in off mode the download and export folders as built (Q26) |
 | Local summaries | keep; drop; questions only | keep (Phase 6) |
@@ -110,10 +110,9 @@ second implementation of SHA-256. Milestone M2.2 chose `ring`
 ([section 9](09-rollout.md)). `zeroize` (through `secrecy`) and `aho-corasick` (through `regex`),
 for the name dictionary, are already in `Cargo.lock`. New: `phonenumber`
 to validate phone numbers, a Unicode case-folding crate (the standard
-library lowercases but does not case fold), and from Phase 5 `gline-rs`
-with `ort`, whose build may download ONNX Runtime (check, and vendor it if
-so). Each new crate's licence is checked against `deny.toml`'s list before
-it is added.
+library lowercases but does not case fold), and from Phase 5 `tract-onnx`
+and `tokenizers` without its HTTP features (Q23). Each new crate's
+licence is checked against `deny.toml`'s list before it is added.
 
 ---
 

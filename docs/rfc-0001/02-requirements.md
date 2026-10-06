@@ -249,7 +249,7 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   missing for a bare name. The `reveal_*` tool descriptions say to try the
   tokenized reads first.
 - R24. From Phase 2, every tokenized result MUST name the detectors that ran
-  in a `detectors` member (`regex` and `dictionary` from Phase 2, `gliner`
+  in a `detectors` member (`regex` and `dictionary` from Phase 2, `model`
   from Phase 5), so a reader can see when names in free text may have been
   missed.
 - R25. From Phase 2, in either mode, logs on stderr MUST NOT carry

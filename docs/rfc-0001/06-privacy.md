@@ -48,22 +48,19 @@ flowchart TB
     subgraph pipe["privacy pipeline, at reply()"]
         S1["1. collect; hidden characters removed (R6)"]
         S2["2. build this call's name dictionary"]
-        S3["3. detect: regex, dictionary; GLiNER from Phase 5"]
+        S3["3. detect: regex, dictionary; a model from Phase 5"]
         S4["4. resolve mentions to entities"]
         S5["5. replace: aliases, handles, keyed digests, sealed page tokens"]
         S6["6. add entities, detectors, guidance"]
-        S7["7. second check: Privacy Filter (Phase 7)"]
-        S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7
+        S1 --> S2 --> S3 --> S4 --> S5 --> S6
     end
-    S7 --> OUT(["to the host"])
+    S6 --> OUT(["to the host"])
     pipe -.->|"any stage fails"| ERR(["error that names no content"])
 
     classDef stage fill:#FFEDD5,stroke:#EA580C,color:#7C2D12
-    classDef later fill:#FFF7ED,stroke:#FDBA74,color:#7C2D12,stroke-dasharray:4 3
     classDef io fill:#E2E8F0,stroke:#475569,color:#0F172A
     classDef bad fill:#FEE2E2,stroke:#DC2626,color:#7F1D1D
     class S1,S2,S3,S4,S5,S6 stage
-    class S7 later
     class T,OUT io
     class ERR bad
 ```
@@ -100,15 +97,13 @@ any step returns an error that names no content (R13).
    account name in a path; a SHA-1 or SHA-256 digest in hex and a
    Proton message ID, which become a keyed digest and a handle, as the
    same values in fields do), the dictionary over all text with
-   `aho-corasick`, and from Phase 5 GLiNER for people, organizations and
-   locations. Street addresses have no Phase 2 detector.
+   `aho-corasick`, and from Phase 5 a model, Otter (Q23), for people,
+   organizations, projects, products and locations. Street addresses have no Phase 2 detector.
 4. Resolve each mention to an entity (below).
 5. Replace each mention with its alias and build the `entities` table;
    replace IDs with handles, digests with keyed digests, and page tokens
    with sealed ones (R16).
 6. Add `detectors` and, where R23 calls for it, `guidance`.
-7. From Phase 7, check the finished result with a second detector, Privacy
-   Filter. A hit withholds that item.
 
 The `entities` table counts toward the result's size: a page holds 20,000
 characters of text by default because 100,000 measured 110,496 characters
@@ -157,7 +152,7 @@ parentheses, numbered within the result, with no word alias and no
   and for Senior. Case folding is Unicode's, without Turkish rules.
 - Names (person, organization, location) share one tag in the alias
   HMAC (Q19, [low-level design](lld-privacy-layer.md#constructions)), so
-  a display name typed `person` in Phase 2 and `organization` by GLiNER
+  a display name typed `person` in Phase 2 and `organization` by the model
   in Phase 5 keeps its alias, at the cost that a person and an
   organization with the same canonical name share one. Changes to the
   canonical rules or the word list change aliases; the `v1` in the key

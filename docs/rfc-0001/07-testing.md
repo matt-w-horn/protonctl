@@ -657,7 +657,12 @@ missing ones:
 - Recall (Phase 5): per entity type, on a labeled synthetic corpus in
   English, German, French and one non-Latin script. Results are recorded,
   with no pass mark until there is a measured baseline. Not built
-  (Phase 5).
+  (Phase 5). The proof of concept for Q23 measured a first baseline in
+  Python, outside `cargo test`: `scripts/otter-poc.py` over
+  `tests/fixtures/names.jsonl` (57 texts, 14 languages) and
+  `scripts/otter-ocr-poc.py` over `tests/fixtures/ocr-docs.jsonl`
+  (16 documents read back by OCR). Its numbers are in
+  [section 10](10-open-questions.md), Q23.
 - `scripts/live-check.py` (Phase 2; real data, counts only): every result
   with aliases carries `entities`, and every entry a `ref`; no text field
   outside `entities` matches an email-address, phone-number or 40- or
