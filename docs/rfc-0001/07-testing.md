@@ -699,9 +699,25 @@ LIST, EXAMINE, STATUS, UID SEARCH, UID FETCH and LOGOUT, with no fetch of
 `BODY[` or an `RFC822` item; `commands_that_can_change_the_account_are_refused`
 in `src/mail/read.rs` pins that the check refuses the others.
 
-Not built: a hermetic IMAP test
-against Dovecot in podman seeded with a synthetic Bridge-shaped mailbox
-([#10](https://github.com/matt-w-horn/protonctl/issues/10)); an optional prompt-injection drill (about 5 Claude runs), extended
+The scripted Bridge's operations also run against a real IMAP server (T11, built
+2026-10-06, [#10](https://github.com/matt-w-horn/protonctl/issues/10)):
+`scripts/with-dovecot.sh` starts Dovecot 2.3.21, pinned by digest, in a
+throwaway podman container with `tests/fixtures/dovecot.conf`, which
+gives Bridge's mailbox names and roles over implicit TLS. The ignored
+test `every_operation_against_dovecot` seeds the scripted Bridge's
+messages with APPEND from a session of its own, reads them through a
+`Mail`, and holds every result to the scripted Bridge's snapshots;
+`list_labels` is compared in Bridge's mailbox order, since IMAP leaves the
+order of LIST to the server. It then reads every mailbox and every
+message's flags but `\Recent` again, and fails if any changed. That check
+failed when a read used both SELECT and `BODY[]`; with `BODY[]` alone
+nothing changed, since a mailbox opened with EXAMINE is read-only. So it
+catches a change only where a read opens a mailbox with SELECT; which
+commands are sent stays the scripted Bridge's check, over the same
+operations. `scripts/check.sh` runs it on Linux where
+podman is installed.
+
+Not built: an optional prompt-injection drill (about 5 Claude runs), extended
 to check that injected text gets no raw content without Touch ID, and
 sends nothing out through the host's other tools ([#11](https://github.com/matt-w-horn/protonctl/issues/11)).
 The sandbox-only live write tests are withdrawn with the writes.

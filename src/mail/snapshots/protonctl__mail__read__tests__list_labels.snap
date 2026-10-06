@@ -1,6 +1,6 @@
 ---
 source: src/mail/read.rs
-expression: mail.list_labels().await.unwrap()
+expression: labels
 ---
 {
   "labels": [
