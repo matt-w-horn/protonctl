@@ -239,7 +239,8 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   Bytes go in on stdin and UTF-8 text comes out on stdout. The parent
   process tokenizes the text (R13).
 - R22. In aliases mode, from Phase 2, results MUST NOT contain image
-  content, page images or file bytes in any encoding. Until Phase 4, an
+  content, page images or file bytes in any encoding, `reveal_*` results
+  included (Q42). Until Phase 4, an
   image or a scan returns its metadata and `"text": null` with the reason;
   from Phase 4 it returns the text Vision finds in it. Off mode keeps page
   images, image content and `inline` bytes as built.
