@@ -65,7 +65,7 @@ New files, under `src/privacy/`:
 | `detect/mod.rs` | the `Detector` trait, `Mention`, the detector registry | 2 |
 | `detect/pattern.rs` | regex with validators: email, phone, card (Luhn), IBAN (mod-97), URL, domain, IP, US Social Security number, a labelled one-time code or password, the local account name in a path (Q22), a SHA-1 or SHA-256 digest in hex and a Proton message ID (R16, R17) | 2 |
 | `detect/dict.rs` | the call dictionary over `aho-corasick` | 2 |
-| `detect/model.rs` | Otter through `tract` (Q23) | 5 |
+| `detect/model.rs` | the one model for names in free text, Otter through `tract` (Q23); its ONNX file, tokenizer, labels and threshold are configuration, pinned by SHA-256, not code | 5 |
 | `resolve.rs` | mentions to entities: merge rules, `maybeSameAs` | 2, 5 |
 | `fields.rs` | the field policies: what each result field is (text, address, ID, digest, token, local path) | 2 |
 | `pipeline.rs` | walks a result, applies policies and detectors, builds `entities`, `detectors`, `guidance` | 2 |
@@ -564,7 +564,10 @@ lists every rule. Two rules keep the list honest:
    initials join a full name when exactly one known name fits and the
    result's own headers hold it; otherwise the form is its own entity,
    and both rows carry `maybeSameAs`. A misspelling of a known name, from
-   typing or OCR, is always its own entity, linked the same way.
+   typing or OCR, is always its own entity, linked the same way. These
+   rules stay when the model comes in Phase 5; one is removed only when
+   the evaluation (D1) shows that nothing it finds passes raw without it
+   (Q23).
 
 ### Replacement
 
@@ -837,11 +840,14 @@ flowchart TB
     M27 --> M29["M2.9 logs, panic hook"]
     M29 --> M210["M2.10 live check, README"]
     M28["M2.8 cloud-only reads (Q14)"] --> M210
-    M210 --> M3["Phase 3: presence, reveal_*"]
+    M210 --> M5["Phase 5: the model (Q23, Q40)"]
+    M5 --> M3["Phase 3: presence, reveal_*"]
 
     classDef m fill:#E0E7FF,stroke:#4F46E5,color:#1E1B4B
-    class M211,M21,M22,M23,M24,M25,M26,M27,M28,M29,M210,M3 m
+    class M211,M21,M22,M23,M24,M25,M26,M27,M28,M29,M210,M5,M3 m
 ```
+
+Phase 5 comes before Phase 3, as Q40 decided; the phase numbers stay.
 
 ---
 

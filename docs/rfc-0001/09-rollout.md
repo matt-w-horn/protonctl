@@ -10,14 +10,15 @@ flowchart TB
     P1a -.->|withdrawn| P1b["Phase 1b: writes"]
     P1a --> D2{{"M2.0 decisions:<br/>recorded 2026-10-04"}}
     D2 --> P2["Phase 2: the setting, aliases mode"]
-    P2 --> P5["Phase 5: a name model"]
+    P2 --> P5["Phase 5: one model for names"]
     P5 --> P3["Phase 3: reveal_* behind Touch ID"]
     P3 --> P4["Phase 4: sandboxed converters, OCR"]
     P4 --> P6["Phase 6: local summaries"]
     P6 --> P7["Phase 7: VM helper, allowlist"]
     Q15{{"Q15"}} -.-> P3
     Q13{{"Q13"}} -.-> P4
-    Q23{{"Q23"}} -.-> P5
+    Q23{{"Q23: decided"}} -.-> P5
+    Q38{{"Q38"}} -.-> P6
     PP1["Phase P1: builds and tests on Linux"] --> P2
     P1a --> PP1
     P2 -.-> PP2["Phases P2 to P4: Linux backends,<br/>secrets, Drive, readers"]
@@ -35,11 +36,11 @@ flowchart TB
     classDef todo fill:#E0E7FF,stroke:#4F46E5,color:#1E1B4B
     classDef gone fill:#F1F5F9,stroke:#94A3B8,color:#64748B,stroke-dasharray:4 3
     classDef q fill:#FFEDD5,stroke:#EA580C,color:#7C2D12
-    class P0,PP1,D2,L1 done
+    class P0,PP1,D2,Q23,L1 done
     class P1a,P2,PP2,L2 part
     class P3,P4,P5,P6,P7,PP5,L3 todo
     class P1b,L4 gone
-    class Q13,Q15,Q23 q
+    class Q13,Q15,Q38 q
 ```
 
 | Phase | Contents | State |
@@ -50,8 +51,8 @@ flowchart TB
 | 2 | The privacy setting (R26) and `setup drive`; then aliases mode: the privacy pipeline for all three services at once, at `reply()`, over results, errors and page tokens, failing closed: privacy key, aliases, references, handles, sealed page tokens, keyed digests, the `entities` table, `detectors` and `guidance`; regex with validators and the name dictionary; `download_file`, `export_drive_manifest`, the CLI's `drive manifest`, the `export` and `inline` options, the export and download folders, page images, image content and inline bytes absent in aliases mode and kept in off mode; a panic hook in both modes (R25); the leak test and the `live-check.py` checks. The CLI may be tokenized here too, ahead of Phase 3, since in Phase 2 it is the easy way around the pipeline in Claude Code | built and tested on Linux 2026-10-04; on a Mac the same day, M2.8 (cloud-only reads), the setup commands, signing (Q12) and the aliases-mode live run passed; the off-mode live run, the role-play on real results and the other Mac checks have not run ([#16](https://github.com/matt-w-horn/protonctl/issues/16), [#17](https://github.com/matt-w-horn/protonctl/issues/17), [#18](https://github.com/matt-w-horn/protonctl/issues/18), [#19](https://github.com/matt-w-horn/protonctl/issues/19) and [#20](https://github.com/matt-w-horn/protonctl/issues/20)); the defects below are open; the CLI is not tokenized |
 | 3 | In aliases mode, the `reveal_*` tools, and the CLI tokenized with `--raw` and `--out` behind user presence; Claude Code sandbox settings documented (Q17) | to do; answer Q15 first |
 | 4 | PDFKit and `textutil` under a sandbox profile, directly or behind `protonctl convert`, in both modes; Vision OCR for images and scans in aliases mode; on Linux, poppler and pandoc in `protonctl convert` (MP4) and Tesseract for OCR | to do on macOS; answer Q13 first. On Linux the readers were built 2026-10-05, ahead of this phase (MP4); OCR is to do |
-| 5 | Otter (multilingual, Q23) through `tract`; short forms within an item; `maybeSameAs`; recall measured on a labeled synthetic corpus | to do; Q23 decided 2026-10-05, after a proof of concept |
-| 6 | Summary and question views from a local model, written with aliases; finer domain types and titles from signatures as hints | to do; Q38 names the runtime |
+| 5 | One model finds names in free text: Otter (multilingual, Q23) through `tract`, as configuration (files pinned by SHA-256, labels, threshold); recall measured per entity type and language on a labeled synthetic corpus; the dictionary's name rules stay until that evaluation shows one redundant | to do, next, before Phases 3 and 4 (Q40); Q23 decided 2026-10-05, after a proof of concept |
+| 6 | Summary and question views from a local model, written with aliases; finer domain types and titles from signatures as hints | to do; Q38, open, names the runtime |
 | 7 | A Linux VM helper for the riskiest formats; an optional allowlist of names kept in plaintext. Privacy Filter as a second check was dropped on 2026-10-05 (Q39) | to do |
 | P0 to P5 | Linux ([section 11](11-platforms.md)): P1 builds and tests on Linux before Phase 2; P2 Mail and Calendar; P3 Drive; P4 converters with Phase 4; P5 presence with Phase 3 | P0 and P1 done 2026-10-04, with Q30 to Q35 decided; P2 to P4 built 2026-10-05, without OCR, and the live checks of P2 and P3 have not run ([#27](https://github.com/matt-w-horn/protonctl/issues/27) and [#28](https://github.com/matt-w-horn/protonctl/issues/28)); P5 to do |
 
@@ -268,7 +269,7 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
   which run through the detectors only. Projects have no entity type and
   no source of names.
   Moved to Phase 5 on 2026-10-04: a project's name is in no header, so
-  finding it needs the named-entity model, which waits for Q23
+  finding it needs the model Q23 chose on 2026-10-05
   ([#4](https://github.com/matt-w-horn/protonctl/issues/4)).
 - D6 One entity gets several aliases: a person's full name and another
   form of it in one result each got their own alias. Fixed 2026-10-04 for
@@ -323,12 +324,22 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
 - M5.1 Q23 answered 2026-10-05: Otter through `tract`, weights shipped
   and pinned by SHA-256, Apache-2.0. Exit: a build with no network
   fetch.
-- M5.2 The model detector, for names in no header, including
-  organizations, projects and street addresses (D5, D7;
-  [#4](https://github.com/matt-w-horn/protonctl/issues/4),
-  [#43](https://github.com/matt-w-horn/protonctl/issues/43)); short forms and
-  `maybeSameAs` of known names were built in Phase 2 (D2, D3). Exit:
-  recall recorded per entity type and language. Requirements:
+- M5.2 The model detector, for names in no header: people,
+  organizations, projects, products and locations, the labels Q23
+  measured, and street addresses only if Phase 5 adds a label for them
+  (D5, D7; [#4](https://github.com/matt-w-horn/protonctl/issues/4),
+  [#43](https://github.com/matt-w-horn/protonctl/issues/43)); short forms,
+  initials, misspellings and `maybeSameAs` of known names were built in
+  Phase 2 (D2 to D4, D6). Exit: recall recorded per entity type and
+  language. Requirements:
+  - The model is configuration: its ONNX file and tokenizer, pinned by
+    SHA-256, its labels and its threshold, set on a corpus larger than
+    the proof of concept's. A new model replaces it only when recall per
+    entity type and language does not fall, and raises the format
+    version (Q19, Q23).
+  - The dictionary's name rules stay. One is removed only when the
+    evaluation (D1) shows that nothing it finds passes raw without it
+    (Q23).
   - Text from a result never adds to the model's prompt: before
     tokenizing, every special token of the tokenizer that appears in the
     text (`[LABEL]`, `<bos>` and the rest) is replaced by a string of the
@@ -345,8 +356,8 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
 
 ### Phases 6 and 7
 
-- M6.1 Summary and question views from a local model, finer hints. Exit:
-  the leak test passes over the views.
+- M6.1 Summary and question views from a local model, finer hints, once
+  Q38 names its runtime. Exit: the leak test passes over the views.
 - M7.1 The Linux VM helper; M7.2 the optional allowlist. Exit for each:
   the leak and recall tests. (M7.2 was Privacy Filter as a second check,
   dropped on 2026-10-05, Q39.)

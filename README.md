@@ -210,7 +210,10 @@ model. Choose one:
   Nothing is saved to disk: a Drive file that is only in the cloud is
   fetched into a RAM disk that protonctl makes for itself and removes when
   it stops (on Linux, a private folder under `$XDG_RUNTIME_DIR`), and
-  images come back as a type and a reason.
+  images come back as a type and a reason. A name that appears only in
+  free text, such as a body, a subject or a file name, can still pass as
+  written until a model that finds such names is built (Phase 5, next in
+  the [RFC](docs/rfc-0001/09-rollout.md)).
 - **Off** (`setup privacy --off`): results as they are, names included.
   It asks first, on a terminal.
 

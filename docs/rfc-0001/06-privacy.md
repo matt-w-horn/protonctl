@@ -84,8 +84,8 @@ any step returns an error that names no content (R13).
    [Appendix A](appendix-a-phase-0.md)) and every calendar attendee, built
    on the first aliases-mode call and held in memory only, so that a
    correspondent's name is found in Drive names, subjects and titles too.
-   Until Phase 5 the server knows a query term is a name only when an
-   operator holds it (`from:`, `to:`, `cc:`, `bcc:`), a regex finds it, or
+   Until Phase 5, which comes next (Q40), the server knows a query term
+   is a name only when an operator holds it (`from:`, `to:`, `cc:`, `bcc:`), a regex finds it, or
    the dictionary already has it; a bare name among topic words ("Alice
    Chen contract") is not recognized, so `queryEntities` and R23's
    guidance miss it, unless the process dictionary holds the name.
@@ -97,8 +97,13 @@ any step returns an error that names no content (R13).
    account name in a path; a SHA-1 or SHA-256 digest in hex and a
    Proton message ID, which become a keyed digest and a handle, as the
    same values in fields do), the dictionary over all text with
-   `aho-corasick`, and from Phase 5 a model, Otter (Q23), for people,
-   organizations, projects, products and locations. Street addresses have no Phase 2 detector.
+   `aho-corasick`, and from Phase 5 one model, Otter (Q23), for people,
+   organizations, projects, products and locations. The model is
+   configuration, not code: a pinned file with its labels and threshold,
+   replaced by another only when recall per entity type and language does
+   not fall. Street addresses have
+   no Phase 2 detector, and the model finds them only if Phase 5 adds a
+   label for them.
 4. Resolve each mention to an entity (below).
 5. Replace each mention with its alias and build the `entities` table;
    replace IDs with handles, digests with keyed digests, and page tokens
@@ -137,8 +142,10 @@ parentheses, numbered within the result, with no word alias and no
   accepts the first error to avoid the second. A misspelling of a known
   person's name, by typing (a swap, a letter added or lost) or by OCR (0
   for o, 1 for i, rn for m), is never joined: it gets its own alias,
-  linked by `maybeSameAs`. Names that appear in no header reach the
-  dictionary only through Phase 5's model.
+  linked by `maybeSameAs`. Names that appear in no header are found only
+  by Phase 5's model. These rules stay beside the model; one is removed
+  only when the evaluation shows that nothing it finds passes raw
+  without it (Q23).
 - Known limits: inflected names (a German genitive, Slavic case endings) and
   names written in another script get their own aliases unless an email
   address links them.

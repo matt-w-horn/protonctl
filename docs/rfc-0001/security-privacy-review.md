@@ -209,6 +209,7 @@ check runs.
 | Information disclosure | On Linux, any process in the user's session reads protonctl's Secret Service items over D-Bus once the collection is unlocked, with no per-program prompt like the Keychain's | TB0 | accept | a collection unlocked only while needed; Q31 chose the Secret Service, which Bridge and the Drive CLI need on Linux anyway | medium on Linux |
 | Elevation of privilege | On Linux the model usually has a shell, in Claude Code or Claude Desktop's Code tab | TB0 | transfer | Claude Code's sandbox (Q17) | high on Linux without a sandbox |
 | Elevation of privilege | A dependency is compromised | TB1 | mitigate | a small set; `Cargo.lock`; `cargo deny` | low |
+| Tampering | A swapped or altered model file finds fewer names, from Phase 5 | TB1 | mitigate | the model and tokenizer ship with the install, pinned by SHA-256 and checked on load; a fixed sentence must give its names at start, or the detector refuses to serve (M5.2, R13) | low |
 
 ### Privacy (LINDDUN)
 
@@ -218,7 +219,7 @@ check runs.
 | Linking | One pairing of a name with its alias (a typed query, a reveal) reads that alias as the name in every transcript under the key | mitigate | a query pairs only names that match an entity in its result (Q21); a reveal keeps its pairing, which Claude needs, so that part is accepted; `rotate-key` | medium: each pairing follows an action the user took |
 | Linking | An item seen in off mode and in aliases mode pairs names with aliases across transcripts | mitigate | `rotate-key` when aliases mode comes back ([section 4, Settings](04-design.md#settings)) | medium |
 | Identifying | Context identifies a person whom no alias names: a job, an event, a writing style | accept | a non-goal; hints stay coarse; local summaries reduce context (Phase 6) | medium |
-| Identifying | A name only free text carries stays plaintext until the name model | mitigate | the dictionary; the model, Otter (Phase 5, Q23); `detectors` says what ran (R24) | high until Phase 5 |
+| Identifying | A name only free text carries stays plaintext until the name model | mitigate | the dictionary; one model, Otter (Phase 5, Q23), built next (Q40); `detectors` says what ran (R24) | high until Phase 5; then medium, since the model misses some names (recall 0.978 on a small synthetic corpus, 0.924 on OCR text; Q23) |
 | Identifying | Two people share an alias and Claude merges them | mitigate | a fourth word inside one result (Q19); URLs get no alias, so tracking links do not add entities | low under 20,000 entities (0.06%); medium above, where it reaches 5% at 200,000 |
 | Non-repudiation | With the privacy key, transcripts reverse fully: refs and handles decrypt, and keyed digests match files | accept | the key stays in this Mac's Keychain and never syncs (R20); `rotate-key` and `logout` end it | medium |
 | Non-repudiation | In off mode, Proton IDs and raw digests in transcripts match Proton's records and the files themselves | accept | the user's choice of off mode; aliases mode removes them (I12) | medium in off mode |
@@ -253,7 +254,8 @@ reopen it.
 | Login keychain items | works without an Apple Developer ID, with the self-signed identity of Q12 | any program the user approves can read them | a built binary is distributed: an Apple Developer ID and the data-protection keychain; the directory listing distributes source, which each user builds and signs (Q12, Q36) |
 | Fixed fault codes in aliases mode | errors cannot carry names or paths | less detail for the model | `doctor` and `--raw` give the user detail; revisit if the model is often stuck |
 | Linux through a platform module, with traits when needed (Q30) | builds and tests in containers; Linux users; fakes where tests need them | two implementations of each service to keep in step; some Linux mechanisms are weaker (the Secret Service, presence without Touch ID) | a feature that cannot meet its requirement on Linux is absent there, not weaker (I18) |
-| Local models for Phases 5 to 7 | names in free text, summaries | install size, native code, a runtime to choose (Q23) | Q23 |
+| One model for names in free text, as configuration (Q23) | names in no header found, in more than 100 languages; a model swapped without code changes | 1.2 GB of weights in float32 in the install; a change of model changes some aliases (Q19) | the evaluation shows a smaller or better model, or int8 or float16 weights that keep recall |
+| A local model for summaries (Phase 6) | less context leaves | a second model and its runtime, still open (Q38) | Q38 |
 
 ## 5. Validation
 
@@ -264,7 +266,7 @@ The cheat sheet's review questions, answered for this model:
 | Does the data-flow diagram reflect the system? | Yes: drawn from the code at 7786b3e, and checked again at cac0a1f (2026-10-05). That check added the memory folder, the Secret Service and `protonctl convert`, and the off-mode download and export folders, which the first drawing left out. It is checked again when each phase closes. |
 | Have all threats been identified? | No: the Cowork cloud path and where each host stores results (M1.1), how LocalAuthentication is reached (Q15), and how Claude Desktop's Linux beta and Cowork's virtual machine reach a local server are not measured ([#18](https://github.com/matt-w-horn/protonctl/issues/18), [#22](https://github.com/matt-w-horn/protonctl/issues/22) and [#29](https://github.com/matt-w-horn/protonctl/issues/29)). |
 | Does each threat have a response? | Yes: every row in section 3 names one. The accepted risks are the linking, identifying and non-repudiation rows the design takes on for stability, the calendar link, Keychain readability, and repudiation. |
-| Do the mitigations reduce risk to an acceptable level? | Off mode: as the user chose it. Aliases mode: not until Phase 5 for names that appear only in free text, though the process-wide dictionary (Q22) narrows that gap to names that never appear in a header or invitation; the "high" rows say so. |
+| Do the mitigations reduce risk to an acceptable level? | Off mode: as the user chose it. Aliases mode: not until Phase 5, built next (Q40), for names that appear only in free text, though the process-wide dictionary (Q22) narrows that gap to names that never appear in a header or invitation; the "high" rows say so. |
 | Is the model documented and accessible? | This file, with the RFC; it is versioned in the repository. |
 | Can the mitigations be tested? | Every invariant names its check. Built checks: I1, I3 to I7, I10 to I13, I15, I16, I17 on Linux and I18 for P1 to P4, some of them in part, as the table says; I2 and I8 are checked by reading the code. Not built: I9's test, I14 (Phase 3) and I17 on macOS (Phase 4). [Section 7](07-testing.md) says which planned tests exist, and [the issues labeled tests](https://github.com/matt-w-horn/protonctl/issues?q=label%3Atests) list the missing ones. |
 

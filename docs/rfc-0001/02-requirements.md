@@ -42,10 +42,11 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   is `proton.me` or a subdomain of it. Partly machine-checked: `cargo deny`
   bans HTTP client crates, and a property test checks that every accepted link
   names a Proton host; the network sites are checked by reading them. The
-  models of Phases 5 to 7 are files that ship with the install, pinned by
-  SHA-256, and are never fetched at run time; whether a model may run
-  behind a socket on 127.0.0.1, which this requirement would then have to
-  name, is open (Q23).
+  models of Phases 5 and 6 are files that ship with the install, pinned by
+  SHA-256, and are never fetched at run time. Phase 5's model runs inside
+  the server process (Q23); whether Phase 6's may run behind a socket on
+  127.0.0.1, which this requirement would then have to name, is open
+  (Q38).
 - R4. Every tool MUST set `title`, `readOnlyHint`, `destructiveHint`,
   `idempotentHint`, and `openWorldHint: false` explicitly.
 - R5. Withdrawn 2026-10-04: there are no trash tools (R1).
