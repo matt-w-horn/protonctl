@@ -2749,7 +2749,7 @@ pub(crate) mod tests {
         let boxes = bridge_boxes();
         let order: Vec<&str> = boxes
             .iter()
-            .filter_map(|b| b.name.rsplit('/').next())
+            .map(|b| b.name.rsplit('/').next().unwrap_or(b.name))
             .collect();
         let rows = labels["labels"].as_array_mut().unwrap();
         rows.sort_by_key(|row| order.iter().position(|n| row["name"].as_str() == Some(n)));
@@ -2783,23 +2783,25 @@ pub(crate) mod tests {
         assert_eq!(unlisted, Vec::<String>::new(), "{}", unsaved.json);
     }
 
-    /// Every mailbox's messages as (mailbox, UID, flags), read with EXAMINE
-    /// and FLAGS only, so reading them changes none of them.
-    async fn every_flag(session: &mut Session) -> Vec<(String, u32, String)> {
-        let names: Vec<String> = session
+    /// The account's state: a row for every mailbox listed, empty ones
+    /// included, then (mailbox, UID, flags) for each message in it. Read with
+    /// EXAMINE and FLAGS only, so reading it changes nothing. `\Recent` is
+    /// left out: it is the session's, not the account's.
+    async fn account_state(session: &mut Session) -> Vec<(String, Option<u32>, String)> {
+        let listed: Vec<_> = session
             .list(None, Some("*"))
             .await
             .unwrap()
-            .try_collect::<Vec<_>>()
+            .try_collect()
             .await
-            .unwrap()
-            .iter()
-            .filter(|n| !n.attributes().contains(&NameAttribute::NoSelect))
-            .map(|n| n.name().to_string())
-            .collect();
-        let mut flags = Vec::new();
-        for name in names {
-            if session.examine(&name).await.unwrap().exists == 0 {
+            .unwrap();
+        let mut state = Vec::new();
+        for n in &listed {
+            let name = n.name().to_string();
+            state.push((name.clone(), None, String::new()));
+            if n.attributes().contains(&NameAttribute::NoSelect)
+                || session.examine(&name).await.unwrap().exists == 0
+            {
                 continue;
             }
             let fetched: Vec<Fetch> = session
@@ -2810,13 +2812,17 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
             for f in fetched {
-                let mut held: Vec<String> = f.flags().map(|g| format!("{g:?}")).collect();
+                let mut held: Vec<String> = f
+                    .flags()
+                    .filter(|g| !matches!(g, async_imap::types::Flag::Recent))
+                    .map(|g| format!("{g:?}"))
+                    .collect();
                 held.sort();
-                flags.push((name.clone(), f.uid.unwrap(), held.join(" ")));
+                state.push((name.clone(), f.uid, held.join(" ")));
             }
         }
-        flags.sort();
-        flags
+        state.sort();
+        state
     }
 
     /// A session on the Dovecot that `scripts/with-dovecot.sh` started, once
@@ -2841,10 +2847,13 @@ pub(crate) mod tests {
 
     /// Every operation against a real IMAP server, Dovecot, holding the
     /// scripted Bridge's messages in its mailboxes (RFC section 7, T11). The
-    /// results must match the scripted Bridge's snapshots, and no message's
-    /// flags may change, which a server that sets `\Seen` on a fetch would
-    /// show (R1). Run by `scripts/with-dovecot.sh`, which starts Dovecot in
-    /// podman and names its port.
+    /// results must match the scripted Bridge's snapshots, and the account's
+    /// mailboxes and flags must be unchanged afterwards (R1). Dovecot keeps a
+    /// mailbox opened with EXAMINE read-only, so this catches a change only
+    /// where a read opens one with SELECT; which commands are sent is
+    /// checked by the scripted Bridge's test, over the same operations. Run
+    /// by `scripts/with-dovecot.sh`, which starts Dovecot in podman and
+    /// names its port.
     #[tokio::test]
     #[ignore = "needs Dovecot; scripts/with-dovecot.sh runs it"]
     async fn every_operation_against_dovecot() {
@@ -2871,7 +2880,7 @@ pub(crate) mod tests {
                     .unwrap();
             }
         }
-        let before = every_flag(&mut seed).await;
+        let before = account_state(&mut seed).await;
         let (session, _) = dovecot_session(port).await;
         let mail = Mail::new(MailConfig {
             address: "user@example.test".into(),
@@ -2882,7 +2891,7 @@ pub(crate) mod tests {
         every_operation(&mail).await;
         nothing_saved_in_aliases_mode(&mail).await;
         assert_eq!(
-            every_flag(&mut seed).await,
+            account_state(&mut seed).await,
             before,
             "a read changed the account (R1)"
         );

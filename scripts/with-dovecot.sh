@@ -8,10 +8,14 @@ cd "$(dirname "$0")/.."
 
 image=docker.io/dovecot/dovecot:2.3.21@sha256:1c18c756f20d03867077a1b509a6e2e3008ab1eafa56377b6f2eca12dc1ba581
 name="protonctl-dovecot-$$"
-podman run --detach --rm --name "$name" --publish 127.0.0.1::993 \
-    --volume "$PWD/tests/fixtures/dovecot.conf:/etc/dovecot/dovecot.conf:ro" \
-    "$image" >/dev/null
+# Set before the container starts; dash runs an EXIT trap on a signal only
+# when the signal's own trap exits.
 trap 'podman rm --force --time 0 "$name" >/dev/null 2>&1' EXIT
+trap 'exit 130' INT TERM
+# `z` lets the container read the file where SELinux is enforcing.
+podman run --detach --rm --name "$name" --publish 127.0.0.1::993 \
+    --volume "$PWD/tests/fixtures/dovecot.conf:/etc/dovecot/dovecot.conf:ro,z" \
+    "$image" >/dev/null
 port=$(podman port "$name" 993/tcp | sed 's/.*://')
 
 PROTONCTL_DOVECOT_PORT="$port" cargo test --locked --bin protonctl \

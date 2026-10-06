@@ -708,10 +708,13 @@ test `every_operation_against_dovecot` seeds the scripted Bridge's
 messages with APPEND from a session of its own, reads them through a
 `Mail`, and holds every result to the scripted Bridge's snapshots;
 `list_labels` is compared in Bridge's mailbox order, since IMAP leaves the
-order of LIST to the server. It then reads every message's flags again
-and fails if any changed. That check failed when a read used both SELECT
-and `BODY[]`; with `BODY[]` alone nothing changed, since a mailbox
-opened with EXAMINE is read-only. `scripts/check.sh` runs it on Linux where
+order of LIST to the server. It then reads every mailbox and every
+message's flags but `\Recent` again, and fails if any changed. That check
+failed when a read used both SELECT and `BODY[]`; with `BODY[]` alone
+nothing changed, since a mailbox opened with EXAMINE is read-only. So it
+catches a change only where a read opens a mailbox with SELECT; which
+commands are sent stays the scripted Bridge's check, over the same
+operations. `scripts/check.sh` runs it on Linux where
 podman is installed.
 
 Not built: an optional prompt-injection drill (about 5 Claude runs), extended
