@@ -193,8 +193,9 @@ M2.11 comes first: every other Phase 2 milestone runs only in aliases mode.
   and aliases mode refuses them. If M2.0 takes R10 for both modes instead,
   this milestone deletes them, as the 2026-10-04 revision planned. Exit:
   each mode's surface snapshot; the forbidden-name and exact-set tests; the
-  no-disk test in aliases mode. Done 2026-10-04: aliases mode saves
-  nothing, and a non-text attachment returns its `reason` alone.
+  no-disk test in aliases mode. Done 2026-10-04 for the tools: aliases
+  mode saves nothing, and a non-text attachment returns its `reason`
+  alone. The CLI does not refuse them yet ([#73](https://github.com/matt-w-horn/protonctl/issues/73)).
 - M2.8 Cloud-only reads through a per-process RAM disk, since the CLI
   cannot write to stdout (Q14), with the checks Q14 lists.
   Exit: the no-disk test for a cloud-only read. Done 2026-10-04 on macOS

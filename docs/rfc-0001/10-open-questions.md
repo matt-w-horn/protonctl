@@ -210,7 +210,9 @@
     window for a swap after the check and needs no admin-owned folder.
   - Q25: `/security-review` runs on the Phase 2 and Phase 3 changes,
     beside `/code-review`, since they add protonctl's own cryptography and
-    user presence.
+    user presence. The Phase 2 review ran on 2026-10-06; its findings are
+    in the [security and privacy review](security-privacy-review.md#6-phase-2-security-review-q25)
+    ([#15](https://github.com/matt-w-horn/protonctl/issues/15)).
   - Q30: the module per system that P1 built (option B), with traits added
     when a fake or a second backend first needs one (C), and the one-line
     refusals as `cfg!` tests at their call sites (A).

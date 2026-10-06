@@ -12,6 +12,8 @@ were the threats that signing (Q12), the panic hook (M2.9) and the Linux
 readers' sandbox (Q34) changed. It records the properties the
 design must keep, what can break them, and the tradeoffs behind each
 choice. It is re-run at the end of each phase ([section 8](08-review-process.md)).
+The security review of the Phase 2 changes that Q25 asks for ran on
+2026-10-06; its findings are in [section 6](#6-phase-2-security-review-q25).
 
 ## Method
 
@@ -187,11 +189,11 @@ check runs.
 | STRIDE | Threat | Where | Response | Control | Residual |
 |---|---|---|---|---|---|
 | Spoofing | A local process answers on Bridge's port and collects the password | F2 | mitigate | certificate pin; loopback only (I5) | low |
-| Spoofing | A fake `proton-drive` earlier on PATH, or swapped in after the check | F3 | mitigate | absolute path; Team ID or pinned SHA-256 before every run, and the version (I5, Q24, Q33) | low; a swap between the check and the run remains |
+| Spoofing | A fake `proton-drive` earlier on PATH, or swapped in after the check | F3 | mitigate | absolute path; Team ID or pinned SHA-256 before every run, and the version (I5, Q24, Q33) | medium until fixed: the CLI is checked, then run again by path, and the first call of a process runs it with `--version` in between ([#72](https://github.com/matt-w-horn/protonctl/issues/72)) |
 | Spoofing | A look-alike calendar host | F13 | mitigate | host check and its property test (I4) | low |
 | Spoofing | A subject or file name written to make the Touch ID prompt look harmless | Phase 3 prompt | mitigate | protonctl writes the prompt; the name comes last, cleaned, cut and quoted (R18) | low |
 | Spoofing | A replaced `protonctl` binary whose Keychain prompt looks like a rebuild's | F7 | mitigate | a self-signed signing identity, made and used by `scripts/install.sh` since 2026-10-04, so a prompt after a rebuild is no longer routine (Q12) | low on macOS; on Linux, the Secret Service row below applies |
-| Tampering | The model edits the config: an exclusion removed, the mode set to off | F8 | transfer | Claude Code's sandbox can deny the write (Q17); the mode lives in the Keychain from Phase 2 (Q28), so the file cannot turn the layer off | medium in Claude Code for exclusions; none in Cowork |
+| Tampering | The model edits the config: an exclusion removed, the mode set to off | F8 | transfer | Claude Code's sandbox can deny the write (Q17); the mode lives in the Keychain from Phase 2 (Q28), so the file cannot turn the layer off | medium in Claude Code for exclusions, and on Linux for the Drive CLI's path and pin, which the file holds ([#72](https://github.com/matt-w-horn/protonctl/issues/72)); none in Cowork |
 | Tampering | `PROTON_DRIVE_BASE_URL` in the host's environment | F3 | eliminate | the CLI runs with `HOME` and the log level only | low |
 | Tampering | A forged or altered handle, ref or page token | F1 | mitigate | AES-SIV authenticates every one; a failure is `invalid_*` (I13) | low |
 | Repudiation | protonctl keeps no record of calls | all | accept | read-only (I1); a call log was declined on 2026-10-03; the hosts' transcripts are the record | low |
@@ -202,7 +204,7 @@ check runs.
 | Information disclosure | Hosts keep results in transcripts and logs on disk, and Time Machine copies them | F9 | transfer | the hosts' retention settings; outside protonctl | medium |
 | Denial of service | Throttling or a CAPTCHA from Proton | F12 | mitigate | official clients; serialized CLI calls; no remote tree walks; a 15-minute calendar cache | low |
 | Denial of service | A result too large for the host | F1 | mitigate | page sizes; in aliases mode a size cap with one smaller retry | low |
-| Denial of service | A crafted file stalls a converter | F5 | mitigate | 60 s limit, 32 MiB output cap, `kill_on_drop` | low |
+| Denial of service | A crafted file stalls a converter | F5 | mitigate | 60 s limit, 32 MiB output cap, `kill_on_drop`; no memory limit yet | medium until fixed: the review measured a 620 KB `.docx` taking pandoc to 9.7 GB ([#71](https://github.com/matt-w-horn/protonctl/issues/71)) |
 | Denial of service | Injected text runs `rotate-key`, `setup privacy --off` or `logout` through the CLI | CLI | mitigate | Phase 2: they refuse when stdin is not a terminal, which a faked terminal (`script`) defeats; Phase 3: user presence ([API specification](lld-api.md#command-line)) | medium in Claude Code until Phase 3 |
 | Elevation of privilege | The model uses the shell to run `proton-drive`, read the Drive folder or speak IMAP, around protonctl | TB0 | transfer | Claude Code's sandbox (Q17); R19 covers protonctl's own CLI only | high in Claude Code without a sandbox; none in Cowork |
 | Elevation of privilege | A crafted PDF or image exploits a converter | F5 | mitigate | on Linux, Landlock and seccomp in `protonctl convert`, built 2026-10-05 (I17, Q34); on macOS, a sandbox profile (Phase 4); a VM helper for the riskiest formats (Phase 7) | low on Linux; medium on macOS until Phase 4 |
@@ -228,7 +230,7 @@ check runs.
 | Detecting | "Excluded" can be told from "missing" | eliminate | identical results (I6) | low |
 | Data disclosure | Content reaches the provider | mitigate in aliases mode; accept in off mode | tokenization; raw items one at a time after Touch ID (I14) | aliases: medium until Phase 5; off: by choice |
 | Data disclosure | Proton's server decrypts the calendar on each fetch of the link | accept | a dedicated link, Limited view where details are not needed (Q9) | medium |
-| Data disclosure | Content on disk: downloads, exports, a RAM disk | mitigate | none in aliases mode (I15); off mode keeps the 2026-10-03 rules | low |
+| Data disclosure | Content on disk: downloads, exports, a RAM disk | mitigate | none in aliases mode (I15) from the tools, though the CLI still writes some ([#73](https://github.com/matt-w-horn/protonctl/issues/73)); off mode keeps the 2026-10-03 rules | low |
 | Unawareness, unintervenability | People in the user's mail never chose to reach a model provider | mitigate | aliases mode exists for them; the Touch ID prompt says where the text goes | medium |
 | Unawareness, unintervenability | The user cannot tell which mode served a result | mitigate | `status`, `doctor`, `get_status` and the instructions name the mode (R26) | low |
 | Unawareness, unintervenability | protonctl cannot delete what the provider keeps | transfer | the Claude account's data controls | medium |
@@ -269,6 +271,37 @@ The cheat sheet's review questions, answered for this model:
 | Do the mitigations reduce risk to an acceptable level? | Off mode: as the user chose it. Aliases mode: not until Phase 5, built next (Q40), for names that appear only in free text, though the process-wide dictionary (Q22) narrows that gap to names that never appear in a header or invitation; the "high" rows say so. |
 | Is the model documented and accessible? | This file, with the RFC; it is versioned in the repository. |
 | Can the mitigations be tested? | Every invariant names its check. Built checks: I1, I3 to I7, I10 to I13, I15, I16, I17 on Linux and I18 for P1 to P4, some of them in part, as the table says; I2 and I8 are checked by reading the code. Not built: I9's test, I14 (Phase 3) and I17 on macOS (Phase 4). [Section 7](07-testing.md) says which planned tests exist, and [the issues labeled tests](https://github.com/matt-w-horn/protonctl/issues?q=label%3Atests) list the missing ones. |
+
+## 6. Phase 2 security review (Q25)
+
+Run on 2026-10-06 over the Phase 2 and Linux changes, commits
+`7e9e2e5..7f2cecd`, about 12,000 lines of Rust and the workflows. The
+`/security-review` command reviews only a branch's pending changes, so
+its method was applied to that range by five reviewers, one per area:
+the keys and identifiers; the pipeline, detectors and server; the Linux
+sandbox, memory folder and readers; Drive, Mail, Calendar, config and
+setup; the workflows and scripts. Each read its files whole and reported
+only findings it held 80% likely to be real; most were confirmed with a
+test on a scratch copy, and each finding below was checked against the
+code before it was recorded. No finding is high. Open work is in the
+issues.
+
+| Finding | Severity | Issue |
+|---|---|---|
+| A page cut can split a name, and both halves pass raw: the cut uses a smaller dictionary than the pipeline (R13) | medium | [#69](https://github.com/matt-w-horn/protonctl/issues/69) |
+| A link without `http`, `https` or `ftp` keeps its path and query, a `webcal://` share link included (Q19); a non-ASCII address in free text is not found | medium; low to medium | [#70](https://github.com/matt-w-horn/protonctl/issues/70) |
+| The readers have no memory limit; signals are not confined on Linux before 6.12 (R21) | medium; low | [#71](https://github.com/matt-w-horn/protonctl/issues/71) |
+| The Drive CLI is checked, then run again by path (Q24, I5); on Linux its path and pin live in the config, which the model can edit | medium; medium | [#72](https://github.com/matt-w-horn/protonctl/issues/72) |
+| The CLI writes to disk in aliases mode: `drive manifest`, `--export`, a cloud-only `drive cat` (R10, M2.7) | low to medium | [#73](https://github.com/matt-w-horn/protonctl/issues/73) |
+| The name canon removes `Pan`, `Sri` and `M.` as honorifics, so two people can share an alias | low | [#74](https://github.com/matt-w-horn/protonctl/issues/74) |
+| `live-check.py` prints a failed call's error text; Dependabot's auto-merge is not bound to the reviewed commit | low; low | [#75](https://github.com/matt-w-horn/protonctl/issues/75) |
+
+Found sound: HKDF labels and output lengths, domain separation between
+refs, handles and page tokens, AES-SIV authentication of every input,
+fixed fault text, the fail-closed paths, the mode latch, the field
+policies, IMAP quoting, the Bridge pin, the config's atomic writes, the
+readers' Landlock rules and seccomp filter beyond signals, the memory
+folder's checks, and who can start the Claude workflows.
 
 ---
 
