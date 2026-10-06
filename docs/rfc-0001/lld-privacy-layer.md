@@ -896,10 +896,19 @@ the reference.
   address would leave each half to pass undetected; the first live
   aliases-mode check found `read_file_content` returning half an address
   raw. In aliases mode each cut (`Document::page`, `content::truncate`)
-  asks `content::cut_at`, which runs the regex and the process dictionary
-  within 4,096 bytes of the cut (`detect::around`) and moves the cut back
-  to the start of a mention it would split, or past its end when the
-  mention starts the piece, so a page always moves on. A snippet whose
+  asks `content::cut_at`, which first moves the cut back to the start of
+  the word it falls in, or past the word's end when the word starts the
+  piece, then runs the regex and the process dictionary within 4,096
+  bytes of the cut (`detect::around`) and moves the cut back to the start
+  of a mention it would split, or past its end when the mention starts
+  the piece, so a page always moves on. A page asked to start inside a
+  word starts at the word (`content::start_at`). The word step is there
+  because the pipeline finds names the process dictionary does not: the
+  result's own header and attendee names, names typed in the query, and
+  local short forms and initials, each a whole word (#69). A word longer
+  than 256 bytes, as in a script written without spaces, is cut where
+  asked, so a name in such text that only the result holds can still be
+  split. A snippet whose
   32 KiB fetch ends inside its first 200 characters still ends at an
   unchecked cut, since the text beyond it was never fetched.
 - **No disk in aliases mode.** The call runs inside a task-local scope in

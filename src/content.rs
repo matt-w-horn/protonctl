@@ -147,7 +147,7 @@ impl From<Value> for Reply {
 }
 
 /// Cut `s` to at most `max` characters, or in aliases mode fewer, or past
-/// a mention that starts the text (`cut_at`). Returns true if anything was cut.
+/// a word or mention that starts the text (`cut_at`). Returns true if anything was cut.
 pub fn truncate(s: &mut String, max: usize) -> bool {
     match s.char_indices().nth(max) {
         Some((i, _)) => {
@@ -249,12 +249,44 @@ fn is_restricted() -> bool {
     RESTRICTED.try_with(|_| ()).is_ok()
 }
 
-/// Where to cut `text` near byte `at`: at `at`, or in aliases mode off any
-/// mention it would split, back to the mention's start, or past its end
-/// when the mention starts at or before `floor` (where the piece begins),
-/// so a page always moves on.
+/// How far `word_edge` looks for the whitespace around a word: further
+/// than any word of a name.
+const WORD: usize = 256;
+
+/// `at`, or, when it falls inside a word, the start of that word if it
+/// starts after `floor`, else, when `forward`, the word's end. A word too
+/// long for `WORD`, as in a script written without spaces, keeps `at`.
+fn word_edge(text: &str, at: usize, floor: usize, forward: bool) -> usize {
+    let space = |c: Option<char>| c.is_none_or(char::is_whitespace);
+    if space(text[..at].chars().next_back()) || space(text[at..].chars().next()) {
+        return at;
+    }
+    let lo = text.floor_char_boundary(at.saturating_sub(WORD)).max(floor);
+    if let Some((i, c)) = text[lo..at].char_indices().rfind(|(_, c)| c.is_whitespace()) {
+        return lo + i + c.len_utf8();
+    }
+    let hi = text.ceil_char_boundary(at.saturating_add(WORD));
+    match text[at..hi].find(char::is_whitespace) {
+        Some(i) if forward => at + i,
+        _ => at,
+    }
+}
+
+/// Where to cut `text` near byte `at`: at `at`, or in aliases mode back to
+/// the start of the word it falls in (past its end when the word starts the
+/// piece), then off any mention that would split, back to the mention's
+/// start, or past its end when the mention starts at or before `floor`
+/// (where the piece begins), so a page always moves on. The word comes
+/// first because the pipeline finds names `Cut` does not: the result's own
+/// headers, the query's, and short forms (R13).
 pub fn cut_at(text: &str, at: usize, floor: usize) -> usize {
-    match RESTRICTED.try_with(|cut| cut(text, at)).ok().flatten() {
+    let (at, mention) = RESTRICTED
+        .try_with(|cut| {
+            let at = word_edge(text, at, floor, true);
+            (at, cut(text, at))
+        })
+        .unwrap_or((at, None));
+    match mention {
         Some((start, _)) if start > floor => start,
         Some((_, end)) => end,
         None => at,
@@ -262,14 +294,17 @@ pub fn cut_at(text: &str, at: usize, floor: usize) -> usize {
 }
 
 /// Where a page of `text` asked to start at byte `at` starts: at `at`, or
-/// in aliases mode at the start of a mention `at` falls inside, so the
-/// page shows the whole mention, which the pipeline replaces, rather than
-/// its tail, which no detector finds (R13).
+/// in aliases mode at the start of the word, then of the mention, `at`
+/// falls inside, so the page shows the whole name, which the pipeline
+/// replaces, rather than its tail, which no detector finds (R13).
 pub fn start_at(text: &str, at: usize) -> usize {
-    match RESTRICTED.try_with(|cut| cut(text, at)).ok().flatten() {
-        Some((start, _)) => start,
-        None => at,
-    }
+    let (at, mention) = RESTRICTED
+        .try_with(|cut| {
+            let at = word_edge(text, at, 0, false);
+            (at, cut(text, at))
+        })
+        .unwrap_or((at, None));
+    mention.map_or(at, |(start, _)| start)
 }
 
 /// False inside `restricted`, so a reader can answer without the file
@@ -603,6 +638,30 @@ mod tests {
         let mut off = "to ann@x.io now".to_string();
         assert!(truncate(&mut off, 6));
         assert_eq!(off, "to ann");
+    }
+
+    /// RFC R13 (#69): in aliases mode a cut or a start inside a word moves
+    /// to the word's start, or a cut past its end when the word starts the
+    /// piece, even where `Cut` finds nothing; a word longer than `WORD`
+    /// keeps the cut.
+    #[tokio::test]
+    async fn aliases_mode_cuts_between_words() {
+        let text = "Thanks, Dana Okonkwo will sign";
+        let long = "x".repeat(WORD + 10);
+        let (cuts, starts, from_floor, unspaced) = restricted(no_mentions(), async {
+            (
+                [9, 12, 13, 17].map(|at| cut_at(text, at, 0)),
+                [9, 12, 13, 17].map(|at| start_at(text, at)),
+                cut_at(text, 15, 13),
+                (cut_at(&long, 5, 0), start_at(&long, WORD)),
+            )
+        })
+        .await;
+        assert_eq!(cuts, [8, 12, 13, 13]);
+        assert_eq!(starts, [8, 12, 13, 13]);
+        assert_eq!(from_floor, 20);
+        assert_eq!(unspaced, (5, WORD));
+        assert_eq!((cut_at(text, 17, 0), start_at(text, 17)), (17, 17));
     }
 
     #[test]
