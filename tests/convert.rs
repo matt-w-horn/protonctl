@@ -4,6 +4,9 @@
 //! and pandoc. The fixtures: `two-pages.pdf` was written by hand, one
 //! Helvetica line per page; the Word, OpenDocument and RTF files were made
 //! by pandoc 3.1.3 from "Word text, Café." and "Second paragraph.".
+//! `fills-memory.docx` was made by Python's `zipfile`, deflated: a
+//! `[Content_Types].xml` and `_rels/.rels` naming `word/document.xml`, which
+//! is one paragraph holding one run of 200 MiB of "x".
 #![cfg(target_os = "linux")]
 #![expect(
     clippy::unwrap_used,
@@ -84,14 +87,18 @@ fn each_reader_runs_in_its_sandbox() {
     assert!(convert(&["check"], b"").status.success());
 }
 
-/// The reader itself runs confined: `convert` becomes `pdftotext` in the
-/// same process, which then holds a seccomp filter and no new privileges,
-/// the marks `sandbox()` leaves (R21). Read from /proc while the reader
-/// waits on stdin.
-#[test]
-fn the_reader_holds_the_sandbox() {
+/// A reader's /proc files, read while it waits on stdin once `convert`
+/// has become it, in the same process.
+struct Running {
+    status: String,
+    limits: String,
+    cmdline: String,
+}
+
+fn running(args: &[&str], reader: &str) -> Running {
     let mut child = protonctl()
-        .args(["convert", "pdf-text"])
+        .arg("convert")
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -99,22 +106,102 @@ fn the_reader_holds_the_sandbox() {
         .unwrap();
     let proc = PathBuf::from(format!("/proc/{}", child.id()));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while std::fs::read_link(proc.join("exe")).ok() != Some(PathBuf::from("/usr/bin/pdftotext")) {
+    while std::fs::read_link(proc.join("exe")).ok().as_deref() != Some(Path::new(reader)) {
         assert!(
             std::time::Instant::now() < deadline,
-            "the reader never started"
+            "{reader} never started"
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    let status = std::fs::read_to_string(proc.join("status")).unwrap();
+    let read = |name| std::fs::read_to_string(proc.join(name)).unwrap();
+    let seen = Running {
+        status: read("status"),
+        limits: read("limits"),
+        cmdline: read("cmdline").replace('\0', " "),
+    };
     drop(child.stdin.take());
     child.wait().unwrap();
-    for mark in ["Seccomp:\t2", "NoNewPrivs:\t1"] {
-        assert!(
-            status.lines().any(|l| l == mark),
-            "no {mark:?} in\n{status}"
-        );
+    seen
+}
+
+/// The reader itself runs confined: `convert` becomes `pdftotext` or
+/// pandoc in the same process, which then holds a seccomp filter (two: the
+/// second answers `clone3`), no new privileges, and the readers' limits
+/// (R21, #71): 2 GiB of address space and a core size of 1, which keeps a
+/// crashed reader's core from a core handler; pandoc also has a 1 GiB heap.
+#[test]
+fn the_reader_holds_the_sandbox() {
+    for (args, reader) in [
+        (&["pdf-text"][..], "/usr/bin/pdftotext"),
+        (&["document", "--format", "docx"][..], "/usr/bin/pandoc"),
+    ] {
+        let seen = running(args, reader);
+        for mark in ["Seccomp:\t2", "Seccomp_filters:\t2", "NoNewPrivs:\t1"] {
+            assert!(
+                seen.status.lines().any(|l| l == mark),
+                "{reader}: no {mark:?} in\n{}",
+                seen.status
+            );
+        }
+        for (limit, value) in [
+            ("Max address space", "2147483648"),
+            ("Max core file size", "1"),
+        ] {
+            let line = seen.limits.lines().find(|l| l.starts_with(limit));
+            let words: Vec<_> = line.unwrap_or_default().split_whitespace().collect();
+            assert!(
+                words.ends_with(&[value, value, "bytes"]),
+                "{reader}: {limit} is not {value} in\n{}",
+                seen.limits
+            );
+        }
+        if reader.ends_with("pandoc") {
+            assert!(
+                seen.cmdline.contains(" +RTS -M1g -RTS "),
+                "{}",
+                seen.cmdline
+            );
+        }
     }
+}
+
+/// A document built to exhaust memory (#71): 200 KB of Word that holds
+/// 200 MiB of XML. Without a limit pandoc grows past a gigabyte and is
+/// still reading at 20 s, and the server's 60 s limit is all that stops
+/// it; with its heap held to 1 GiB it stops in about a second. The reader
+/// is killed at 15 s, so a run without the limit fails here without
+/// taking the machine's memory.
+#[test]
+fn a_document_built_to_fill_memory_stops_at_the_heap_limit() {
+    let doc = std::fs::read(fixture("fills-memory.docx")).unwrap();
+    let mut child = protonctl()
+        .args(["convert", "document", "--format", "docx"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    // pandoc may stop before it has read it all.
+    let writer = std::thread::spawn(move || stdin.write_all(&doc).ok());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() > deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("pandoc was still reading at 15 s: no memory limit stopped it");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    writer.join().unwrap();
+    let mut said = String::new();
+    std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut said).unwrap();
+    assert!(said.contains("Heap exhausted"), "{status}: {said}");
+    assert_ne!(status.code(), Some(SANDBOX_FAILED));
+    assert!(!status.success());
 }
 
 /// A damaged PDF is the reader's failure, which the server reports as an

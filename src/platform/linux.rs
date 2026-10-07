@@ -10,6 +10,7 @@ use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
+use seccompiler::SeccompRule;
 use secret_service::EncryptionType;
 use secret_service::blocking::{Collection, Item, SecretService};
 
@@ -229,18 +230,59 @@ const READER_READS: [&str; 7] = [
     "/var/cache/fontconfig",
 ];
 
-/// System calls a reader never needs, refused by number: a new socket;
-/// `io_uring`, whose requests seccomp cannot see; and every change to a
-/// file's metadata (mode, owner, times, extended attributes) or length by
-/// path, which Landlock does not cover (truncation only from Linux 6.2),
-/// so a reader cannot loosen the mode of a file it cannot open.
-fn refused_calls() -> Vec<i64> {
+/// A reader's address space, in bytes (R21, #71): pandoc's heap of 1 GiB
+/// (`convert.rs`) and its program, and far more than poppler needs, so a
+/// file built to exhaust memory ends the reader instead of the machine.
+/// GHC reserves a terabyte only when it may; under this limit it reserves
+/// less.
+const READER_ADDRESS_SPACE: u64 = 2 << 30;
+
+/// `RLIMIT_CORE` of 1, not 0: the kernel writes no core file below a page,
+/// and drops a core bound for a `|` handler (systemd-coredump, apport) only
+/// at exactly 1, which it keeps to stop a handler's own crash recursing. A
+/// crashed reader's core holds the document. An `@` socket handler (Linux
+/// 6.17 and later) is given the core whatever the limit.
+const READER_CORE: u64 = 1;
+
+/// Requests that set a file's owner, besides `F_SETOWN`, which libc names:
+/// an `fcntl` one and two `ioctl` ones, the same on `x86_64` and aarch64
+/// (`asm-generic/fcntl.h`, `asm-generic/sockios.h`).
+const F_SETOWN_EX: u64 = 15;
+const FIOSETOWN: u64 = 0x8901;
+const SIOCSPGRP: u64 = 0x8902;
+
+/// The x32 ABI's mark on an `x86_64` system call number.
+const X32_SYSCALL_BIT: i64 = 0x4000_0000;
+
+/// System calls a reader never needs, each refused outright or when its
+/// rules hold: a new socket; `io_uring`, whose requests seccomp cannot see;
+/// every change to a file's metadata (mode, owner, times, extended
+/// attributes) or length by path, which Landlock does not cover
+/// (truncation only from Linux 6.2), so a reader cannot loosen the mode of
+/// a file it cannot open; a signal or a pidfd for any process but its own,
+/// and a file owner, which would carry `SIGIO` to one, so before Linux 6.12,
+/// where Landlock scopes signals, a reader still signals no other process;
+/// a new process, which would outlive the reader's time limit; and a
+/// change to any resource limit, so the reader keeps its own and sets none
+/// on the user's other processes.
+fn refused_calls() -> Result<Vec<(i64, Vec<SeccompRule>)>> {
+    use seccompiler::SeccompCmpArgLen::{Dword, Qword};
+    use seccompiler::SeccompCmpOp::{Eq, MaskedEq, Ne};
+    use seccompiler::{SeccompCmpArgLen, SeccompCmpOp, SeccompCondition};
+
     /// The same on every architecture: calls added since Linux 5.1 share
     /// their numbers, and libc does not name these everywhere yet.
     const FCHMODAT2: i64 = 452;
     const SETXATTRAT: i64 = 463;
     const REMOVEXATTRAT: i64 = 466;
-    let mut calls = vec![
+    // Refused when argument `arg` compares to `value`; `pid_t` and an
+    // `int` command are 32 bits, so their upper halves are not compared.
+    let when = |arg: u8, len: SeccompCmpArgLen, op: SeccompCmpOp, value: u64| {
+        SeccompRule::new(vec![SeccompCondition::new(arg, len, op, value)?])
+    };
+    let own = u64::from(rustix::process::getpid().as_raw_pid().cast_unsigned());
+    let other_process = vec![when(0, Dword, Ne, own)?];
+    let mut calls: Vec<(i64, Vec<SeccompRule>)> = [
         libc::SYS_socket,
         libc::SYS_io_uring_setup,
         libc::SYS_fchmod,
@@ -258,38 +300,109 @@ fn refused_calls() -> Vec<i64> {
         libc::SYS_fremovexattr,
         REMOVEXATTRAT,
         libc::SYS_truncate,
-    ];
-    // x86_64 also keeps the older calls that aarch64 replaced with the
-    // `*at` forms above.
-    #[cfg(target_arch = "x86_64")]
+        // Its target is a descriptor, which a filter cannot read.
+        libc::SYS_pidfd_send_signal,
+        libc::SYS_setrlimit,
+    ]
+    .into_iter()
+    .map(|call| (call, Vec::new()))
+    .collect();
+    // `raise`, `abort` and a thread's signals name this process, whose pid
+    // `exec` keeps.
+    calls.extend(
+        [
+            libc::SYS_kill,
+            libc::SYS_tkill,
+            libc::SYS_tgkill,
+            libc::SYS_rt_sigqueueinfo,
+            libc::SYS_rt_tgsigqueueinfo,
+            libc::SYS_pidfd_open,
+        ]
+        .map(|call| (call, other_process.clone())),
+    );
+    let thread = u64::from(libc::CLONE_THREAD.cast_unsigned());
+    let owner = |cmd: u64| when(1, Dword, Eq, cmd);
     calls.extend([
-        libc::SYS_chmod,
-        libc::SYS_chown,
-        libc::SYS_lchown,
-        libc::SYS_utime,
-        libc::SYS_utimes,
-        libc::SYS_futimesat,
+        // A thread, which has `CLONE_THREAD`, is no new process.
+        (libc::SYS_clone, vec![when(0, Qword, MaskedEq(thread), 0)?]),
+        // Reading a limit passes no new one.
+        (libc::SYS_prlimit64, vec![when(2, Qword, Ne, 0)?]),
+        (
+            libc::SYS_fcntl,
+            vec![
+                owner(libc::F_SETOWN.cast_unsigned().into())?,
+                owner(F_SETOWN_EX)?,
+            ],
+        ),
+        (libc::SYS_ioctl, vec![owner(FIOSETOWN)?, owner(SIOCSPGRP)?]),
     ]);
-    calls
+    // x86_64 also keeps the older calls that aarch64 replaced with the
+    // `*at` forms and `clone` above.
+    #[cfg(target_arch = "x86_64")]
+    calls.extend(
+        [
+            libc::SYS_chmod,
+            libc::SYS_chown,
+            libc::SYS_lchown,
+            libc::SYS_utime,
+            libc::SYS_utimes,
+            libc::SYS_futimesat,
+            libc::SYS_fork,
+            libc::SYS_vfork,
+        ]
+        .map(|call| (call, Vec::new())),
+    );
+    Ok(calls)
 }
 
-/// The x32 ABI's mark on an `x86_64` system call number.
-const X32_SYSCALL_BIT: i64 = 0x4000_0000;
+/// A call's number in the x32 ABI. Most take their `x86_64` number with
+/// the x32 mark; these three are 64-bit only there, and x32 has its own
+/// (`arch/x86/entry/syscalls/syscall_64.tbl`).
+fn x32(call: i64) -> i64 {
+    X32_SYSCALL_BIT
+        | match call {
+            libc::SYS_ioctl => 514,
+            libc::SYS_rt_sigqueueinfo => 524,
+            libc::SYS_rt_tgsigqueueinfo => 536,
+            other => other,
+        }
+}
 
-/// Landlock first, which also sets no-new-privileges, which seccomp needs.
-/// Landlock confines files, TCP, abstract Unix sockets and signals as far
-/// as this kernel supports, and must hold at least for files; it also keeps
-/// the reader from tracing any process outside the sandbox. seccomp refuses
-/// every new socket and `io_uring`, whose requests seccomp cannot see, so no
-/// network and no Unix socket (the session bus, say) is reached, whatever
-/// the kernel's Landlock covers; a 32-bit call ends the process.
+/// The resource limits first, while they can still be set: an address
+/// space and a core size. Then Landlock, which also sets no-new-privileges,
+/// which seccomp needs. Landlock confines files, TCP, abstract Unix sockets
+/// and signals as far as this kernel supports, and must hold at least for
+/// files; it also keeps the reader from tracing any process outside the
+/// sandbox. seccomp refuses the calls `refused_calls` names, so no network
+/// and no Unix socket (the session bus, say) is reached and no other
+/// process is signalled, whatever the kernel's Landlock covers; a 32-bit
+/// call ends the process. A second filter answers `clone3`, whose flags it
+/// cannot read, as a kernel without it would, so libc starts a thread with
+/// `clone`, which the first filter reads.
 pub fn sandbox() -> Result<()> {
     use landlock::{
         ABI, Access as _, AccessFs, AccessNet, Ruleset, RulesetAttr as _, RulesetCreatedAttr as _,
         RulesetStatus, Scope, path_beneath_rules,
     };
+    use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
     use seccompiler::{BpfProgram, SeccompAction, SeccompFilter};
 
+    for (resource, most) in [
+        (Resource::As, READER_ADDRESS_SPACE),
+        (Resource::Core, READER_CORE),
+    ] {
+        // Never above a hard limit already set, which only root may raise.
+        let most = getrlimit(resource)
+            .maximum
+            .map_or(most, |hard| hard.min(most));
+        setrlimit(
+            resource,
+            Rlimit {
+                current: Some(most),
+                maximum: Some(most),
+            },
+        )?;
+    }
     let abi = ABI::V9;
     let reads = READER_READS.iter().filter(|p| Path::new(p).exists());
     let status = Ruleset::default()
@@ -305,23 +418,28 @@ pub fn sandbox() -> Result<()> {
         status.ruleset != RulesetStatus::NotEnforced,
         "this kernel does not enforce Landlock, which the document readers need (RFC-0001 R21)"
     );
-    let mut calls = refused_calls();
+    let mut refused = refused_calls()?;
+    let mut absent = vec![(libc::SYS_clone3, Vec::new())];
     // The filter matches call numbers exactly, and on x86_64 a kernel that
-    // enables the x32 ABI also takes each call with this bit set, which the
+    // enables the x32 ABI also takes each call by its x32 number, which the
     // check of the architecture does not catch.
     if cfg!(target_arch = "x86_64") {
-        let x32: Vec<i64> = calls.iter().map(|call| call | X32_SYSCALL_BIT).collect();
-        calls.extend(x32);
+        for calls in [&mut refused, &mut absent] {
+            let x32: Vec<_> = calls.iter().map(|(c, r)| (x32(*c), r.clone())).collect();
+            calls.extend(x32);
+        }
     }
-    let refused = calls.into_iter().map(|call| (call, Vec::new())).collect();
-    let filter: BpfProgram = SeccompFilter::new(
-        refused,
-        SeccompAction::Allow,
-        SeccompAction::Errno(libc::EACCES.unsigned_abs()),
-        std::env::consts::ARCH.try_into()?,
-    )?
-    .try_into()?;
-    seccompiler::apply_filter(&filter)?;
+    let arch = std::env::consts::ARCH.try_into()?;
+    for (calls, errno) in [(refused, libc::EACCES), (absent, libc::ENOSYS)] {
+        let filter: BpfProgram = SeccompFilter::new(
+            calls.into_iter().collect(),
+            SeccompAction::Allow,
+            SeccompAction::Errno(errno.unsigned_abs()),
+            arch,
+        )?
+        .try_into()?;
+        seccompiler::apply_filter(&filter)?;
+    }
     Ok(())
 }
 
@@ -864,6 +982,11 @@ mod tests {
     /// Set in the child that `the_sandbox_confines_a_reader` starts.
     const PROBE: &str = "PROTONCTL_SANDBOX_PROBE";
 
+    /// A rustix call's outcome as the standard library's.
+    fn errno<T>(r: rustix::io::Result<T>) -> std::io::Result<()> {
+        r.map(drop).map_err(std::io::Error::from)
+    }
+
     /// MP4's exit (R21): a process in the readers' sandbox reaches no network
     /// and no other process, writes nothing, and reads only the system's
     /// programs and libraries, yet can still run a reader. The sandbox cannot
@@ -932,14 +1055,165 @@ mod tests {
             "a chown of the user's file",
             std::os::unix::fs::chown(before.path(), Some(uid), Some(gid)),
         );
-        // What a reader needs still works.
-        std::fs::read("/etc/ld.so.cache").unwrap();
-        assert!(
+        // No signal reaches another process on any kernel, nor a new
+        // process start, nor a limit change (R21, #71); signal 0 sends
+        // nothing.
+        denied(
+            "kill(0, 0), to this process group",
+            errno(rustix::process::test_kill_current_process_group()),
+        );
+        denied(
+            "a pidfd for the parent",
+            errno(rustix::process::pidfd_open(
+                rustix::process::getppid().unwrap(),
+                rustix::process::PidfdFlags::empty(),
+            )),
+        );
+        denied(
+            "a new process",
             std::process::Command::new("/usr/bin/true")
                 .status()
-                .unwrap()
-                .success()
+                .map(drop),
         );
+        let core = rustix::process::Rlimit {
+            current: Some(0),
+            maximum: Some(0),
+        };
+        denied(
+            "a core size of 0",
+            errno(rustix::process::setrlimit(
+                rustix::process::Resource::Core,
+                core,
+            )),
+        );
+        // What a reader needs still works: its own libraries, a signal to
+        // itself, a thread, and its limits, which are the readers'.
+        std::fs::read("/etc/ld.so.cache").unwrap();
+        rustix::process::test_kill_process(rustix::process::getpid()).unwrap();
+        assert_eq!(std::thread::spawn(|| 7).join().unwrap(), 7);
+        for (resource, limit) in [
+            (rustix::process::Resource::As, READER_ADDRESS_SPACE),
+            (rustix::process::Resource::Core, READER_CORE),
+        ] {
+            let set = rustix::process::getrlimit(resource);
+            assert_eq!((set.current, set.maximum), (Some(limit), Some(limit)));
+        }
+    }
+
+    /// Set in the child that `the_sandbox_lets_no_signal_out` starts.
+    const SIGNAL_PROBE: &str = "PROTONCTL_SIGNAL_PROBE";
+
+    /// The calls `sandbox_probe` cannot make without `unsafe`, made by
+    /// perl, which Debian and Ubuntu always install: each signal call and
+    /// pidfd for the parent, a file owner that would send it `SIGIO`, a
+    /// fork and a limit change are refused; the same signals to itself are
+    /// not. Signal 0 sends nothing. Arguments are `name=number`.
+    const SIGNAL_SCRIPT: &str = r#"
+use strict;
+use Errno qw(EACCES);
+$| = 1;
+# Numbers: syscall passes a string as a pointer.
+my %nr = map { my ($k, $v) = split /=/; ($k, 0 + $v) } @ARGV;
+my ($other, $own, $bad) = (getppid(), $$, 0);
+my $info = "\0" x 128;
+my $limit = pack("QQ", 0, 0);
+pipe(my $r, my $w) or die "pipe: $!";
+my $fd = fileno($r);
+sub refused {
+    my ($what, $got) = @_;
+    if ($got == -1 && $! == EACCES) { print "refused: $what\n" }
+    else { print "NOT REFUSED: $what ($got, $!)\n"; $bad = 1 }
+}
+sub allowed {
+    my ($what, $got) = @_;
+    if ($got != -1) { print "allowed: $what\n" }
+    else { print "NOT ALLOWED: $what ($!)\n"; $bad = 1 }
+}
+refused("kill", syscall($nr{kill}, $other, 0));
+refused("kill(-1)", syscall($nr{kill}, -1, 0));
+refused("tkill", syscall($nr{tkill}, $other, 0));
+refused("tgkill", syscall($nr{tgkill}, $other, $other, 0));
+refused("rt_sigqueueinfo", syscall($nr{rt_sigqueueinfo}, $other, 0, $info));
+refused("rt_tgsigqueueinfo", syscall($nr{rt_tgsigqueueinfo}, $other, $other, 0, $info));
+refused("pidfd_open", syscall($nr{pidfd_open}, $other, 0));
+refused("fcntl(F_SETOWN)", syscall($nr{fcntl}, $fd, $nr{F_SETOWN}, $other));
+refused("fcntl(F_SETOWN_EX)", syscall($nr{fcntl}, $fd, $nr{F_SETOWN_EX}, pack("ii", 1, $other)));
+refused("ioctl(FIOSETOWN)", syscall($nr{ioctl}, $fd, $nr{FIOSETOWN}, pack("i", $other)));
+refused("ioctl(SIOCSPGRP)", syscall($nr{ioctl}, $fd, $nr{SIOCSPGRP}, pack("i", $other)));
+refused("prlimit64, to set", syscall($nr{prlimit64}, 0, 4, $limit, 0));
+refused("setrlimit", syscall($nr{setrlimit}, 4, $limit));
+my $pid = fork();
+if (defined $pid && $pid == 0) { require POSIX; POSIX::_exit(0) }
+refused("fork", defined $pid ? 0 : -1);
+allowed("kill to itself", syscall($nr{kill}, $own, 0));
+allowed("tgkill to itself", syscall($nr{tgkill}, $own, $own, 0));
+allowed("prlimit64, to read", syscall($nr{prlimit64}, $other, 4, 0, $limit));
+my $pidfd = syscall($nr{pidfd_open}, $own, 0);
+allowed("pidfd_open of itself", $pidfd);
+refused("pidfd_send_signal", syscall($nr{pidfd_send_signal}, $pidfd, 0, 0, 0));
+exit $bad;
+"#;
+
+    /// R21, #71: before Linux 6.12 Landlock does not scope signals, so the
+    /// seccomp filter alone keeps a reader from signalling the user's
+    /// other processes; this checks the filter's rules on any kernel. The
+    /// probe enters the sandbox, then becomes perl.
+    #[test]
+    fn the_sandbox_lets_no_signal_out() {
+        let out = std::process::Command::new("/proc/self/exe")
+            .args(["platform::linux::tests::signal_probe", "--exact"])
+            .args(["--include-ignored", "--nocapture", "--test-threads=1"])
+            .env(SIGNAL_PROBE, "1")
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{said}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(said.matches("refused: ").count(), 15, "{said}");
+        assert_eq!(said.matches("allowed: ").count(), 4, "{said}");
+    }
+
+    #[test]
+    #[ignore = "runs only as the child of the_sandbox_lets_no_signal_out"]
+    fn signal_probe() {
+        use std::os::unix::process::CommandExt as _;
+        if std::env::var_os(SIGNAL_PROBE).is_none() {
+            return;
+        }
+        let nr = [
+            ("kill", libc::SYS_kill),
+            ("tkill", libc::SYS_tkill),
+            ("tgkill", libc::SYS_tgkill),
+            ("rt_sigqueueinfo", libc::SYS_rt_sigqueueinfo),
+            ("rt_tgsigqueueinfo", libc::SYS_rt_tgsigqueueinfo),
+            ("pidfd_open", libc::SYS_pidfd_open),
+            ("pidfd_send_signal", libc::SYS_pidfd_send_signal),
+            ("fcntl", libc::SYS_fcntl),
+            ("ioctl", libc::SYS_ioctl),
+            ("prlimit64", libc::SYS_prlimit64),
+            ("setrlimit", libc::SYS_setrlimit),
+            ("F_SETOWN", libc::F_SETOWN.into()),
+        ]
+        .map(|(name, nr)| format!("{name}={nr}"))
+        .into_iter()
+        .chain(
+            [
+                ("F_SETOWN_EX", F_SETOWN_EX),
+                ("FIOSETOWN", FIOSETOWN),
+                ("SIOCSPGRP", SIOCSPGRP),
+            ]
+            .map(|(name, nr)| format!("{name}={nr}")),
+        );
+        sandbox().unwrap();
+        let err = std::process::Command::new("/usr/bin/perl")
+            .args(["-e", SIGNAL_SCRIPT])
+            .args(nr)
+            .env_clear()
+            .exec();
+        panic!("cannot run perl: {err}");
     }
 
     #[test]
