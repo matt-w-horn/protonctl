@@ -239,8 +239,8 @@ pub async fn restricted<F: Future>(cut: Cut, call: F) -> F::Output {
     RESTRICTED.scope(cut, call).await
 }
 
-/// A `Cut` that finds nothing, for tests of the rest of aliases mode.
-#[cfg(test)]
+/// A `Cut` that finds nothing: for the CLI, whose output the pipeline does
+/// not see until Phase 3 (M3.3), and for tests of the rest of aliases mode.
 pub fn no_mentions() -> Cut {
     Arc::new(|_, _| None)
 }

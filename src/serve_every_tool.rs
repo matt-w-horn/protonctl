@@ -3,7 +3,8 @@
 //! feed, the Proton Drive app's folder and a stand-in Proton Drive CLI.
 //! It calls each tool the aliases-mode server registers, with the calls
 //! that fail among them, since errors leave through the same path; each
-//! test then checks every result.
+//! test then checks every result. The no-disk test runs the CLI's commands
+//! that could write against the same harness.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -1680,24 +1681,19 @@ async fn errors_and_page_tokens_carry_no_name_path_or_uid() {
     );
 }
 
-/// What T7's child test reads its fixture folder from.
+/// What a child test of `in_a_throwaway_home` reads its fixture folder from.
 const CHILD: &str = "PROTONCTL_TEST_EVERY_TOOL_FIXTURES";
 
-/// RFC R10 (T7): aliases mode writes no file. Every tool runs in a child
-/// test process whose home and temporary folder are new and empty, with
-/// its fixtures in a folder beside them; after every call the memory folder
-/// a cloud-only read uses is empty again, and at the end no file is new.
-#[test]
-fn aliases_mode_writes_no_file() {
+/// Run the ignored test `child` of this module in a child test process
+/// whose home and temporary folder are new and empty, with its fixtures in
+/// a folder beside them, and check that it passed.
+fn in_a_throwaway_home(child: &str) {
     let root = tempfile::tempdir().unwrap();
     let [home, tmp, fixtures] = ["home", "tmp", "fixtures"].map(|d| root.path().join(d));
     for d in [&home, &tmp, &fixtures] {
         std::fs::create_dir(d).unwrap();
     }
-    let test = format!(
-        "{}::every_tool_in_a_throwaway_home",
-        module_path!().split_once("::").unwrap().1
-    );
+    let test = format!("{}::{child}", module_path!().split_once("::").unwrap().1);
     let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args([test.as_str(), "--exact", "--ignored", "--nocapture"])
         .env("HOME", &home)
@@ -1723,6 +1719,25 @@ fn aliases_mode_writes_no_file() {
     );
 }
 
+/// RFC R10 (T7): aliases mode writes no file. Every tool runs in a child
+/// test process whose home and temporary folder are new and empty, with
+/// its fixtures in a folder beside them; after every call the memory folder
+/// a cloud-only read uses is empty again, and at the end no file is new.
+#[test]
+fn aliases_mode_writes_no_file() {
+    in_a_throwaway_home("every_tool_in_a_throwaway_home");
+}
+
+/// RFC R10 for the CLI (M2.7, M2.8): in aliases mode `drive manifest` and
+/// the `--export` and `--inline` options are refused, a cloud-only `drive
+/// cat` reads through the folder in memory, and `drive get` saves only
+/// where `--out` names. Each command runs in a child test process as T7's
+/// tools do, and after each one no file is new.
+#[test]
+fn the_cli_in_aliases_mode_writes_no_file() {
+    in_a_throwaway_home("the_cli_in_a_throwaway_home");
+}
+
 /// Every file and folder under `dir`, by path.
 fn files_under(dir: &Path) -> BTreeSet<PathBuf> {
     let mut out = BTreeSet::new();
@@ -1736,6 +1751,35 @@ fn files_under(dir: &Path) -> BTreeSet<PathBuf> {
     out
 }
 
+/// Every file and folder under the home and the temporary folder.
+fn watched() -> BTreeSet<PathBuf> {
+    [crate::config::home(), std::env::temp_dir()]
+        .iter()
+        .flat_map(|d| files_under(d))
+        .collect()
+}
+
+/// What is under the home and the temporary folder that was not in
+/// `before`, less the Drive CLI's lock file, which every protonctl process
+/// takes around a run of the CLI, while it is empty and so holds no
+/// content (R10).
+fn new_since(before: &BTreeSet<PathBuf>) -> Vec<PathBuf> {
+    let lock = std::env::temp_dir().join("protonctl-test/cli.lock");
+    let lock_empty = std::fs::metadata(&lock).is_ok_and(|m| m.len() == 0);
+    watched()
+        .difference(before)
+        .filter(|p| !(lock_empty && (**p == lock || Some(p.as_path()) == lock.parent())))
+        .cloned()
+        .collect()
+}
+
+/// The folder in memory (here /dev/shm) a cloud-only read fetches into:
+/// allowed, but empty again after every call.
+#[cfg(target_os = "linux")]
+fn memory() -> PathBuf {
+    crate::platform::memory_disk(Path::new("unused")).unwrap()
+}
+
 /// T7's child: run by `aliases_mode_writes_no_file` with a throwaway home
 /// and temporary folder, and a no-op anywhere else.
 #[tokio::test]
@@ -1744,12 +1788,9 @@ async fn every_tool_in_a_throwaway_home() {
     let Some(fixtures) = std::env::var_os(CHILD) else {
         return;
     };
-    let watched = [crate::config::home(), std::env::temp_dir()];
-    let before: BTreeSet<PathBuf> = watched.iter().flat_map(|d| files_under(d)).collect();
-    // The folder in memory (here /dev/shm) a cloud-only read fetches into:
-    // allowed, but empty again after every call.
+    let before = watched();
     #[cfg(target_os = "linux")]
-    let memory = crate::platform::memory_disk(Path::new("unused")).unwrap();
+    let memory = memory();
     let mut emptied = |tool: &str| {
         #[cfg(target_os = "linux")]
         assert_eq!(
@@ -1762,16 +1803,106 @@ async fn every_tool_in_a_throwaway_home() {
     };
     let run = every_tool(Path::new(&fixtures), &mut emptied).await;
     drop(run);
-    let after: BTreeSet<PathBuf> = watched.iter().flat_map(|d| files_under(d)).collect();
-    // The Drive CLI's lock file, which every protonctl process takes
-    // around a run of the CLI: empty, so it holds no content (R10).
-    let lock = std::env::temp_dir().join("protonctl-test/cli.lock");
-    let lock_empty = std::fs::metadata(&lock).is_ok_and(|m| m.len() == 0);
-    let new: Vec<&PathBuf> = after
-        .difference(&before)
-        .filter(|p| !(lock_empty && (**p == lock || Some(p.as_path()) == lock.parent())))
-        .collect();
+    let new = new_since(&before);
     // As `serve` does when it stops.
     crate::content::remove_downloads();
     assert!(new.is_empty(), "aliases mode wrote {new:?}");
+}
+
+/// The CLI test's child: run by `the_cli_in_aliases_mode_writes_no_file`
+/// with a throwaway home and temporary folder, and a no-op anywhere else.
+/// Every command runs, and every problem is reported at the end, so a
+/// failure names each command that wrote or was not refused.
+#[tokio::test]
+#[ignore = "the_cli_in_aliases_mode_writes_no_file runs it, in a throwaway home"]
+async fn the_cli_in_a_throwaway_home() {
+    let Some(fixtures) = std::env::var_os(CHILD) else {
+        return;
+    };
+    let fixtures = Path::new(&fixtures);
+    let (_drive, root, cli, _) = drive_fixtures(fixtures);
+    // A configured export folder, in the watched home: what the refused
+    // commands would write into.
+    let export = crate::config::ExportConfig {
+        folder: crate::config::home().join("Exports"),
+    };
+    let with_export = |mut app: App| {
+        app.export = Some(crate::export::Export::new(&export, []).map_err(|e| format!("{e:#}")));
+        app
+    };
+    // Through the app's folder, with mail; and through the CLI alone, where
+    // `CLOUD` is a file only in the cloud.
+    let local = with_export(app(Some(&root), &cli).await);
+    local
+        .mail()
+        .unwrap()
+        .use_session(bridge().await)
+        .await
+        .unwrap();
+    let cloud = with_export(app(None, &cli).await);
+    let out = fixtures.join("out");
+    let out_arg = out.to_str().unwrap();
+    let message = MESSAGE_HEADS[5];
+    let cases: [(&App, &[&str], bool); 7] = [
+        (&local, &["drive", "manifest"], false),
+        (&cloud, &["drive", "get", CLOUD, "--export"], false),
+        (&cloud, &["drive", "get", CLOUD, "--inline"], false),
+        (
+            &local,
+            &["mail", "attachment", message, "0", "--export"],
+            false,
+        ),
+        (
+            &local,
+            &["mail", "attachment", message, "0", "--inline"],
+            false,
+        ),
+        (&cloud, &["drive", "cat", CLOUD], true),
+        (&cloud, &["drive", "get", CLOUD, "--out", out_arg], true),
+    ];
+    #[cfg(target_os = "linux")]
+    let memory = memory();
+    let mut problems = Vec::new();
+    let mut read_text = String::new();
+    for (app, args, runs) in cases {
+        let line = args.join(" ");
+        let before = watched();
+        let argv = std::iter::once("protonctl").chain(args.iter().copied());
+        let cmd = <crate::Cli as clap::Parser>::try_parse_from(argv)
+            .unwrap()
+            .command;
+        let got = crate::read(app, cmd).await.map_err(|e| format!("{e:#}"));
+        match (&got, runs) {
+            (Ok(v), true) => {
+                if args[1] == "cat" {
+                    read_text = v["content"].to_string();
+                }
+            }
+            (Err(e), false) if e.contains("is off in aliases mode") => {}
+            (Ok(v), false) => problems.push(format!("{line}: ran, and returned {v}")),
+            (Err(e), _) => problems.push(format!("{line}: {e}")),
+        }
+        let new = new_since(&before);
+        if !new.is_empty() {
+            problems.push(format!("{line}: wrote {new:?}"));
+        }
+        #[cfg(target_os = "linux")]
+        if !files_under(&memory).is_empty() {
+            problems.push(format!("{line}: left {:?} in memory", files_under(&memory)));
+        }
+    }
+    // What the commands that run returned: the cloud-only file's text, and
+    // the file saved where `--out` names.
+    if !read_text.contains(INGRID) {
+        problems.push(format!("drive cat: no text from {CLOUD}: {read_text}"));
+    }
+    let saved = out.join(name_of(CLOUD));
+    if std::fs::read_to_string(&saved).ok() != Some(cloud_text()) {
+        problems.push(format!(
+            "drive get --out: {} does not hold the file",
+            saved.display()
+        ));
+    }
+    crate::content::remove_downloads();
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
 }

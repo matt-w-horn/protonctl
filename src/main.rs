@@ -627,6 +627,80 @@ fn logout() -> Value {
     })
 }
 
+/// What aliases mode refuses of a Mail or Drive command, since it would
+/// write into the export folder, or return bytes, which no CLI output
+/// carries (RFC R10, M2.7).
+fn refused_in_aliases_mode(cmd: &Cmd) -> Option<&'static str> {
+    match cmd {
+        Cmd::Drive(DriveCmd::Manifest(_)) => Some("`drive manifest`"),
+        Cmd::Drive(DriveCmd::Get { req, .. }) if req.export => Some("`drive get --export`"),
+        Cmd::Drive(DriveCmd::Get { req, .. }) if req.inline => Some("`drive get --inline`"),
+        Cmd::Mail(MailCmd::Attachment { req, .. }) if req.export => {
+            Some("`mail attachment --export`")
+        }
+        Cmd::Mail(MailCmd::Attachment { req, .. }) if req.inline => {
+            Some("`mail attachment --inline`")
+        }
+        _ => None,
+    }
+}
+
+/// Run a Mail or Drive command. In aliases mode it writes no content to
+/// disk but where `--out` names (RFC R10): what would write elsewhere is
+/// refused, and the rest runs as the server's aliases-mode calls do, so a
+/// cloud-only file goes through the folder in memory (M2.8). The output is
+/// not tokenized until Phase 3 (M3.3).
+async fn read(app: &App, cmd: Cmd) -> Result<Value> {
+    if app.privacy.started() != Some(privacy::Mode::Aliases) {
+        return read_as_asked(app, cmd).await;
+    }
+    if let Some(what) = refused_in_aliases_mode(&cmd) {
+        bail!(
+            "{what} is off in aliases mode, which writes no content to disk (RFC R10); \
+            `protonctl setup privacy --off` turns aliases mode off"
+        );
+    }
+    content::restricted(content::no_mentions(), read_as_asked(app, cmd)).await
+}
+
+/// A Mail or Drive command as asked, in off mode or inside `restricted`.
+async fn read_as_asked(app: &App, cmd: Cmd) -> Result<Value> {
+    Ok(match cmd {
+        Cmd::Mail(cmd) => {
+            let m = app.mail()?;
+            match cmd {
+                MailCmd::Search(r) => m.search_threads(&r).await?,
+                MailCmd::Count(r) => m.count_messages(&r).await?,
+                MailCmd::Message(r) => m.get_message(&r).await?,
+                MailCmd::Thread(r) => m.get_thread(&r).await?,
+                MailCmd::Labels => m.list_labels().await?,
+                MailCmd::Attachment { req, out } => {
+                    m.get_attachment(&req, Some(&out), app.export()).await?.json
+                }
+            }
+        }
+        Cmd::Drive(cmd) => {
+            let d = app.drive()?;
+            match cmd {
+                DriveCmd::Search(r) => d.search_files(&r).await?,
+                DriveCmd::Ls(r) => d.list_folder(&r, &app.drive_cli).await?,
+                DriveCmd::Stat(r) => d.get_file_metadata(&r, &app.drive_cli).await?,
+                DriveCmd::Cat(r) => d.read_file_content(&r, &app.drive_cli).await?.json,
+                DriveCmd::Get { req, out } => {
+                    d.download_file(&req, &app.drive_cli, Some(&out), app.export())
+                        .await?
+                        .json
+                }
+                DriveCmd::Tree(r) => d.list_tree(&r, &app.drive_cli).await?,
+                DriveCmd::Manifest(r) => {
+                    d.export_manifest(&r, &app.drive_cli, app.export()?).await?
+                }
+            }
+        }
+        _ => unreachable!("only Mail and Drive commands are read here"),
+    })
+}
+
 /// Serve until the host closes stdin or a signal arrives. Hosts stop a server
 /// by closing stdin, then with SIGTERM if it lingers; closing a terminal sends
 /// SIGHUP, and a person presses Ctrl-C.
@@ -716,40 +790,11 @@ fn main() -> Result<()> {
                 CalendarCmd::Search(r) => app.calendars.search_events(&r).await?,
                 CalendarCmd::Event(r) => app.calendars.get_event(&r).await?,
             },
-            Cmd::Mail(cmd) => {
-                let m = app.mail()?;
-                match cmd {
-                    MailCmd::Search(r) => m.search_threads(&r).await?,
-                    MailCmd::Count(r) => m.count_messages(&r).await?,
-                    MailCmd::Message(r) => m.get_message(&r).await?,
-                    MailCmd::Thread(r) => m.get_thread(&r).await?,
-                    MailCmd::Labels => m.list_labels().await?,
-                    MailCmd::Attachment { req, out } => {
-                        m.get_attachment(&req, Some(&out), app.export()).await?.json
-                    }
-                }
-            }
-            Cmd::Drive(cmd) => {
-                let d = app.drive()?;
-                match cmd {
-                    DriveCmd::Search(r) => d.search_files(&r).await?,
-                    DriveCmd::Ls(r) => d.list_folder(&r, &app.drive_cli).await?,
-                    DriveCmd::Stat(r) => d.get_file_metadata(&r, &app.drive_cli).await?,
-                    DriveCmd::Cat(r) => d.read_file_content(&r, &app.drive_cli).await?.json,
-                    DriveCmd::Get { req, out } => {
-                        d.download_file(&req, &app.drive_cli, Some(&out), app.export())
-                            .await?
-                            .json
-                    }
-                    DriveCmd::Tree(r) => d.list_tree(&r, &app.drive_cli).await?,
-                    DriveCmd::Manifest(r) => {
-                        d.export_manifest(&r, &app.drive_cli, app.export()?).await?
-                    }
-                }
-            }
+            cmd @ (Cmd::Mail(_) | Cmd::Drive(_)) => read(&app, cmd).await?,
         })
     });
-    // A cloud-only file read by `drive cat` was fetched into the download folder.
+    // A cloud-only file read by `drive cat` was fetched into the download
+    // folder, or in aliases mode the folder in memory.
     content::remove_downloads();
     print(&out?)
 }
