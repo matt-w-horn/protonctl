@@ -3,6 +3,10 @@ source: src/privacy/eval.rs
 expression: report()
 ---
 form | type | n | raw | part | split | linked | mistyped
+address in ASCII, body only | email | 1 | 0 | 0 | 0 | 0 | 0
+address in non-ASCII, body only | email | 2 | 0 | 0 | 0 | 0 | 0
+link with http scheme | link | 1 | 0 | 0 | 0 | 0 | 0
+link without http scheme | link | 3 | 0 | 0 | 0 | 0 | 0
 organization never in mail | organization | 2 | 2 | 0 | 0 | 0 | 0
 organization short name | organization | 1 | 0 | 0 | 0 | 0 | 0
 organization that sends mail | organization | 2 | 0 | 0 | 0 | 0 | 0

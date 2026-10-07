@@ -11,11 +11,13 @@ use unicode_normalization::char::is_combining_mark;
 
 /// Honorifics, removed only before a full name (a given name and a surname):
 /// before a surname alone one is all that tells "Mr Chen" from "Mme Chen".
-/// Compared in lower case, without a trailing dot.
+/// Compared in lower case, without a trailing dot. A word that is also a
+/// name or an initial is left off, since removing it would merge two
+/// people (#74): "M." (an initial), "Pan" (a Chinese surname, written
+/// first), "Pani" (a surname too), "Sri", "Dame" and "Sig" (given names).
 const HONORIFICS: &[&str] = &[
-    "mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "dame", "herr", "frau", "m", "mme",
-    "mlle", "sr", "sra", "srta", "sig", "sig.ra", "dott", "dott.ssa", "dhr", "mevr", "pan", "pani",
-    "sri", "smt",
+    "mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "herr", "frau", "mme", "mlle", "sr",
+    "sra", "srta", "sig.ra", "dott", "dott.ssa", "dhr", "mevr", "smt",
 ];
 
 /// Whether `word` is an honorific, in any case, with or without its dot.
@@ -172,16 +174,17 @@ pub fn ip(s: &str) -> String {
         .map_or_else(|_| s.trim().to_lowercase(), |a| a.to_string())
 }
 
-/// A URL, for numbering links within one result: scheme and host in lower
-/// case, the path and query kept, the fragment removed.
+/// A URL, for numbering links within one result: scheme, if any, and host
+/// in lower case, the path and query kept, the fragment removed.
 pub fn url(s: &str) -> String {
     let s = s.split('#').next().unwrap_or_default();
-    let Some((scheme, rest)) = s.split_once("://") else {
-        return s.to_string();
+    let (scheme, rest) = match s.split_once("://") {
+        Some((scheme, rest)) => (format!("{}://", scheme.to_lowercase()), rest),
+        None => (String::new(), s),
     };
     let cut = rest.find(['/', '?']).unwrap_or(rest.len());
     let (host, tail) = rest.split_at(cut);
-    format!("{}://{}{tail}", scheme.to_lowercase(), host.to_lowercase())
+    format!("{scheme}{}{tail}", host.to_lowercase())
 }
 
 #[cfg(test)]
@@ -219,6 +222,13 @@ mod tests {
         assert_ne!(name("Mr Chen"), name("Ms Chen"));
         assert_ne!(name("John Smith Sr."), name("John Smith"));
         assert_ne!(name("\u{0E01}\u{0E32}"), name("\u{0E01}\u{0E48}\u{0E32}"));
+        // Words that are honorifics in one language and names in another
+        // (#74): a surname written first, a given name, an initial.
+        assert_ne!(name("Pan Wei Ming"), name("Wei Ming"));
+        assert_ne!(name("Sri Mulyani Indrawati"), name("Mulyani Indrawati"));
+        assert_ne!(name("M. J. Smith"), name("J. Smith"));
+        assert_ne!(name("Dame Babacar Diop"), name("Babacar Diop"));
+        assert_ne!(name("Sig Ole Hansen"), name("Ole Hansen"));
     }
 
     #[test]
@@ -235,6 +245,8 @@ mod tests {
             url("HTTPS://Example.COM/Path?q=A#frag"),
             "https://example.com/Path?q=A"
         );
+        assert_eq!(url("Zoom.US/j/1?pwd=A#x"), "zoom.us/j/1?pwd=A");
+        assert_eq!(url("WebCal://Proton.ME/c?K=A"), "webcal://proton.me/c?K=A");
     }
 
     /// Each script's decimal digits read as their values. `digit` relies on
