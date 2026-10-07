@@ -3,11 +3,12 @@
 # 7. Testing
 
 Built (on macOS on 2026-10-04, `cargo test` ran 247 tests: 238 unit, 9
-against the built binary, and 3 ignored. On Linux on 2026-10-05 it ran 217: 208 unit, 9
-against the built binary; 4 more are ignored by default: one lists Drive
-through the real CLI, two reach a Secret Service and run in
-`scripts/check.sh`, and one is the sandbox probe, which another test
-runs as a child. The macOS-only tests do not run on Linux, and the
+against the built binary, and 3 ignored. On Linux on 2026-10-07 it ran 260: 247 unit, 13
+against the built binary; 9 more are ignored by default: one lists Drive
+through the real CLI; three reach a Secret Service and one runs against
+Dovecot, all four in `scripts/check.sh`; three run only as the children
+of other tests (the sandbox probe, the locked-keyring probe and the
+throwaway-home run); and one is a timing measurement. The macOS-only tests do not run on Linux, and the
 Linux-only tests do not run on a Mac). Live,
 `scripts/live-check.py` runs every tool once over MCP, as the Claude app
 does, against the real calendar link, Bridge and Drive, and prints counts

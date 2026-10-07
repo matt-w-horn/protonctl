@@ -262,7 +262,10 @@ fn word_edge(text: &str, at: usize, floor: usize, forward: bool) -> usize {
         return at;
     }
     let lo = text.floor_char_boundary(at.saturating_sub(WORD)).max(floor);
-    if let Some((i, c)) = text[lo..at].char_indices().rfind(|(_, c)| c.is_whitespace()) {
+    if let Some((i, c)) = text[lo..at]
+        .char_indices()
+        .rfind(|(_, c)| c.is_whitespace())
+    {
         return lo + i + c.len_utf8();
     }
     let hi = text.ceil_char_boundary(at.saturating_add(WORD));
