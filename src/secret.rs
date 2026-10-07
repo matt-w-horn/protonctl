@@ -27,6 +27,9 @@ pub enum Account {
     PrivacyMode,
     /// `privacy-key`: the privacy key, with its key ID in the comment (R20).
     PrivacyKey,
+    /// `drive-cli-pin`: the Drive CLI's pinned SHA-256 on Linux, in its
+    /// comment, kept out of the config as the mode is (Q33, #72).
+    DriveCliPin,
     /// Any other name under the service, from an older version: listed and
     /// deleted by `logout`, never read.
     Other(String),
@@ -40,6 +43,7 @@ impl Account {
             _ => match name {
                 "privacy-mode" => Self::PrivacyMode,
                 "privacy-key" => Self::PrivacyKey,
+                "drive-cli-pin" => Self::DriveCliPin,
                 other => Self::Other(other.to_string()),
             },
         }
@@ -53,6 +57,7 @@ impl std::fmt::Display for Account {
             Self::Bridge(address) => write!(f, "bridge/{address}"),
             Self::PrivacyMode => f.write_str("privacy-mode"),
             Self::PrivacyKey => f.write_str("privacy-key"),
+            Self::DriveCliPin => f.write_str("drive-cli-pin"),
             Self::Other(name) => f.write_str(name),
         }
     }
@@ -125,6 +130,7 @@ mod tests {
             Account::Bridge("you@proton.me".into()),
             Account::PrivacyMode,
             Account::PrivacyKey,
+            Account::DriveCliPin,
             Account::Other("legacy".into()),
         ] {
             assert_eq!(Account::parse(&account.to_string()), account);

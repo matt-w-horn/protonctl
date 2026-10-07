@@ -9,6 +9,8 @@ publish = false
 
 [dependencies]
 aes-siv = "0.7"
+# Only for its feature: AES-SIV's expanded AES keys are wiped on drop (R20).
+aes = { version = "0.8", features = ["zeroize"] }
 aho-corasick = "1"
 anyhow = "1"
 base64 = "0.23"

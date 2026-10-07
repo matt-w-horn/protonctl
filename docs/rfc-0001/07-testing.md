@@ -3,13 +3,12 @@
 # 7. Testing
 
 Built (on macOS on 2026-10-04, `cargo test` ran 247 tests: 238 unit, 9
-against the built binary, and 3 ignored. On Linux on 2026-10-07 it ran 260: 246 unit, 14
-against the built binary; 10 more are ignored by default: one lists Drive
-through the real CLI, three reach a Secret Service and one reaches
-Dovecot, which `scripts/check.sh` runs, one is a timing to run with
-`--release`, and four run as the child of another test: the two sandbox
-probes, the locked-keyring probe, and every tool in a throwaway home.
-The macOS-only tests do not run on Linux, and the
+against the built binary, and 3 ignored. On Linux on 2026-10-07 it ran 267: 253 unit, 14
+against the built binary; 11 more are ignored by default: one lists Drive
+through the real CLI, one is a timing to run with `--release`, four reach
+a Secret Service and one reaches Dovecot, which `scripts/check.sh` runs
+in a throwaway keyring or container, and four run as the child of
+another test. The macOS-only tests do not run on Linux, and the
 Linux-only tests do not run on a Mac). Live,
 `scripts/live-check.py` runs every tool once over MCP, as the Claude app
 does, against the real calendar link, Bridge and Drive, and prints counts
@@ -174,6 +173,52 @@ The tests:
   - Two handles on the CLI lock file exclude each other, and a CLI run
     waits while another holds it (shown to fail with no lock taken, and
     with the run not taking it).
+- The Drive CLI's check (R9, Q24, Q33,
+  [#72](https://github.com/matt-w-horn/protonctl/issues/72)), against
+  stand-in CLIs. Every run is of the private copy, on Linux a sealed memfd
+  run as `/proc/self/fd/N`. A `#!/bin/sh` script cannot run from there,
+  since the fd is close-on-exec and the shell cannot open that path, so
+  each stand-in is one `#!/usr/bin/env -S /bin/sh` line that runs its
+  script, and the trusted stand-ins of the Drive tests run through the
+  copy too.
+  - A pinned CLI runs only while it matches its pin, checked before every
+    run, with `--version` once per process; one with no pin, or a pin for
+    other bytes, never runs.
+  - A CLI swapped in after the check never runs. The stand-in renames
+    another CLI over itself while it answers `--version`, between the
+    check and the command, as the security review's stand-in did; the
+    command still runs the checked bytes, the next call refuses the
+    swapped file, and on Linux every run is of `/proc/self/fd/N` (shown
+    to fail with the command run by path, as before #72, and with only
+    `--version` run by path). Built:
+    `a_cli_swapped_in_after_the_check_never_runs` in `src/drive/cli.rs`.
+  - A `cli_sha256` in the config is not trusted, even when it matches the
+    file: with no pin in the secret store the CLI never runs, and the
+    error says the pin moved and to run `setup drive` on a terminal; the
+    same pin from the store is trusted (shown to fail with the config's
+    pin taken when the store has none or cannot be read). Linux only.
+    Built: `a_pin_in_the_config_is_not_trusted` in `src/drive/cli.rs`.
+  - A first `setup drive --cli <path>`, against the built binary, refuses
+    without a terminal: it names the file and its SHA-256, runs nothing,
+    and writes no config (shown to fail with a first setup that pins
+    without asking, which ran the stand-in). Linux only. Built:
+    `tests/setup_drive.rs`.
+  - `status` shows the pin on Linux, or why there is none, and nothing on
+    macOS; `get_status` in aliases mode leaves it out, with nothing in
+    `dropped` (shown to fail without its field policy, which named it in
+    `dropped` on every call). `setup drive --cli` on a set-up Drive changes only `cli` and
+    removes a `cli_sha256` left from before, comments and every other
+    value kept. The copy hashes each byte it writes, across chunks.
+  - Not automated: the whole flow on a pseudo-terminal from `script`, in a
+    throwaway keyring, on 2026-10-07: a first setup confirmed with `yes`
+    stored the pin and wrote only `cli`; `status` and `doctor` showed the
+    pin; a piped `setup drive --cli` was refused, and on a terminal it
+    pinned the new CLI and removed an old `cli_sha256`. The CLI runs on
+    Bun ([Appendix A](appendix-a-phase-0.md)), likely as a Bun standalone
+    binary, which reads its own code from its executable: one built with
+    Bun 1.4.2 ran from a sealed memfd and found its code. The real CLI, on
+    a Linux machine signed in to Proton, has not run this way
+    ([#62](https://github.com/matt-w-horn/protonctl/issues/62)).
 - Surface: no forbidden tool names; every hint set and every description
   within 2,048 characters; a snapshot of the whole tool surface, descriptions
   included, since Cowork re-approves a tool whose definition changes;
@@ -487,8 +532,12 @@ missing ones:
   give one alias; canonicalizing twice changes nothing (property test). And
   the other way: names that differ only by a Devanagari or Thai mark, "M.
   Chen" and "Mme Chen", "Mr Chen" and "Ms Chen", and "John Smith Sr." and
-  "John Smith" keep
-  different aliases. Built: `spellings_of_one_name_meet`,
+  "John Smith" keep different aliases; so do names that start with a
+  word that is an honorific in one language and a name or an initial in
+  another: "Pan Wei Ming" and "Wei Ming", "Sri Mulyani Indrawati" and
+  "Mulyani Indrawati", "M. J. Smith" and "J. Smith", "Dame Babacar Diop"
+  and "Babacar Diop", "Sig Ole Hansen" and "Ole Hansen" (#74, each shown
+  to fail with the old honorific list). Built: `spellings_of_one_name_meet`,
   `rules_never_merge_two_people` (every case above) and the property test
   `canonical_forms_are_fixed_points` in `src/privacy/canon.rs`.
 - Collisions: with a word list of 4 words, two and three entities that
@@ -535,7 +584,15 @@ missing ones:
   mention, back to its start or past its end (shown to fail with the old
   `truncate`, which left `to ann`). These are
   `an_address_cut_by_a_page_edge_does_not_leak` in `src/serve.rs` and
-  `aliases_mode_truncates_beside_a_mention` in `src/content.rs`.
+  `aliases_mode_truncates_beside_a_mention` in `src/content.rs`. Added
+  2026-10-06 (#69): a page edge at every byte inside "Dana Okonkwo", a
+  name only the message's own From holds, so the process dictionary that
+  cuts pages lacks it, leaves no part of it raw on the page before the
+  edge or the page from it
+  (`a_page_edge_inside_a_header_name_leaves_no_half_raw` in
+  `src/privacy/pipeline.rs`); and a cut or a start inside a word moves to
+  the word's start, or a cut past its end when the word starts the piece
+  (`aliases_mode_cuts_between_words` in `src/content.rs`).
 - Rotation: a server running while `rotate-key` replaces the key gives new
   aliases on its next call, and refuses the old handles. Built at the key:
   `a_rotated_key_is_picked_up_on_the_next_call` and
@@ -668,17 +725,48 @@ missing ones:
   form, and a person stays a person. Built: `organizations_that_send_mail_are_typed_organization` in
   `src/privacy/detect/dict.rs`, shown to fail with every name typed
   person.
+- Links and addresses in text (Phase 2, [#70](https://github.com/matt-w-horn/protonctl/issues/70);
+  built 2026-10-07): a link with any scheme, `webcal://` included,
+  becomes one `link N` with its path and query (Q19), and so does a
+  domain followed by a path or query, with any top-level domain, or by a
+  fragment, with one on the short list. A domain after `@` stays its
+  address's, and a file's anchor such as `04-design.md#settings` and
+  text such as `and/or` and `km/h` stay as they are. An address in
+  letters and digits of any script is found whole, with a mark after a
+  letter in decomposed form, and the same link with its host in another
+  case keeps its number. A closing quote after a link stays out of it.
+  Built: `links_of_any_scheme_or_none_are_found` and
+  `addresses_in_any_script_are_found` in
+  `src/privacy/detect/pattern.rs`, `other_forms` in
+  `src/privacy/canon.rs`, and
+  `links_without_an_http_scheme_and_non_ascii_addresses_are_rewritten`
+  in `src/privacy/pipeline.rs`, each shown to fail on the patterns of
+  2026-10-06: the `webcal://` share link, `www.example.com/reset?token=…`
+  and `zoom.us/j/…?pwd=…` kept their path and query, and
+  `jürgen.müller@bücher.de` and `张伟@例子.中国` passed raw. The
+  exceptions for `@` and for a file's anchor were each shown to fail
+  with their rule removed; `ordinary_text_is_left_alone` holds the
+  anchor and `and/or`. Not covered: a top-level domain in punycode
+  (`xn--…`). A path whose first part looks like a domain, such as
+  `Node.js/Deno`, becomes a link, which hides more than it must.
 - Evaluation (Phase 2, defect D1 in [section 9](09-rollout.md#phase-2-defects-found-on-real-results)):
   aliases mode over a labeled synthetic corpus that plants each person,
   organization and project in every form D2 to D7 name (surname, given
   name, initials, middle initial, typing and OCR misspellings, run-in
   CJK text, organizations that send mail and that never do, projects),
+  and links and addresses that appear only in a body, with and without
+  an `http` scheme and in ASCII and other scripts (#70),
   reporting per form and entity type how many came back whole, with a
   word of the name left, with a second alias, linked by `maybeSameAs`, or
-  typed wrong. The report is a snapshot, so each fix shows as the change
-  in its row. Built: `what_passes_raw_per_form` in `src/privacy/eval.rs`,
-  shown to fail when the process dictionary was emptied (the
-  process-only full name came back raw).
+  typed wrong. A link's words end at `/`, `?`, `#`, `&` and `=`, and a
+  link is typed right when it reads `link N`. The report is a snapshot,
+  so each fix shows as the change in its row. Built:
+  `what_passes_raw_per_form` in `src/privacy/eval.rs`, shown to fail
+  when the process dictionary was emptied (the process-only full name
+  came back raw). On the patterns of 2026-10-06 the links without an
+  `http` scheme came back 3 of 3 with a word left and typed wrong, and
+  the non-ASCII addresses 2 of 2 whole; with #70 fixed, every link and
+  address row reads 0.
 - Recall (Phase 5): per entity type and language, on a labeled synthetic
   corpus in English, German, French and one non-Latin script at least.
   Results are recorded, with no pass mark until there is a measured
@@ -709,7 +797,12 @@ missing ones:
   mail search that leaves out today's mail, failing on any alias that is
   new, gone or of another type (2026-10-06,
   [#14](https://github.com/matt-w-horn/protonctl/issues/14); not yet
-  run live). `--reveal` comes with Phase 3.
+  run live). In both modes a failed call prints only its error code, or
+  `error text` when the error has none, and the message's length, never
+  the message, which in off mode can carry a Drive path or the Drive
+  CLI's stderr (2026-10-07,
+  [#75](https://github.com/matt-w-horn/protonctl/issues/75)). `--reveal`
+  comes with Phase 3.
 
 R1 is tested for both services that reach the account. The stand-in
 `proton-drive` in `src/drive/mod.rs` and `tests/convert.rs` answers only

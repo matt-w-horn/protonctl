@@ -213,20 +213,63 @@ fn a_damaged_pdf_fails_in_the_reader_not_the_sandbox() {
     assert_ne!(out.status.code(), Some(SANDBOX_FAILED));
 }
 
+/// The D-Bus session of the throwaway keyring that `scripts/check.sh`
+/// starts. The keyring's folder is a new one under the temporary folder,
+/// which tells it from the user's own, which this never writes to.
+fn throwaway_keyring() -> String {
+    let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
+    assert!(
+        data.is_some_and(|d| d.starts_with(std::env::temp_dir())),
+        "run this through scripts/check.sh, which starts a throwaway keyring"
+    );
+    std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap()
+}
+
+/// Pin `cli` as `protonctl setup drive` does once the user confirms it: the
+/// SHA-256 in the comment of the Secret Service item `protonctl`/
+/// `drive-cli-pin` (RFC Q33, #72), as `src/platform/linux.rs` stores one.
+fn pin_in_the_keyring(cli: &Path) {
+    use secret_service::{EncryptionType, blocking::SecretService};
+    let pin = ring::digest::digest(&ring::digest::SHA256, &std::fs::read(cli).unwrap());
+    let pin = hex::encode(pin);
+    let store = SecretService::connect(EncryptionType::Plain).unwrap();
+    let attributes = std::collections::HashMap::from([
+        ("service", "protonctl"),
+        ("account", "drive-cli-pin"),
+        ("comment", pin.as_str()),
+    ]);
+    store
+        .get_default_collection()
+        .unwrap()
+        .create_item(
+            "protonctl/drive-cli-pin",
+            attributes,
+            pin.as_bytes(),
+            true,
+            "text/plain",
+        )
+        .unwrap();
+}
+
 /// The whole path a server takes: the Drive CLI (a stand-in, pinned as
 /// `setup drive` pins it) downloads the file, and protonctl reads it
 /// through `/proc/self/exe convert`. The stand-in fails any call but the
-/// ones a read makes, and records it, so the test fails on it (R1).
+/// ones a read makes, and records it, so the test fails on it (R1). It
+/// runs from a sealed memfd, as `/proc/self/fd/N`, which a `#!/bin/sh`
+/// script cannot, so it is one line that has `env -S` run the script.
 #[test]
+#[ignore = "needs a Secret Service; scripts/check.sh runs it in a private D-Bus session"]
 fn drive_reads_documents_through_the_sandboxed_readers() {
+    let bus = throwaway_keyring();
     let home = tempfile::tempdir().unwrap();
     let cli = home.path().join("proton-drive");
+    let script = home.path().join("proton-drive.sh");
     let unexpected = home.path().join("unexpected.txt");
     let fixtures = fixture("");
     std::fs::write(
-        &cli,
+        &script,
         format!(
-            r#"#!/bin/sh
+            r#"shift
 f='{}'
 case "$#:$*" in
 "1:--version") echo '@protontech/cli-drive@0.8.0' ;;
@@ -248,20 +291,15 @@ esac
         ),
     )
     .unwrap();
+    let line = format!("#!/usr/bin/env -S /bin/sh {}\n", script.display());
+    std::fs::write(&cli, line).unwrap();
     std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let pin = ring::digest::digest(&ring::digest::SHA256, &std::fs::read(&cli).unwrap());
+    pin_in_the_keyring(&cli);
     let config = home.path().join("config.toml");
-    std::fs::write(
-        &config,
-        format!(
-            "[drive]\ncli = \"{}\"\ncli_sha256 = \"{}\"\n",
-            cli.display(),
-            hex::encode(pin)
-        ),
-    )
-    .unwrap();
+    std::fs::write(&config, format!("[drive]\ncli = \"{}\"\n", cli.display())).unwrap();
     let cat = |args: &[&str]| -> serde_json::Value {
         let out = protonctl()
+            .env("DBUS_SESSION_BUS_ADDRESS", &bus)
             .env("HOME", home.path())
             .env("PROTONCTL_CONFIG", &config)
             .args(["drive", "cat"])

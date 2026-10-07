@@ -270,10 +270,13 @@ protonctl never sees your Proton password:
 Proton Drive app's folder if the app is installed (or takes `--folder`),
 and writes `[drive]` to the config. Drive is off until it runs. Without the
 app, listing goes through the CLI and search is off. protonctl checks the
-CLI again before every run: on macOS, that Proton's Apple team signed it.
-On Linux, where Proton publishes no signature or checksum, `setup drive`
-pins the CLI's SHA-256 and every run must match it; after you update the
-CLI, run `setup drive` again to pin the new one. It asks first.
+CLI again before every run, on a private copy that is then the one that
+runs: on macOS, that Proton's Apple team signed it. On Linux, where Proton
+publishes no signature or checksum, `setup drive` shows the CLI's SHA-256,
+asks you on a terminal to confirm it, and pins it in the Secret Service;
+every run must match it. After you update the CLI, run `setup drive`
+again to pin the new one; `setup drive --cli <path>` pins a CLI at
+another path. Each asks first.
 
 ## Connect Claude
 
@@ -365,8 +368,10 @@ The steps above apply, with these differences:
 
   Then run `systemctl --user enable --now protonmail-bridge`.
 - **Drive** goes through the CLI only, since there is no Proton Drive app
-  for Linux, so search is off. `setup drive` pins the CLI's SHA-256; after
-  you update the CLI, run `setup drive` again to pin the new one. In
+  for Linux, so search is off. `setup drive` pins the CLI's SHA-256 in
+  the Secret Service, after asking on a terminal; after you update the
+  CLI, run `setup drive` again to pin the new one. A pin from an older
+  protonctl, in the config, is ignored: run `setup drive` once. In
   aliases mode the CLI downloads a file it reads into `$XDG_RUNTIME_DIR`,
   which must be in memory (tmpfs) and yours alone, and any swap must be
   encrypted or zram, so the file never reaches a disk in clear; `doctor`

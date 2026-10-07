@@ -19,14 +19,33 @@ fn re(pattern: &str) -> Regex {
 static EMAIL: LazyLock<Regex> = LazyLock::new(|| {
     // The local part may hold what RFC 5322 allows beside letters and
     // digits ("o'brien"), but starts with a letter or digit, so a quote
-    // before an address stays out of it.
+    // before an address stays out of it. Letters and digits are any
+    // script's (RFC 6531), with a combining mark after the first.
     re(
-        r"(?i)\b[a-z0-9][a-z0-9.!#$%&'*+?^_`~-]*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,24}\b",
+        r"(?i)\b[\p{L}\p{N}][\p{L}\p{M}\p{N}.!#$%&'*+?^_`~-]*@(?:[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}-]*[\p{L}\p{M}\p{N}])?\.)+\p{L}[\p{L}\p{M}]{1,23}\b",
     )
 });
-static URL: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)\b(?:https?|ftp)://[^\s<>"'\[\](){}]+"#));
-static DOMAIN: LazyLock<Regex> =
-    LazyLock::new(|| re(r"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z]{2,24})\b"));
+/// A link with any scheme: a `webcal://` or `zoommtg://` link carries
+/// secrets as an `https://` one does (RFC Q19).
+static URL: LazyLock<Regex> =
+    LazyLock::new(|| re(r#"(?i)\b[a-z][a-z0-9+.-]*://[^\s<>"'\[\](){}]+"#));
+/// A domain, and a port if any, followed by a path, query or fragment: a
+/// link written without its scheme, such as `zoom.us/j/1?pwd=…`. Any
+/// top-level domain counts before a path or query, which is what makes it
+/// a link; before a fragment alone `find` asks for one on `TLDS`, so a
+/// file's anchor (`04-design.md#settings`) stays as it is.
+static BARE_URL: LazyLock<Regex> = LazyLock::new(|| {
+    re(
+        r#"(?i)\b(?:[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}-]{0,61}[\p{L}\p{M}\p{N}])?\.)+(\p{L}[\p{L}\p{M}]{1,23})(?::[0-9]{1,5})?([/?#])[^\s<>"'\[\](){}]+"#,
+    )
+});
+/// A domain in labels of any script; `find` keeps it only when its
+/// top-level domain is on `TLDS`.
+static DOMAIN: LazyLock<Regex> = LazyLock::new(|| {
+    re(
+        r"(?i)\b(?:[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}-]{0,61}[\p{L}\p{M}\p{N}])?\.)+(\p{L}[\p{L}\p{M}]{1,23})\b",
+    )
+});
 static IPV4: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"));
 static IPV6: LazyLock<Regex> =
     LazyLock::new(|| re(r"(?i)\b[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}\b"));
@@ -93,20 +112,29 @@ fn entity(out: &mut Vec<Mention>, text: &str, start: usize, end: usize, t: Entit
     );
 }
 
+/// A link at `start`, without the punctuation or closing quote that
+/// follows it in a sentence.
+fn link(out: &mut Vec<Mention>, start: usize, s: &str) {
+    let s = s.trim_end_matches(['.', ',', ';', ':', '!', '?', '»', '›', '”', '’']);
+    push(out, start, start + s.len(), Kind::Link, s.to_string());
+}
+
 /// Every mention the patterns find in `text`, overlapping ones included.
 pub fn find(text: &str, out: &mut Vec<Mention>) {
     for m in EMAIL.find_iter(text) {
         entity(out, text, m.start(), m.end(), EntityType::Email);
     }
     for m in URL.find_iter(text) {
-        let s = m.as_str().trim_end_matches(['.', ',', ';', ':', '!', '?']);
-        push(
-            out,
-            m.start(),
-            m.start() + s.len(),
-            Kind::Link,
-            s.to_string(),
-        );
+        link(out, m.start(), m.as_str());
+    }
+    for c in BARE_URL.captures_iter(text) {
+        let (m, tld, after) = (c.get(0).expect("group 0"), &c[1], &c[2]);
+        // After `@` it is an address's domain, which must stay whole, and
+        // after `/` part of a path.
+        let inside = text[..m.start()].ends_with(['@', '/']);
+        if !inside && (after != "#" || TLDS.contains(&tld.to_ascii_lowercase().as_str())) {
+            link(out, m.start(), m.as_str());
+        }
     }
     for c in DOMAIN.captures_iter(text) {
         let (m, tld) = (c.get(0).expect("group 0"), &c[1]);
@@ -325,9 +353,73 @@ mod tests {
             "meet at 10:30:00",
             "order 1234567",
             "version 1.2.3",
+            "and/or, km/h, 1.5/2 and e.g. this",
+            "see 04-design.md#settings",
         ] {
             assert_eq!(found(text), Vec::new(), "{text}");
         }
+    }
+
+    /// Q19: a link of any scheme, or of none but with a path, query or
+    /// fragment, is one link, its path and query with it (#70). A domain
+    /// after `@` stays the address's.
+    #[test]
+    fn links_of_any_scheme_or_none_are_found() {
+        let webcal = "webcal://calendar.proton.me/api/calendar/v1/url/AbCdEf123/calendar.ics?CacheKey=k9&PassphraseKey=SeCrEtPaSs";
+        for (text, link) in [
+            (format!("Subscribe: {webcal}."), webcal),
+            (
+                "reset at www.example.com/reset?token=Zx81secretToken now".into(),
+                "www.example.com/reset?token=Zx81secretToken",
+            ),
+            (
+                "join zoom.us/j/81234567890?pwd=SeCrEtPwd, then".into(),
+                "zoom.us/j/81234567890?pwd=SeCrEtPwd",
+            ),
+            (
+                "notes at notes.example.app:8443/d/Q7x#top".into(),
+                "notes.example.app:8443/d/Q7x#top",
+            ),
+            ("voir bücher.de/konto?id=77".into(), "bücher.de/konto?id=77"),
+            (
+                "open example.com#k=SeCrEt now".into(),
+                "example.com#k=SeCrEt",
+            ),
+            (
+                "see «https://example.com/a?b=c» now".into(),
+                "https://example.com/a?b=c",
+            ),
+            ("see “zoom.us/j/1?pwd=A” now".into(), "zoom.us/j/1?pwd=A"),
+        ] {
+            assert_eq!(found(&text), vec![(link.to_string(), Kind::Link)], "{text}");
+        }
+        assert_eq!(
+            found("mail dana@ruiz-events.example/today"),
+            vec![(
+                "dana@ruiz-events.example".to_string(),
+                Kind::Entity(EntityType::Email)
+            )]
+        );
+    }
+
+    /// An address or a domain in letters of any script is found whole
+    /// (#70), with a mark that follows a letter in decomposed form.
+    #[test]
+    fn addresses_in_any_script_are_found() {
+        for address in [
+            "jürgen.müller@bücher.de",
+            "张伟@例子.中国",
+            "дмитрий@пример.рф",
+            "ju\u{308}rgen@bu\u{308}cher.de",
+        ] {
+            let text = format!("write to {address} today");
+            assert_eq!(
+                found(&text),
+                vec![(address.to_string(), Kind::Entity(EntityType::Email))],
+                "{text}"
+            );
+        }
+        assert!(has("at bücher.de today", "bücher.de", EntityType::Domain));
     }
 
     /// An IBAN's digits are ASCII: text shaped like one with a digit from
