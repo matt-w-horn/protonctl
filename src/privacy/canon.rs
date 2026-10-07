@@ -172,16 +172,17 @@ pub fn ip(s: &str) -> String {
         .map_or_else(|_| s.trim().to_lowercase(), |a| a.to_string())
 }
 
-/// A URL, for numbering links within one result: scheme and host in lower
-/// case, the path and query kept, the fragment removed.
+/// A URL, for numbering links within one result: scheme, if any, and host
+/// in lower case, the path and query kept, the fragment removed.
 pub fn url(s: &str) -> String {
     let s = s.split('#').next().unwrap_or_default();
-    let Some((scheme, rest)) = s.split_once("://") else {
-        return s.to_string();
+    let (scheme, rest) = match s.split_once("://") {
+        Some((scheme, rest)) => (format!("{}://", scheme.to_lowercase()), rest),
+        None => (String::new(), s),
     };
     let cut = rest.find(['/', '?']).unwrap_or(rest.len());
     let (host, tail) = rest.split_at(cut);
-    format!("{}://{}{tail}", scheme.to_lowercase(), host.to_lowercase())
+    format!("{scheme}{}{tail}", host.to_lowercase())
 }
 
 #[cfg(test)]
@@ -235,6 +236,8 @@ mod tests {
             url("HTTPS://Example.COM/Path?q=A#frag"),
             "https://example.com/Path?q=A"
         );
+        assert_eq!(url("Zoom.US/j/1?pwd=A#x"), "zoom.us/j/1?pwd=A");
+        assert_eq!(url("WebCal://Proton.ME/c?K=A"), "webcal://proton.me/c?K=A");
     }
 
     /// Each script's decimal digits read as their values. `digit` relies on
