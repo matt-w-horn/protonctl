@@ -208,9 +208,26 @@ flowchart TB
   `/var/cache/fontconfig`, and open `/dev/null`; nothing else, so not the
   home folder, `/tmp`, `/proc` or the rest of `/etc`. It also refuses TCP
   (Linux 6.7 and later), abstract Unix sockets and signals to processes
-  outside (6.12 and later). A seccomp filter refuses `socket` and
-  `io_uring_setup` on every kernel. A kernel that does not enforce Landlock
+  outside (6.12 and later). A seccomp filter, on every kernel, refuses
+  `socket`, `io_uring_setup` and changes to a file's metadata; a signal or
+  pidfd for any process but the reader's own, and a file owner, which
+  would carry `SIGIO` to another process, so before 6.12 too a reader
+  signals no other process; `fork`, `vfork` and a `clone` that is not a
+  thread, so nothing the reader starts outlives its 60 s limit; and any
+  change to a resource limit. A second filter answers `clone3`, whose
+  flags a filter cannot read, as a kernel without it does (`ENOSYS`), so
+  libc starts threads with `clone`. A kernel that does not enforce Landlock
   refuses to read documents rather than read them unconfined.
+- Memory (#71): each reader has 2 GiB of address space, and pandoc runs
+  with `+RTS -M1g -RTS`, a 1 GiB heap, so a document built to fill memory
+  stops with "Heap exhausted" in about a second instead of growing until
+  the 60 s limit; the review measured 9.7 GB from a 620 KB Word file. A
+  real 2 MB Word file of 5.7 MB of text reads in 1 GiB, and fails in
+  768 MiB (pandoc 3.1.3). The core size is 1: the kernel writes no core
+  file below a page and gives none to a `|` handler such as
+  systemd-coredump or apport at exactly 1, so a crashed reader's memory,
+  which holds the document, is not written to disk. An `@` socket handler
+  (Linux 6.17 and later) is given the core whatever the limit.
 - A reader that cannot read the document (a damaged PDF, one that needs a
   password) gives a `reason` in the result. A sandbox that cannot be set up
   exits with code 70, which no reader uses, and the call fails; `doctor`
@@ -218,12 +235,13 @@ flowchart TB
 - A reader taken over by a hostile document can still print what it may
   read, which reaches the result: the system's programs, libraries and
   font configuration, nothing of the user's.
-- Tests: the sandbox probe (in `src/platform/linux.rs`) checks every denial
-  above from a child process, and fails without the seccomp filter or with
+- Tests: the sandbox probes (in `src/platform/linux.rs`) check every denial
+  above from a child process, and fail without the seccomp rules or with
   all of `/etc` readable; `tests/convert.rs` runs each job through the
-  built binary and reads a PDF and a Word file through `drive cat`, with
-  the stand-in CLI's pin in a throwaway keyring, which `scripts/check.sh`
-  starts (Q33, #72).
+  built binary, reads each reader's limits from `/proc`, stops the
+  document built to fill memory, and reads a PDF and a Word file through
+  `drive cat`, with the stand-in CLI's pin in a throwaway keyring, which
+  `scripts/check.sh` starts (Q33, #72).
 
 ## Hosts by platform
 

@@ -75,7 +75,11 @@ const PANDOC: Reader = Reader {
 impl Job {
     /// The reader and its arguments; `None` for `Check`. Each reads stdin
     /// (`-`) and writes stdout, and pandoc's own `--sandbox` also keeps it
-    /// from reading files or the network a document names.
+    /// from reading files or the network a document names. pandoc's heap is
+    /// held to 1 GiB, as its manual advises for untrusted input, so a file
+    /// built to fill memory stops at once with "Heap exhausted" (R21, #71).
+    /// Measured with pandoc 3.1.3, a 2 MB Word file whose XML is 8 MB (5.7
+    /// MB of text) needs 1 GiB and fails at 768 MiB.
     fn command(self) -> Option<(Reader, Vec<String>)> {
         let args = |a: &[&str]| a.iter().map(ToString::to_string).collect::<Vec<_>>();
         Some(match self {
@@ -104,7 +108,17 @@ impl Job {
             }
             Self::Document { format } => {
                 let from: &str = format.into();
-                let a = ["--sandbox", "-f", from, "-t", "plain", "--wrap=none"];
+                let a = [
+                    "+RTS",
+                    "-M1g",
+                    "-RTS",
+                    "--sandbox",
+                    "-f",
+                    from,
+                    "-t",
+                    "plain",
+                    "--wrap=none",
+                ];
                 (PANDOC, args(&a))
             }
         })

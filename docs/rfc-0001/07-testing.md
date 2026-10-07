@@ -3,11 +3,11 @@
 # 7. Testing
 
 Built (on macOS on 2026-10-04, `cargo test` ran 247 tests: 238 unit, 9
-against the built binary, and 3 ignored. On Linux on 2026-10-07 it ran 266: 253 unit, 13
-against the built binary; 11 more are ignored by default: one lists Drive
+against the built binary, and 3 ignored. On Linux on 2026-10-07 it ran 268: 254 unit, 14
+against the built binary; 12 more are ignored by default: one lists Drive
 through the real CLI, one is a timing to run with `--release`, four reach
 a Secret Service and one reaches Dovecot, which `scripts/check.sh` runs
-in a throwaway keyring or container, and four run as the child of
+in a throwaway keyring or container, and five run as the child of
 another test. The macOS-only tests do not run on Linux, and the
 Linux-only tests do not run on a Mac). Live,
 `scripts/live-check.py` runs every tool once over MCP, as the Claude app
@@ -688,6 +688,27 @@ missing ones:
   `each_reader_runs_in_its_sandbox` and
   `a_damaged_pdf_fails_in_the_reader_not_the_sandbox` in
   `tests/convert.rs`. macOS and Vision: not built (Phase 4).
+  Memory and signals (built 2026-10-07, #71): a 200 KB Word file holding
+  200 MiB of XML stops with pandoc's "Heap exhausted" in about a second,
+  where without the heap limit pandoc was still reading at 15 s; each
+  reader holds two seccomp filters, 2 GiB of address space and a core
+  size of 1, and pandoc a 1 GiB heap; a sandboxed process cannot signal
+  another (`kill`, `tkill`, `tgkill`, `rt_sigqueueinfo`,
+  `rt_tgsigqueueinfo`, `pidfd_open`, `pidfd_send_signal`, `kill(0, 0)` and
+  `kill(-1, 0)`), set a file owner that would send it `SIGIO`, start a
+  process or change a limit, yet can signal itself and start a thread.
+  Built: `a_document_built_to_fill_memory_stops_at_the_heap_limit` and
+  `the_reader_holds_the_sandbox` in `tests/convert.rs`, and
+  `sandbox_probe` and `the_sandbox_lets_no_signal_out`, which runs
+  `signal_probe` as a child and calls through perl what Rust cannot
+  without `unsafe`, in `src/platform/linux.rs`. Each was shown to fail
+  without its part of the fix: the memory test at its 15 s deadline
+  without the heap limit, even with the address-space limit; the limits
+  check without either limit; the probes without the new rules, and
+  `sandbox_probe` without the `clone3` rule, which let a process start
+  through `posix_spawn`. Run on Linux 6.18, where Landlock also scopes
+  signals, so the kernels before 6.12 were tested only through the
+  seccomp rules, which these tests check on any kernel.
 - Names in text (Phase 2): a known name is found wherever it stands
   alone, in any case and any script. B25 (built 2026-10-04): a Chinese or
   Japanese name inside running text in its own script, which has no
