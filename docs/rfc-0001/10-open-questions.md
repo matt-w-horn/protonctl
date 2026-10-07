@@ -36,7 +36,7 @@
 | Q30 | How platform code is structured | decided 2026-10-04 |  |
 | Q31 | The secret store on Linux | decided 2026-10-04 |  |
 | Q32 | Starting Bridge on Linux | decided 2026-10-04 |  |
-| Q33 | Drive on Linux: the CLI, its check, no app folder | decided 2026-10-04 |  |
+| Q33 | Drive on Linux: the CLI, its check, no app folder | decided 2026-10-04; the pin moved to the secret store 2026-10-07 |  |
 | Q34 | Converters and their sandbox on Linux | decided 2026-10-04 |  |
 | Q35 | User presence on Linux | decided 2026-10-04 |  |
 | Q36 | Listing in Anthropic's plugin directory | decided 2026-10-05 |  |
@@ -208,8 +208,12 @@
   - Q24: the Drive CLI's signature is checked before every run, one
     `codesign` call each, rather than once per process; this closes the
     window for a swap after the check and needs no admin-owned folder.
-    The review of 2026-10-06 found the window still open: the CLI is
-    checked, then run again by path ([#72](https://github.com/matt-w-horn/protonctl/issues/72)).
+    The review of 2026-10-06 found the window still open: the CLI was
+    checked, then run again by path. Since
+    [#72](https://github.com/matt-w-horn/protonctl/issues/72) each call
+    copies the CLI through one open of its path, checks the copy, and runs
+    that copy for `--version` and the command: a sealed memfd on Linux, a
+    file in a new 0700 folder on macOS.
   - Q25: `/security-review` runs on the Phase 2 and Phase 3 changes,
     beside `/code-review`, since they add protonctl's own cryptography and
     user presence. The Phase 2 review ran on 2026-10-06; its findings are
@@ -230,6 +234,21 @@
     checksum or signature for it; each CLI update needs `setup drive`
     again. Drive lists through the CLI, with search off, until a Linux
     Drive app ships.
+    Decided again on 2026-10-07 by the maintainer, from the review's
+    finding ([#72](https://github.com/matt-w-horn/protonctl/issues/72)):
+    the pin lives in the Secret Service item `drive-cli-pin`, beside
+    `privacy-mode`, and not in the config, which the model can edit in
+    Claude Code (Q28's reason for the mode). The CLI's path stays in the
+    config: the pin is of the file's content, so a path to other bytes is
+    refused. Every `setup drive` asks on a terminal before it pins, the
+    first one too, and `setup drive --cli <path>` asks and pins the CLI at
+    a new path. `status` and `doctor` show the pin. A `cli_sha256` left in
+    the config is ignored; every Drive call then says to run
+    `setup drive`, which removes it. The store and the prompt stop a plain
+    call through Claude Code's Bash tool, not every one: any program of the
+    user can write the Secret Service once it is unlocked, and `script`
+    fakes a terminal. Phase 3's user presence (Q35) is where both close, as
+    for the mode. macOS keeps no pin: its check is the signature.
   - Q34: external tools (`pdftotext` and `pdftoppm` from poppler-utils,
     pandoc, and Tesseract for OCR) inside `protonctl convert`, under
     Landlock and a seccomp filter. When a tool is missing, the result

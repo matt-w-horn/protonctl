@@ -77,6 +77,8 @@ pub fn policy(tool: Tool, key: &str) -> Policy {
         // get_status
         "config" | "cli" => LocalPath,
         "folder" if tool == Tool::GetStatus => LocalPath,
+        // The Drive CLI's pin on Linux: a digest the model has no use for.
+        "cliSha256" => Drop,
         "address" | "secretsHeld" => Text,
         "nextPageToken" => Token(TokenKind::of(tool)),
         // Shared

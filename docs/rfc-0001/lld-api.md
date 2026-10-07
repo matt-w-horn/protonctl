@@ -180,6 +180,7 @@ Server name `protonctl`; registered as `proton`, so a tool's full name is
 | `calendars[*].name` | Text |
 | `drive.error` | Error |
 | `downloads`, `export` | absent in aliases mode |
+| `drive.cliSha256` | the Drive CLI's pin on Linux, or `{error}` when there is none, and null on macOS (Q33, #72); absent in aliases mode, since it is a digest (I12) |
 | `privacy` | new in both modes: `{mode: "off" \| "aliases", aliasFormat: 1}` (with no mode set, `get_status` is refused like every call, and the CLI's `status` shows `"unset"`); `detectors` is at the top of every aliases-mode result |
 
 ### Calendar
@@ -345,7 +346,9 @@ protonctl setup privacy                 make the privacy key if there is none; m
 protonctl setup privacy --off           mode = off; the key is kept; asks first (below)
 protonctl setup drive [--folder PATH] [--cli PATH]
                                         check the CLI's signature and sign-in, find the app's
-                                        folder, write [drive]
+                                        folder, write [drive]; on Linux pin the CLI's SHA-256,
+                                        asking first (below); once set up, pin an updated CLI,
+                                        or with --cli another one
 protonctl rotate-key                    replace the privacy key; asks first (below)
 protonctl <content command> --raw       aliases mode, Phase 3: untokenized, after user presence
 ```
@@ -354,14 +357,15 @@ protonctl <content command> --raw       aliases mode, Phase 3: untokenized, afte
 |---|---|
 | `setup privacy` | `{mode: "aliases", key: "created" \| "kept"}` |
 | `setup privacy --off` | `{mode: "off", key: "kept" \| "none"}` |
-| `setup drive` | `{folder, cli, cliVersion, signedIn}` |
+| `setup drive` | `{folder, cli, cliVersion, cliSha256, signedIn}`, `cliSha256` null on macOS; once set up, on Linux, `{cli, cliVersion, cliSha256, next}` |
 | `rotate-key` | `{rotated: true}` |
 | `status` | as built, plus `privacy: {mode, keyHeld}` |
 | `doctor` | as built, plus a `privacy` line: `ok`, or `FAIL` when the mode is aliases and the key is missing, or when no mode is set (Q27) |
 | `logout` | as built; `deleted` includes `privacy-key` |
 
-`setup privacy --off`, `rotate-key` and `logout` change what every later
-call does, so injected text must not be able to run them. In Phase 2 they
+`setup privacy --off`, `rotate-key`, `logout` and, on Linux, `setup drive`
+change what every later call does, so injected text must not be able to
+run them. In Phase 2 they
 ask for confirmation on a terminal and refuse when stdin is not one, which
 stops a plain call through Claude Code's Bash tool; a command can fake a
 terminal (`script` allocates one), so from Phase 3 they ask for user
@@ -377,7 +381,9 @@ they always ask.
 
 `~/.config/protonctl/config.toml`, as built (`src/config.rs`); every table
 keeps `deny_unknown_fields`. The privacy mode is not here but in the
-Keychain (Q28, [Keychain items](#keychain-items)).
+Keychain (Q28, [Keychain items](#keychain-items)), and neither is the
+Drive CLI's pin on Linux (Q33, #72): a `cli_sha256` left in `[drive]` from
+before is read only to say it is ignored.
 
 ```toml
 time_zone = "America/Los_Angeles"     # optional; the Mac's zone otherwise
@@ -410,6 +416,7 @@ Service `protonctl`, generic passwords, in the login keychain:
 | `calendar/<id>` | a calendar's share link | `setup calendar` | both |
 | `privacy-mode` | `off` or `aliases`; missing means no mode is set (Q27, Q28) | `setup privacy`, `setup privacy --off` | both |
 | `privacy-key` | 32 random bytes, as base64url text; the key ID in the item's comment | `setup privacy`, `rotate-key` | aliases |
+| `drive-cli-pin` | the Drive CLI's SHA-256, as 64 hex digits, also in the comment, which is what is read; Linux only (Q33, #72) | `setup drive` | both |
 
 On Linux the same accounts live in the Secret Service, under the
 attributes `service = protonctl` and `account = …`, with the comment in a

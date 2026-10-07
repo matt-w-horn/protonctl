@@ -11,8 +11,7 @@
 //!
 //! [drive]                              # written by `protonctl setup drive`; Drive is off without it
 //! # folder = "/Users/you/Library/CloudStorage/ProtonDrive-you@proton.me-folder"
-//! # cli = "/Users/you/bin/proton-drive"
-//! # cli_sha256 = "<pinned by setup on Linux>"
+//! # cli = "/Users/you/bin/proton-drive"  # on Linux its SHA-256 is pinned in the secret store
 //! exclude = ["/Private"]
 //!
 //! [[calendar]]
@@ -78,9 +77,11 @@ pub struct DriveConfig {
     pub folder: Option<PathBuf>,
     /// The official Proton Drive CLI. Default `~/bin/proton-drive`.
     pub cli: Option<PathBuf>,
-    /// On Linux, the CLI's SHA-256, pinned by `protonctl setup drive` (RFC
-    /// Q33). macOS checks Proton's signature instead and ignores it.
-    pub cli_sha256: Option<Sha256>,
+    /// Where `setup drive` once pinned the CLI on Linux. The pin now lives
+    /// in the secret store (Q33, #72), since the model can edit this file
+    /// in Claude Code; a value left here is read only to say so.
+    #[serde(rename = "cli_sha256")]
+    pub old_cli_sha256: Option<serde::de::IgnoredAny>,
     /// Drive paths that protonctl never shows or touches, e.g. "/Private".
     #[serde(default)]
     pub exclude: Vec<String>,
@@ -165,13 +166,12 @@ pub fn add_calendar(id: &str, name: &str) -> Result<String> {
 
 /// Append the `[drive]` table that `protonctl setup drive` writes: the
 /// folder and CLI only when given, so the app's folder is still found
-/// automatically, the CLI's pin on Linux, and an empty `exclude` to show
-/// where exclusions go.
-pub fn add_drive(folder: Option<&Path>, cli: Option<&Path>, pin: Option<Sha256>) -> Result<()> {
-    append(&path(), &drive_entry(folder, cli, pin)?)
+/// automatically, and an empty `exclude` to show where exclusions go.
+pub fn add_drive(folder: Option<&Path>, cli: Option<&Path>) -> Result<()> {
+    append(&path(), &drive_entry(folder, cli)?)
 }
 
-fn drive_entry(folder: Option<&Path>, cli: Option<&Path>, pin: Option<Sha256>) -> Result<String> {
+fn drive_entry(folder: Option<&Path>, cli: Option<&Path>) -> Result<String> {
     let mut entry = String::from("\n[drive]\n");
     for (key, value) in [("folder", folder), ("cli", cli)] {
         if let Some(v) = value {
@@ -182,39 +182,55 @@ fn drive_entry(folder: Option<&Path>, cli: Option<&Path>, pin: Option<Sha256>) -
                 .expect("writing to a String cannot fail");
         }
     }
-    if let Some(pin) = pin {
-        writeln!(entry, "cli_sha256 = \"{pin}\"").expect("writing to a String cannot fail");
-    }
     entry.push_str("exclude = []\n");
     Ok(entry)
 }
 
-/// Pin a new SHA-256 for the Drive CLI, the one value `setup drive` changes
-/// once Drive is set up (Q33: each CLI update is pinned again).
-pub fn set_cli_pin(pin: Sha256) -> Result<()> {
+/// What `setup drive` changes once Drive is set up: the CLI's path when
+/// `--cli` gives one, and a `cli_sha256` left from before the pin moved to
+/// the secret store, which goes (Q33, #72). Nothing is written when
+/// neither applies.
+pub fn set_cli(cli: Option<&Path>) -> Result<()> {
     let p = path();
     let text = read(&p)?.with_context(|| format!("there is no config at {}", p.display()))?;
-    let new = with_cli_pin(&text, pin)
-        .with_context(|| format!("edit cli_sha256 in [drive] of {} by hand", p.display()))?;
-    replace(&p, &new)
+    let new =
+        with_cli(&text, cli).with_context(|| format!("edit [drive] in {} by hand", p.display()))?;
+    if new != text {
+        replace(&p, &new)?;
+    }
+    Ok(())
 }
 
-/// `text` with `cli_sha256` in `[drive]` set to `pin`, edited as TOML, so
-/// comments, layout and every other value stay as they were. The result
-/// must read back as the same config but for the pin, or it is refused.
-fn with_cli_pin(text: &str, pin: Sha256) -> Result<String> {
+/// `text` with `cli` in `[drive]` set to `cli` when given, and without
+/// `cli_sha256`, edited as TOML, so comments, layout and every other value
+/// stay as they were. The result must read back as the same config but for
+/// those two, or it is refused.
+fn with_cli(text: &str, cli: Option<&Path>) -> Result<String> {
     let mut doc: toml_edit::DocumentMut = text.parse()?;
-    doc.get_mut("drive")
+    let drive = doc
+        .get_mut("drive")
         .and_then(toml_edit::Item::as_table_like_mut)
-        .context("there is no [drive] table")?
-        .insert("cli_sha256", toml_edit::value(pin.to_string()));
+        .context("there is no [drive] table")?;
+    drive.remove("cli_sha256");
+    if let Some(cli) = cli {
+        let cli = cli
+            .to_str()
+            .with_context(|| format!("cli is not UTF-8: {}", cli.display()))?;
+        drive.insert("cli", toml_edit::value(cli));
+    }
     let out = doc.to_string();
     let mut wanted: Config = toml::from_str(text)?;
     if let Some(drive) = wanted.drive.as_mut() {
-        drive.cli_sha256 = Some(pin);
+        drive.old_cli_sha256 = None;
+        if let Some(cli) = cli {
+            drive.cli = Some(cli.to_path_buf());
+        }
     }
     let after: Config = toml::from_str(&out).context("the edited config does not parse")?;
-    anyhow::ensure!(after == wanted, "the edit changed more than cli_sha256");
+    anyhow::ensure!(
+        after == wanted,
+        "the edit changed more than cli and cli_sha256"
+    );
     Ok(out)
 }
 
@@ -293,35 +309,43 @@ mod tests {
 
     #[test]
     fn the_drive_table_reads_back_exactly() {
-        let bare: Config = toml::from_str(&drive_entry(None, None, None).unwrap()).unwrap();
+        let bare: Config = toml::from_str(&drive_entry(None, None).unwrap()).unwrap();
         let drive = bare.drive.unwrap();
         assert!(drive.folder.is_none() && drive.cli.is_none() && drive.exclude.is_empty());
         let (folder, cli) = (
             Path::new("/Users/a \"b\"/Drive"),
             Path::new("/opt/it's/proton-drive"),
         );
-        let pin = Sha256::of(b"cli");
-        let text = drive_entry(Some(folder), Some(cli), Some(pin)).unwrap();
+        let text = drive_entry(Some(folder), Some(cli)).unwrap();
+        assert!(!text.contains("cli_sha256"), "{text}");
         let both: Config = toml::from_str(&text).unwrap();
         let drive = both.drive.unwrap();
         assert_eq!(drive.folder.as_deref(), Some(folder), "{text}");
         assert_eq!(drive.cli.as_deref(), Some(cli), "{text}");
-        assert_eq!(drive.cli_sha256, Some(pin), "{text}");
     }
 
-    /// Q33: a CLI update is pinned again in place, and nothing else changes.
+    /// Q33, #72: `setup drive --cli` changes the path in place, a pin left
+    /// from before goes, and nothing else changes.
     #[test]
-    fn a_new_cli_pin_replaces_only_the_old_one() {
-        let (old, new) = (Sha256::of(b"0.8.0"), Sha256::of(b"0.8.1"));
+    fn a_cli_change_edits_only_cli_and_the_old_pin() {
+        let old = Sha256::of(b"0.8.0");
         let text = format!(
             "time_zone = \"UTC\"\n\n[drive] # set up\ncli = \"/opt/proton-drive\"\n  cli_sha256 = \"{old}\"\nexclude = [\"/Private\"]\n{}",
             calendar_entry("cli_sha256", "cli_sha256 = x")
         );
-        let edited = with_cli_pin(&text, new).unwrap();
+        // An old pin is still read, and only so `setup drive` can say so.
+        let before: Config = toml::from_str(&text).unwrap();
+        assert!(before.drive.unwrap().old_cli_sha256.is_some());
+        let edited = with_cli(&text, Some(Path::new("/opt/it's/proton-drive"))).unwrap();
         assert!(!edited.contains(&old.to_string()), "{edited}");
+        assert!(edited.contains("[drive] # set up"), "{edited}");
         let cfg: Config = toml::from_str(&edited).unwrap();
         let drive = cfg.drive.unwrap();
-        assert_eq!(drive.cli_sha256, Some(new));
+        assert_eq!(drive.old_cli_sha256, None);
+        assert_eq!(
+            drive.cli.as_deref(),
+            Some(Path::new("/opt/it's/proton-drive"))
+        );
         assert_eq!(drive.exclude, ["/Private"]);
         assert_eq!(cfg.calendar[0].id, "cli_sha256");
         assert_eq!(cfg.time_zone.as_deref(), Some("UTC"));
@@ -332,17 +356,14 @@ mod tests {
             "[drive]\ncli_sha256 = \"{old}\"\nexclude = []\n{}",
             calendar_entry("team", tricky)
         );
-        let cfg: Config = toml::from_str(&with_cli_pin(&text, new).unwrap()).unwrap();
+        let cfg: Config = toml::from_str(&with_cli(&text, None).unwrap()).unwrap();
         assert_eq!(cfg.calendar[0].name, tricky);
-        assert_eq!(cfg.drive.unwrap().cli_sha256, Some(new));
-        // A config without the pin gains one; one without [drive] is refused.
-        let unpinned = "[drive]\nexclude = []\n";
-        assert!(
-            with_cli_pin(unpinned, new)
-                .unwrap()
-                .contains(&new.to_string())
-        );
-        assert!(with_cli_pin("time_zone = \"UTC\"\n", new).is_err());
+        let drive = cfg.drive.unwrap();
+        assert_eq!((drive.old_cli_sha256, drive.cli), (None, None));
+        // Nothing to change leaves the text as it was; no [drive] is refused.
+        let unpinned = "[drive] # kept\nexclude = []\n";
+        assert_eq!(with_cli(unpinned, None).unwrap(), unpinned);
+        assert!(with_cli("time_zone = \"UTC\"\n", None).is_err());
     }
 
     #[test]
