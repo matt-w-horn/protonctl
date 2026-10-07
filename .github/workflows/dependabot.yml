@@ -111,6 +111,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           SELF: ${{ github.job }}
         run: |
           # Wait up to 30 minutes for every check except this job.
@@ -124,4 +125,4 @@ jobs:
             echo "::error::A check failed, was cancelled, or did not finish in 30 minutes. Not merging."
             exit 1
           fi
-          gh pr merge "$PR" --squash
+          gh pr merge "$PR" --squash --match-head-commit "$HEAD_SHA"
