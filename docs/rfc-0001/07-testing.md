@@ -486,8 +486,12 @@ missing ones:
   give one alias; canonicalizing twice changes nothing (property test). And
   the other way: names that differ only by a Devanagari or Thai mark, "M.
   Chen" and "Mme Chen", "Mr Chen" and "Ms Chen", and "John Smith Sr." and
-  "John Smith" keep
-  different aliases. Built: `spellings_of_one_name_meet`,
+  "John Smith" keep different aliases; so do names that start with a
+  word that is an honorific in one language and a name or an initial in
+  another: "Pan Wei Ming" and "Wei Ming", "Sri Mulyani Indrawati" and
+  "Mulyani Indrawati", "M. J. Smith" and "J. Smith", "Dame Babacar Diop"
+  and "Babacar Diop", "Sig Ole Hansen" and "Ole Hansen" (#74, each shown
+  to fail with the old honorific list). Built: `spellings_of_one_name_meet`,
   `rules_never_merge_two_people` (every case above) and the property test
   `canonical_forms_are_fixed_points` in `src/privacy/canon.rs`.
 - Collisions: with a word list of 4 words, two and three entities that
