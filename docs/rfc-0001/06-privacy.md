@@ -122,7 +122,7 @@ parentheses, numbered within the result, with no word alias and no
 
 - A canonical name is the name in Unicode NFKC, case folded, without
   diacritics, with whitespace collapsed, honorifics (from a multilingual
-  list: Mr, Ms, Dr, Herr, Frau, M., Mme, Sr., Sra. and others) removed
+  list: Mr, Ms, Dr, Herr, Frau, Mme, Sr., Sra. and others) removed
   only before a full name, and "Chen, Alice" reordered to "Alice Chen". A canonical email address is
   the address in lower case.
 - A person's alias comes from the canonical name. An email address has its
@@ -155,8 +155,12 @@ parentheses, numbered within the result, with no word alias and no
   them makes different names one. An honorific goes only before a full
   name, a given name and a surname ("Dr Alice Chen" and "Alice Chen" are
   one person): before a surname alone it is the only thing that tells
-  "Mr Chen" from "Mme Chen", and `M.` and `Sr.` also stand for an initial
-  and for Senior. Case folding is Unicode's, without Turkish rules.
+  "Mr Chen" from "Mme Chen", and `Sr.` after a name stands for Senior.
+  A word that is also a name or an initial is not on the list: `M.` (an
+  initial), `Pan` and `Pani` (surnames, and `Pan` comes first in Chinese
+  order), `Sri`, `Dame` and `Sig` (given names)
+  ([#74](https://github.com/matt-w-horn/protonctl/issues/74)).
+  Case folding is Unicode's, without Turkish rules.
 - Names (person, organization, location) share one tag in the alias
   HMAC (Q19, [low-level design](lld-privacy-layer.md#constructions)), so
   a display name typed `person` in Phase 2 and `organization` by the model

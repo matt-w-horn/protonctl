@@ -11,11 +11,13 @@ use unicode_normalization::char::is_combining_mark;
 
 /// Honorifics, removed only before a full name (a given name and a surname):
 /// before a surname alone one is all that tells "Mr Chen" from "Mme Chen".
-/// Compared in lower case, without a trailing dot.
+/// Compared in lower case, without a trailing dot. A word that is also a
+/// name or an initial is left off, since removing it would merge two
+/// people (#74): "M." (an initial), "Pan" (a Chinese surname, written
+/// first), "Pani" (a surname too), "Sri", "Dame" and "Sig" (given names).
 const HONORIFICS: &[&str] = &[
-    "mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "dame", "herr", "frau", "m", "mme",
-    "mlle", "sr", "sra", "srta", "sig", "sig.ra", "dott", "dott.ssa", "dhr", "mevr", "pan", "pani",
-    "sri", "smt",
+    "mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "herr", "frau", "mme", "mlle", "sr",
+    "sra", "srta", "sig.ra", "dott", "dott.ssa", "dhr", "mevr", "smt",
 ];
 
 /// Whether `word` is an honorific, in any case, with or without its dot.
@@ -219,6 +221,13 @@ mod tests {
         assert_ne!(name("Mr Chen"), name("Ms Chen"));
         assert_ne!(name("John Smith Sr."), name("John Smith"));
         assert_ne!(name("\u{0E01}\u{0E32}"), name("\u{0E01}\u{0E48}\u{0E32}"));
+        // Words that are honorifics in one language and names in another
+        // (#74): a surname written first, a given name, an initial.
+        assert_ne!(name("Pan Wei Ming"), name("Wei Ming"));
+        assert_ne!(name("Sri Mulyani Indrawati"), name("Mulyani Indrawati"));
+        assert_ne!(name("M. J. Smith"), name("J. Smith"));
+        assert_ne!(name("Dame Babacar Diop"), name("Babacar Diop"));
+        assert_ne!(name("Sig Ole Hansen"), name("Ole Hansen"));
     }
 
     #[test]

@@ -3,11 +3,12 @@
 # 7. Testing
 
 Built (on macOS on 2026-10-04, `cargo test` ran 247 tests: 238 unit, 9
-against the built binary, and 3 ignored. On Linux on 2026-10-05 it ran 217: 208 unit, 9
-against the built binary; 4 more are ignored by default: one lists Drive
-through the real CLI, two reach a Secret Service and run in
-`scripts/check.sh`, and one is the sandbox probe, which another test
-runs as a child. The macOS-only tests do not run on Linux, and the
+against the built binary, and 3 ignored. On Linux on 2026-10-07 it ran 258: 245 unit, 13
+against the built binary; 9 more are ignored by default: one lists Drive
+through the real CLI, one is a measurement, three reach a Secret Service
+and one reads mail from Dovecot, all four run by `scripts/check.sh`, and
+three are probes or a throwaway home that another test runs as a child.
+The macOS-only tests do not run on Linux, and the
 Linux-only tests do not run on a Mac). Live,
 `scripts/live-check.py` runs every tool once over MCP, as the Claude app
 does, against the real calendar link, Bridge and Drive, and prints counts
@@ -485,8 +486,12 @@ missing ones:
   give one alias; canonicalizing twice changes nothing (property test). And
   the other way: names that differ only by a Devanagari or Thai mark, "M.
   Chen" and "Mme Chen", "Mr Chen" and "Ms Chen", and "John Smith Sr." and
-  "John Smith" keep
-  different aliases. Built: `spellings_of_one_name_meet`,
+  "John Smith" keep different aliases; so do names that start with a
+  word that is an honorific in one language and a name or an initial in
+  another: "Pan Wei Ming" and "Wei Ming", "Sri Mulyani Indrawati" and
+  "Mulyani Indrawati", "M. J. Smith" and "J. Smith", "Dame Babacar Diop"
+  and "Babacar Diop", "Sig Ole Hansen" and "Ole Hansen" (#74, each shown
+  to fail with the old honorific list). Built: `spellings_of_one_name_meet`,
   `rules_never_merge_two_people` (every case above) and the property test
   `canonical_forms_are_fixed_points` in `src/privacy/canon.rs`.
 - Collisions: with a word list of 4 words, two and three entities that
