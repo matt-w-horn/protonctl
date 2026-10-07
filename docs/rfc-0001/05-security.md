@@ -119,9 +119,11 @@ flowchart LR
   same key, before and after it (Q21).
 - The hosts keep what protonctl returns. Claude Code writes every tool
   result into the session's transcript under `~/.claude/projects/` (deleted
-  after `cleanupPeriodDays`, 30 by default); Claude Desktop keeps each
-  server's stderr, and has been seen to log whole MCP messages, under
-  `~/Library/Logs/Claude/` (not confirmed; [#18](https://github.com/matt-w-horn/protonctl/issues/18)). Typed names and approved
+  after `cleanupPeriodDays`, 30 by default). Claude Desktop logs each
+  MCP message to `~/Library/Logs/Claude/mcp-server-proton.log` by method,
+  id and block count, without arguments or results (checked 2026-10-06
+  over 152 tool calls). Where its stderr lands, and where Cowork keeps
+  results, are not checked ([#18](https://github.com/matt-w-horn/protonctl/issues/18)). Typed names and approved
   raw text land there in plaintext, and Time Machine copies both. R10
   cannot reach these files.
 - Approving Touch ID can become a habit too. Each prompt names one item,

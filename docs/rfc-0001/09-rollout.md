@@ -46,7 +46,7 @@ flowchart TB
 | Phase | Contents | State |
 |---|---|---|
 | 0 | Install Bridge, log in, enable All Mail, IMAP over SSL; measure the `--noninteractive` cold start; record `X-Pm-*` headers, UIDPLUS, label-removal semantics on a sandbox message, BODY search on encoded parts; record the CLI's path format, JSON shapes and `fs info` fields; create a dedicated calendar link and note its caching headers. Findings go in [Appendix A](appendix-a-phase-0.md). | Recorded ([Appendix A](appendix-a-phase-0.md)), except the label-removal semantics, which moved to Phase 1b because measuring them writes to the mailbox; withdrawn with Phase 1b |
-| 1a | `serve`, `setup`, `doctor`, `status`, `logout`; read tools for Mail, Drive and Calendar; registration in both hosts; Cowork local and cloud test | Calendar, Drive and Mail reads built, `download_file` included, 18 tools; the 17 built by then passed `scripts/live-check.py` (2026-10-03), and `list_drive_tree` and PDF page images came after; the full off-mode live run passed (M1.2); the Claude Code and Cowork tests have not run (M1.1; [#18](https://github.com/matt-w-horn/protonctl/issues/18)) |
+| 1a | `serve`, `setup`, `doctor`, `status`, `logout`; read tools for Mail, Drive and Calendar; registration in both hosts; Cowork local and cloud test | Calendar, Drive and Mail reads built, `download_file` included, 18 tools; the 17 built by then passed `scripts/live-check.py` (2026-10-03), and `list_drive_tree` and PDF page images came after; the full off-mode live run passed (M1.2); Claude Code passed in off mode on 2026-10-06, and the Claude Desktop and Cowork tests have not run (M1.1; [#18](https://github.com/matt-w-horn/protonctl/issues/18)) |
 | 1b | The maintainer writes the policy table: a class for each write tool, and what the server does with each class; Mail and Drive write tools; sandbox write tests | withdrawn 2026-10-04: protonctl is read-only (Q5) |
 | 2 | The privacy setting (R26) and `setup drive`; then aliases mode: the privacy pipeline for all three services at once, at `reply()`, over results, errors and page tokens, failing closed: privacy key, aliases, references, handles, sealed page tokens, keyed digests, the `entities` table, `detectors` and `guidance`; regex with validators and the name dictionary; `download_file`, `export_drive_manifest`, the CLI's `drive manifest`, the `export` and `inline` options, the export and download folders, page images, image content and inline bytes absent in aliases mode and kept in off mode; a panic hook in both modes (R25); the leak test and the `live-check.py` checks. The CLI may be tokenized here too, ahead of Phase 3, since in Phase 2 it is the easy way around the pipeline in Claude Code | built and tested on Linux 2026-10-04; on a Mac the same day, M2.8 (cloud-only reads), the setup commands, signing (Q12) and the aliases-mode live run passed, and the off-mode live run passed (M1.2); the role-play on real results and the other Mac checks have not run ([#16](https://github.com/matt-w-horn/protonctl/issues/16), [#17](https://github.com/matt-w-horn/protonctl/issues/17), [#18](https://github.com/matt-w-horn/protonctl/issues/18), [#19](https://github.com/matt-w-horn/protonctl/issues/19) and [#20](https://github.com/matt-w-horn/protonctl/issues/20)); the defects below are open; the CLI is not tokenized |
 | 3 | In aliases mode, the `reveal_*` tools, and the CLI tokenized with `--raw` and `--out` behind user presence; Claude Code sandbox settings documented (Q17) | to do; answer Q15 first |
@@ -70,7 +70,10 @@ that question is answered in [section 10](10-open-questions.md).
   Check whether the allow rules' globs (`mcp__proton__get_*`) match, and
   record where each host keeps tool results and stderr. Exit: findings in
   [Appendix A](appendix-a-phase-0.md); the allow rules in [section 4](04-design.md) and the README corrected if the
-  globs do not match. Not run ([#18](https://github.com/matt-w-horn/protonctl/issues/18)).
+  globs do not match. Claude Code done 2026-10-06 in off mode (Appendix
+  A, Hosts); no allow rule for protonctl was configured, so the globs are
+  not checked. Claude Desktop, Cowork, the cloud task and aliases mode
+  have not run ([#18](https://github.com/matt-w-horn/protonctl/issues/18)).
 - M1.2 A full `scripts/live-check.py` run over all 18 tools, with
   `list_drive_tree` and PDF page images. Exit: every check passes. Done
   2026-10-04 at 21:45 Pacific, in off mode against the installed binary:
@@ -78,8 +81,11 @@ that question is answered in [section 10](10-open-questions.md).
   calls took 4.3 s and 4.7 s, and `export_drive_manifest` wrote a
   complete manifest of 19,364 rows
   ([#18](https://github.com/matt-w-horn/protonctl/issues/18)). Whether the
-  PDF page-image check ran is not recorded: the script skips it, and
-  still passes, when it finds no PDF over 1 KB.
+  PDF page-image check ran then is not recorded. On 2026-10-06, after
+  `1432169` was installed, the run failed it: the script took the first
+  PDF over 1 KB, which was over the 64 MiB read limit, so no page came
+  back. It now takes a PDF of 1 KB to 64 MiB, and the run that followed
+  passed every check, page images included (4 images, 4 labels).
 - M1.3 Say read-only where the model reads it: the server's
   `instructions` (`src/serve.rs`) and `get_status`'s `cannot`
   (`src/main.rs`) still list only send, share and permanent delete; the
