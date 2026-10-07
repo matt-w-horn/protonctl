@@ -27,6 +27,7 @@ dependencies = [
  "cfg-if",
  "cipher 0.4.4",
  "cpufeatures 0.2.17",
+ "zeroize",
 ]
 
 [[package]]
@@ -1595,6 +1596,7 @@ dependencies = [
 name = "protonctl"
 version = "0.1.0"
 dependencies = [
+ "aes 0.8.4",
  "aes-siv",
  "aho-corasick",
  "anyhow",
