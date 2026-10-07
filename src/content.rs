@@ -432,13 +432,18 @@ fn downloads_path() -> PathBuf {
     cache_base().join(format!("downloads/{}", std::process::id()))
 }
 
+/// Where this process's memory disk is mounted on macOS; Linux's memory
+/// folder is on /dev/shm and takes no mount point.
+pub fn memory_mount() -> PathBuf {
+    cache_base().join(format!("memory/{}", std::process::id()))
+}
+
 /// A new folder for one cloud-only Drive file that aliases mode reads, on
 /// this process's memory disk (RFC R10, Q14). The reader deletes it once the
 /// file is read; the disk goes at exit, with `remove_downloads`. Where there
 /// is no such disk, the error is `DiskForbidden`, with why.
 pub fn memory_folder() -> Result<PathBuf> {
-    let mount = cache_base().join(format!("memory/{}", std::process::id()));
-    let disk = crate::platform::memory_disk(&mount)
+    let disk = crate::platform::memory_disk(&memory_mount())
         .map_err(|e| anyhow::Error::new(DiskForbidden).context(format!("{e:#}")))?;
     Ok(tempfile::Builder::new()
         .prefix("drive-")

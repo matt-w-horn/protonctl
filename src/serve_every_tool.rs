@@ -1754,24 +1754,35 @@ fn watched() -> BTreeSet<PathBuf> {
 }
 
 /// What is under the home and the temporary folder that was not in
-/// `before`, less the Drive CLI's lock file, which every protonctl process
-/// takes around a run of the CLI, while it is empty and so holds no
-/// content (R10).
+/// `before`, less two things that hold no content (R10) while they are
+/// empty: the Drive CLI's lock file, which every protonctl process takes
+/// around a run of the CLI, and on macOS the memory disk's mount point,
+/// which stays until the process exits.
 fn new_since(before: &BTreeSet<PathBuf>) -> Vec<PathBuf> {
     let lock = std::env::temp_dir().join("protonctl-test/cli.lock");
     let lock_empty = std::fs::metadata(&lock).is_ok_and(|m| m.len() == 0);
+    let mount = crate::content::memory_mount();
+    let mount_empty = files_under(&mount).is_empty();
     watched()
         .difference(before)
         .filter(|p| !(lock_empty && (**p == lock || Some(p.as_path()) == lock.parent())))
+        .filter(|p| !(mount_empty && (**p == mount || Some(p.as_path()) == mount.parent())))
         .cloned()
         .collect()
 }
 
-/// The folder in memory (here /dev/shm) a cloud-only read fetches into:
-/// allowed, but empty again after every call.
+/// The folder in memory a cloud-only read fetches into: allowed, but empty
+/// again after every call. On Linux it is on /dev/shm.
 #[cfg(target_os = "linux")]
 fn memory() -> PathBuf {
     crate::platform::memory_disk(Path::new("unused")).unwrap()
+}
+
+/// On macOS it is the memory disk's mount point, mounted at the first
+/// cloud-only read.
+#[cfg(not(target_os = "linux"))]
+fn memory() -> PathBuf {
+    crate::content::memory_mount()
 }
 
 /// T7's child: run by `aliases_mode_writes_no_file` with a throwaway home
@@ -1783,17 +1794,13 @@ async fn every_tool_in_a_throwaway_home() {
         return;
     };
     let before = watched();
-    #[cfg(target_os = "linux")]
     let memory = memory();
     let mut emptied = |tool: &str| {
-        #[cfg(target_os = "linux")]
         assert_eq!(
             files_under(&memory),
             BTreeSet::new(),
             "{tool} left these in memory"
         );
-        #[cfg(not(target_os = "linux"))]
-        let _ = tool;
     };
     let run = every_tool(Path::new(&fixtures), &mut emptied).await;
     drop(run);
@@ -1854,7 +1861,6 @@ async fn the_cli_in_a_throwaway_home() {
         (&cloud, &["drive", "cat", CLOUD], true),
         (&cloud, &["drive", "get", CLOUD, "--out", out_arg], true),
     ];
-    #[cfg(target_os = "linux")]
     let memory = memory();
     let mut problems = Vec::new();
     let mut read_text = String::new();
@@ -1880,7 +1886,6 @@ async fn the_cli_in_a_throwaway_home() {
         if !new.is_empty() {
             problems.push(format!("{line}: wrote {new:?}"));
         }
-        #[cfg(target_os = "linux")]
         if !files_under(&memory).is_empty() {
             problems.push(format!("{line}: left {:?} in memory", files_under(&memory)));
         }

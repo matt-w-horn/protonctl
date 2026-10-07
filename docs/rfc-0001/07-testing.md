@@ -638,7 +638,13 @@ missing ones:
   folder; the `--inline` options failed only on the refusal's wording,
   since the CLI's default `--out` already refused them. Both tests allow
   the Drive CLI's lock file while the file is empty, and the lock stays
-  in the cache folder (Q37). Neither watches the folders a reader finds
+  in the cache folder (Q37). On macOS they also allow the memory disk's
+  mount point while it is empty, since it stays mounted until the process
+  exits: run first on a Mac on 2026-10-06, the CLI test failed on that
+  folder alone. With a file planted on the disk at each cloud-only read,
+  the CLI test failed on `drive cat` and `drive get --out`;
+  `aliases_mode_writes_no_file` still passed, so on macOS none of its
+  calls reads through the memory disk. Neither watches the folders a reader finds
   through the system: on
   Linux the readers can write only to `/dev/null` (Landlock), and on macOS they run
   unconfined until Phase 4.
