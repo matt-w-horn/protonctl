@@ -1369,20 +1369,23 @@ mod tests {
     #[tokio::test]
     async fn get_status_in_aliases_mode_shows_no_local_path() {
         let dir = tempfile::tempdir().unwrap();
-        let out = Server::new(aliases_app(dir.path()))
-            .get_status()
-            .await
-            .unwrap();
+        // And no digest: the Drive CLI's pin, which Linux shows (Q33, I12).
+        let pin = crate::digest::Sha256::of(b"cli");
+        let mut app = Arc::into_inner(aliases_app(dir.path())).unwrap();
+        app.drive_cli = crate::drive::cli::Cli::pinned(None, pin);
+        let out = Server::new(Arc::new(app)).get_status().await.unwrap();
         let status = json_of(&out);
         assert_eq!(status["privacy"]["mode"], "aliases");
         assert!(
             status.get("downloads").is_none() && status.get("dropped").is_none(),
             "{status}"
         );
+        assert!(status["drive"].get("cliSha256").is_none(), "{status}");
         assert!(
             !text(&out).contains(dir.path().to_str().unwrap()),
             "{status}"
         );
+        assert!(!text(&out).contains(&pin.to_string()), "{status}");
     }
 
     /// RFC Q27 and R26: no call runs before a mode is chosen, or after it changes.

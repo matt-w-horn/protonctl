@@ -62,7 +62,7 @@ records. After P1:
 | Cloud-only files | `st_flags() & SF_DATALESS` | `src/platform/macos.rs` | none, since no Drive app makes placeholders |
 | Download expiry (R10) | the time in each download folder's name, on both systems | `src/content.rs` | the same |
 | Drive folder discovery | `~/Library/CloudStorage/ProtonDrive-*` | `src/platform/macos.rs` | no place to look: the CLI-only mode |
-| Drive CLI check (R9) | `/usr/bin/codesign` and Apple Team ID `2SB5Z68H26`, before every run (Q24) | `src/drive/cli.rs` | the SHA-256 pinned at `setup drive`, before every run (Q33, built 2026-10-05) |
+| Drive CLI check (R9) | `/usr/bin/codesign` and Apple Team ID `2SB5Z68H26`, before every run, on a copy in a new 0700 folder, which then runs (Q24, #72) | `src/drive/cli.rs` | the SHA-256 pinned at `setup drive` in the Secret Service item `drive-cli-pin`, before every run, on a sealed memfd copy, which then runs (Q33, built 2026-10-05; the copy and the store since 2026-10-07, #72) |
 | Bridge on demand (Q2) | `/usr/bin/open -g -j -b com.protonmail.bridge` | `src/mail/mod.rs` | never started; when Bridge is not running, the error says to run it as a systemd user unit, which the README shows (Q32) |
 | PDF text and page images; Word, RTF, OpenDocument | `/usr/bin/osascript` with PDFKit; `/usr/bin/textutil` | `src/extract.rs`, `src/convert.rs` | poppler (`pdftotext`, `pdftoppm`) and pandoc, each in `protonctl convert`'s sandbox (Q34, built 2026-10-05); text and images read as on macOS |
 | Cache folder | `~/Library/Caches/protonctl` | `src/platform/macos.rs` | `$XDG_CACHE_HOME/protonctl`, else `~/.cache/protonctl` |
@@ -221,7 +221,9 @@ flowchart TB
 - Tests: the sandbox probe (in `src/platform/linux.rs`) checks every denial
   above from a child process, and fails without the seccomp filter or with
   all of `/etc` readable; `tests/convert.rs` runs each job through the
-  built binary and reads a PDF and a Word file through `drive cat`.
+  built binary and reads a PDF and a Word file through `drive cat`, with
+  the stand-in CLI's pin in a throwaway keyring, which `scripts/check.sh`
+  starts (Q33, #72).
 
 ## Hosts by platform
 

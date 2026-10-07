@@ -400,13 +400,17 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
   run ([#27](https://github.com/matt-w-horn/protonctl/issues/27)).
 - MP3 Drive on Linux as Q33 decides. Exit: the Drive tests against the
   stand-in CLI, and a live check if the CLI exists for Linux. Built
-  2026-10-05: `setup drive` pins the CLI's SHA-256 in `[drive]` and pins
-  an updated CLI after asking; every run checks the pin under the CLI's
-  lock, and macOS's signature check moved to every run too (Q24). The pin
-  tests (a changed CLI never runs again, and one with no pin never runs)
+  2026-10-05: `setup drive` pins the CLI's SHA-256 and pins an updated
+  CLI after asking; every run checks the pin under the CLI's lock, and
+  macOS's signature check moved to every run too (Q24). Since 2026-10-07
+  ([#72](https://github.com/matt-w-horn/protonctl/issues/72)) the pin
+  lives in the Secret Service, not `[drive]`, the first setup asks too,
+  and each call runs the sealed memfd copy it checked. The pin tests (a
+  changed CLI never runs again, one with no pin never runs, one swapped
+  in after the check never runs, and a pin in the config is not trusted)
   and the Drive tests pass against stand-in CLIs. The live check, on a
   Linux machine signed in to Proton, has not run
-  ([#28](https://github.com/matt-w-horn/protonctl/issues/28)).
+  ([#62](https://github.com/matt-w-horn/protonctl/issues/62)).
 - MP4 Converters and their sandbox on Linux (Q34), with Phase 4. Exit: the
   converter sandbox test on Linux. Built 2026-10-05, ahead of Phase 4
   ([section 11](11-platforms.md#the-document-readers-as-built-p4)):

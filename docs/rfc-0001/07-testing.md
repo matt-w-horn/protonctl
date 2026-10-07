@@ -3,11 +3,12 @@
 # 7. Testing
 
 Built (on macOS on 2026-10-04, `cargo test` ran 247 tests: 238 unit, 9
-against the built binary, and 3 ignored. On Linux on 2026-10-05 it ran 217: 208 unit, 9
-against the built binary; 4 more are ignored by default: one lists Drive
-through the real CLI, two reach a Secret Service and run in
-`scripts/check.sh`, and one is the sandbox probe, which another test
-runs as a child. The macOS-only tests do not run on Linux, and the
+against the built binary, and 3 ignored. On Linux on 2026-10-07 it ran 260: 247 unit, 13
+against the built binary; 10 more are ignored by default: one lists Drive
+through the real CLI, one is a timing to run with `--release`, four reach
+a Secret Service and one reaches Dovecot, which `scripts/check.sh` runs
+in a throwaway keyring or container, and three run as the child of
+another test. The macOS-only tests do not run on Linux, and the
 Linux-only tests do not run on a Mac). Live,
 `scripts/live-check.py` runs every tool once over MCP, as the Claude app
 does, against the real calendar link, Bridge and Drive, and prints counts
@@ -172,6 +173,52 @@ The tests:
   - Two handles on the CLI lock file exclude each other, and a CLI run
     waits while another holds it (shown to fail with no lock taken, and
     with the run not taking it).
+- The Drive CLI's check (R9, Q24, Q33,
+  [#72](https://github.com/matt-w-horn/protonctl/issues/72)), against
+  stand-in CLIs. Every run is of the private copy, on Linux a sealed memfd
+  run as `/proc/self/fd/N`. A `#!/bin/sh` script cannot run from there,
+  since the fd is close-on-exec and the shell cannot open that path, so
+  each stand-in is one `#!/usr/bin/env -S /bin/sh` line that runs its
+  script, and the trusted stand-ins of the Drive tests run through the
+  copy too.
+  - A pinned CLI runs only while it matches its pin, checked before every
+    run, with `--version` once per process; one with no pin, or a pin for
+    other bytes, never runs.
+  - A CLI swapped in after the check never runs. The stand-in renames
+    another CLI over itself while it answers `--version`, between the
+    check and the command, as the security review's stand-in did; the
+    command still runs the checked bytes, the next call refuses the
+    swapped file, and on Linux every run is of `/proc/self/fd/N` (shown
+    to fail with the command run by path, as before #72, and with only
+    `--version` run by path). Built:
+    `a_cli_swapped_in_after_the_check_never_runs` in `src/drive/cli.rs`.
+  - A `cli_sha256` in the config is not trusted, even when it matches the
+    file: with no pin in the secret store the CLI never runs, and the
+    error says the pin moved and to run `setup drive` on a terminal; the
+    same pin from the store is trusted (shown to fail with the config's
+    pin taken when the store has none or cannot be read). Linux only.
+    Built: `a_pin_in_the_config_is_not_trusted` in `src/drive/cli.rs`.
+  - A first `setup drive --cli <path>`, against the built binary, refuses
+    without a terminal: it names the file and its SHA-256, runs nothing,
+    and writes no config (shown to fail with a first setup that pins
+    without asking, which ran the stand-in). Linux only. Built:
+    `tests/setup_drive.rs`.
+  - `status` shows the pin on Linux, or why there is none, and nothing on
+    macOS; `get_status` in aliases mode leaves it out, with nothing in
+    `dropped` (shown to fail without its field policy, which named it in
+    `dropped` on every call). `setup drive --cli` on a set-up Drive changes only `cli` and
+    removes a `cli_sha256` left from before, comments and every other
+    value kept. The copy hashes each byte it writes, across chunks.
+  - Not automated: the whole flow on a pseudo-terminal from `script`, in a
+    throwaway keyring, on 2026-10-07: a first setup confirmed with `yes`
+    stored the pin and wrote only `cli`; `status` and `doctor` showed the
+    pin; a piped `setup drive --cli` was refused, and on a terminal it
+    pinned the new CLI and removed an old `cli_sha256`. The CLI runs on
+    Bun ([Appendix A](appendix-a-phase-0.md)), likely as a Bun standalone
+    binary, which reads its own code from its executable: one built with
+    Bun 1.4.2 ran from a sealed memfd and found its code. The real CLI, on
+    a Linux machine signed in to Proton, has not run this way
+    ([#62](https://github.com/matt-w-horn/protonctl/issues/62)).
 - Surface: no forbidden tool names; every hint set and every description
   within 2,048 characters; a snapshot of the whole tool surface, descriptions
   included, since Cowork re-approves a tool whose definition changes;

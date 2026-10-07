@@ -159,6 +159,12 @@ impl App {
                     },
                     "access": "read-only",
                     "cli": self.drive_cli.path(),
+                    // Linux (Q33); a Mac checks Proton's signature instead.
+                    "cliSha256": match self.drive_cli.pin() {
+                        Some(Ok(pin)) => json!(pin),
+                        Some(Err(e)) => json!({ "error": e }),
+                        None => Value::Null,
+                    },
                 }),
                 Err(e) => json!({ "error": e }),
             },
@@ -412,38 +418,42 @@ fn rotate_key() -> Result<Value> {
 }
 
 /// Check that the CLI is Proton's and signed in, find the app's folder, then
-/// write `[drive]`. On Linux the CLI's SHA-256 is pinned here (Q33), and a
-/// later run pins an updated CLI. Signing in is the CLI's own step
+/// write `[drive]`. On Linux the user first confirms the CLI's SHA-256 on a
+/// terminal, and it is pinned in the secret store, not the config, which
+/// the model can edit in Claude Code (Q33, #72); a later run pins an updated
+/// CLI, or with `--cli` another one. Signing in is the CLI's own step
 /// (`proton-drive auth login`), so protonctl never sees the Proton password.
 async fn setup_drive(folder: Option<PathBuf>, cli: Option<PathBuf>) -> Result<Value> {
-    if let Some(set) = config::load()?.drive {
-        if cfg!(target_os = "macos") || folder.is_some() || cli.is_some() {
-            bail!(
-                "Drive is already set up; edit [drive] in {} to change it",
-                config::path().display()
-            );
-        }
-        return repin_drive_cli(set).await;
+    let set = config::load()?.drive;
+    if set.is_some() && (cfg!(target_os = "macos") || folder.is_some()) {
+        bail!(
+            "Drive is already set up; edit [drive] in {} to change it",
+            config::path().display()
+        );
     }
     // The server resolves a path from its own working directory, so each is
     // written whole; a symlink stays one, so a CLI updated behind it is used.
     let folder = folder.map(std::path::absolute).transpose()?;
     let cli = cli.map(std::path::absolute).transpose()?;
+    if let Some(set) = set {
+        return repin_drive_cli(set, cli).await;
+    }
     if let Some(f) = &folder
         && !f.is_dir()
     {
         bail!("--folder {} is not a folder", f.display());
     }
-    let mut wanted = config::DriveConfig {
+    let wanted = config::DriveConfig {
         folder: folder.clone(),
         cli: cli.clone(),
         ..Default::default()
     };
-    if !cfg!(target_os = "macos") {
-        let path = drive::cli::path(Some(&wanted));
-        wanted.cli_sha256 = Some(content::blocking(move || digest::Sha256::of_file(&path)).await??);
-    }
-    let drive_cli = drive::cli::Cli::new(Some(&wanted));
+    let drive_cli = if cfg!(target_os = "macos") {
+        drive::cli::Cli::new(Some(&wanted))
+    } else {
+        let pin = confirmed_pin(&drive::cli::path(Some(&wanted)), None).await?;
+        drive::cli::Cli::pinned(Some(&wanted), pin)
+    };
     let version = drive_cli.check().await?;
     drive_cli
         .json(&["filesystem", "list", "-j", "/my-files"].map(std::ffi::OsStr::new))
@@ -452,7 +462,11 @@ async fn setup_drive(folder: Option<PathBuf>, cli: Option<PathBuf>) -> Result<Va
             "the Proton Drive CLI is not signed in; run `proton-drive auth login`, then try again",
         )?;
     let root = Drive::new(Some(&wanted))?.root().map(Path::to_path_buf);
-    config::add_drive(folder.as_deref(), cli.as_deref(), wanted.cli_sha256)?;
+    let pin = drive_cli.pin().transpose().map_err(|e| anyhow!("{e}"))?;
+    if let Some(pin) = pin {
+        drive::cli::store_pin(pin)?;
+    }
+    config::add_drive(folder.as_deref(), cli.as_deref())?;
     Ok(json!({
         "folder": match root {
             Some(r) => json!(r),
@@ -460,32 +474,46 @@ async fn setup_drive(folder: Option<PathBuf>, cli: Option<PathBuf>) -> Result<Va
         },
         "cli": drive_cli.path(),
         "cliVersion": version,
-        "cliSha256": wanted.cli_sha256,
+        "cliSha256": pin,
         "signedIn": true,
     }))
 }
 
-/// `setup drive` once Drive is set up, on Linux: pin the CLI as it is now,
-/// after the user confirms it is a build from Proton (Q33).
-async fn repin_drive_cli(mut set: config::DriveConfig) -> Result<Value> {
-    let path = drive::cli::path(Some(&set));
+/// The SHA-256 of the CLI at `path` as it is now, which the user confirms on
+/// a terminal unless it is the pin already `held` (Q33). A first setup asks
+/// too, so a call through Claude Code's Bash tool, which has no terminal,
+/// cannot pin a file (#72). Nothing runs the CLI before this: the run that
+/// follows is held to the pin it returns.
+async fn confirmed_pin(path: &Path, held: Option<digest::Sha256>) -> Result<digest::Sha256> {
     let found = {
-        let path = path.clone();
+        let path = path.to_path_buf();
         content::blocking(move || digest::Sha256::of_file(&path)).await??
     };
-    if set.cli_sha256 != Some(found) {
+    if held != Some(found) {
         confirm(&format!(
-            "{} now has SHA-256 {found}; pin it only if you installed this CLI from Proton",
+            "{} has SHA-256 {found}; pin it only if you installed this CLI from Proton",
             path.display()
         ))?;
     }
-    set.cli_sha256 = Some(found);
-    let version = drive::cli::Cli::new(Some(&set)).check().await?;
-    config::set_cli_pin(found)?;
+    Ok(found)
+}
+
+/// `setup drive` once Drive is set up, on Linux: pin the CLI as it is now,
+/// at `cli` when given, after the user confirms it is a build from Proton
+/// (Q33). A pin left in the config from before goes.
+async fn repin_drive_cli(mut set: config::DriveConfig, cli: Option<PathBuf>) -> Result<Value> {
+    if cli.is_some() {
+        set.cli.clone_from(&cli);
+    }
+    let path = drive::cli::path(Some(&set));
+    let pin = confirmed_pin(&path, drive::cli::stored_pin()?).await?;
+    let version = drive::cli::Cli::pinned(Some(&set), pin).check().await?;
+    drive::cli::store_pin(pin)?;
+    config::set_cli(cli.as_deref())?;
     Ok(json!({
         "cli": path,
         "cliVersion": version,
-        "cliSha256": found,
+        "cliSha256": pin,
         "next": "restart Claude Code and Claude Desktop so their servers use this pin",
     }))
 }
@@ -548,10 +576,13 @@ async fn doctor(app: &App) -> bool {
         );
         check(
             "drive cli",
-            app.drive_cli
-                .check()
-                .await
-                .map(|v| format!("{} {v}", app.drive_cli.path().display())),
+            app.drive_cli.check().await.map(|v| {
+                let pinned = match app.drive_cli.pin() {
+                    Some(Ok(pin)) => format!(", pinned SHA-256 {pin}"),
+                    _ => String::new(),
+                };
+                format!("{} {v}{pinned}", app.drive_cli.path().display())
+            }),
         );
         // Every Linux read goes through the CLI, so the folder in memory is
         // checked here; a Mac makes its RAM disk only for a cloud-only file.
@@ -591,7 +622,11 @@ fn logout() -> Value {
         Vec::new()
     });
     // By name too, so a search that fails still deletes what is known.
-    accounts.extend([Account::PrivacyKey, Account::PrivacyMode]);
+    accounts.extend([
+        Account::PrivacyKey,
+        Account::PrivacyMode,
+        Account::DriveCliPin,
+    ]);
     match config::load() {
         Ok(cfg) => {
             accounts.extend(cfg.calendar.iter().map(|c| Account::Calendar(c.id.clone())));
@@ -815,9 +850,22 @@ mod tests {
             }),
             ..Default::default()
         };
-        let on = App::from_config(cfg).unwrap();
+        let mut on = App::from_config(cfg).unwrap();
         let root = on.drive().unwrap().root().map(Path::to_path_buf);
         assert_eq!(root, Some(dir.path().canonicalize().unwrap()));
+        // Q33, #72: `status` shows the pin on Linux, which is not in the
+        // config, or why there is none; a Mac checks the signature.
+        let unread = &on.status_with(Ok(&[]))["drive"]["cliSha256"];
+        let pin = digest::Sha256::of(b"cli");
+        on.drive_cli = drive::cli::Cli::pinned(None, pin);
+        let pinned = &on.status_with(Ok(&[]))["drive"]["cliSha256"];
+        if cfg!(target_os = "macos") {
+            assert_eq!((unread, pinned), (&Value::Null, &Value::Null));
+        } else {
+            let why = unread["error"].as_str().unwrap_or_default();
+            assert!(why.contains("drive-cli-pin"), "{unread}");
+            assert_eq!(pinned, &json!(pin.to_string()));
+        }
     }
 
     /// RFC R11: an export folder inside the Proton Drive app's folder is
