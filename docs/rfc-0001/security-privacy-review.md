@@ -149,7 +149,7 @@ flowchart TB
 | F6, F8 | reads of the Drive folder and the config | as built | same |
 | F7 | secrets and the privacy setting, from the Keychain or, on Linux, the Secret Service over D-Bus | Bridge password, links, the setting | plus the privacy key |
 | F14 | a cloud-only Drive file: the CLI writes it into the memory folder, and protonctl reads it, then deletes it | none: F15 instead | a per-process RAM disk on macOS; on Linux a 0700 folder under `$XDG_RUNTIME_DIR`, used only on tmpfs with every swap encrypted or zram; gone at exit (I15) |
-| F15 | files the CLI downloads and attachments protonctl saves, in the download folder; exports and manifests, in the export folder | as built: downloads removed after an hour or at exit; exports kept | none from the tools (I15); the CLI still writes some ([#73](https://github.com/matt-w-horn/protonctl/issues/73)) |
+| F15 | files the CLI downloads and attachments protonctl saves, in the download folder; exports and manifests, in the export folder | as built: downloads removed after an hour or at exit; exports kept | none (I15); the CLI writes a file only where `--out` names (R10) |
 | F12 | Bridge's and the CLI's traffic | Proton's end-to-end encryption | same |
 | F9, F10 | whatever F1 returned | everything | tokenized, and approved raw items |
 | F11 | whatever the model sends on | not protonctl's | not protonctl's |
@@ -178,7 +178,7 @@ check runs.
 | I12 | In aliases mode no result holds a Proton ID, `Message-Id`, UID, raw digest or local path (R16, R17) | aliases | field policies; an unlisted string field is dropped and named in `dropped` | leak test with planted IDs; field coverage test | built |
 | I13 | Identifiers are deterministic under one key, and nothing maps them back on disk (R14, principle 8) | aliases | HMAC and AES-SIV from HKDF subkeys | stability and round-trip tests | built and tested, across two processes and under another key |
 | I14 | Raw content in aliases mode needs fresh user presence, for one item, with a prompt protonctl writes (R18, R19) | aliases | `Presence`, `Approvals`, the prompt's form | user-presence tests with an injectable checker | not built (Phase 3) |
-| I15 | In aliases mode protonctl writes no content to disk (R10) | aliases | no download or export folder; a RAM disk for cloud-only Drive files (Q14), on Linux `$XDG_RUNTIME_DIR` when it is tmpfs, private, and every swap is encrypted | the no-disk test; the memory disk test | built and tested, every tool against a throwaway home; on macOS the readers' own writes are not watched until Phase 4; the CLI's writes are not refused yet ([#73](https://github.com/matt-w-horn/protonctl/issues/73)) |
+| I15 | In aliases mode protonctl writes no content to disk (R10) | aliases | no download or export folder; a RAM disk for cloud-only Drive files (Q14), on Linux `$XDG_RUNTIME_DIR` when it is tmpfs, private, and every swap is encrypted | the no-disk test; the memory disk test | built and tested, every tool against a throwaway home, and the CLI's commands that could write; on macOS the readers' own writes are not watched until Phase 4 |
 | I16 | Logs and panics carry no content (R25) | both | WARN-level logs; a panic hook | the stderr test; a planted panic | built |
 | I18 | A feature on Linux meets the same requirement as on macOS, or is absent ([section 11](11-platforms.md)) | both | tools registered per platform; `get_status` names what is absent and why | a surface snapshot per platform and mode | P1 to P4 built: no tool is absent on Linux, and each mode's one snapshot passes on Linux; whether `reveal_*` is absent there is P5 (Phase 3) |
 | I17 | Converters reach no network, Keychain or file writes (R21) | both | a sandbox profile; on Linux, Landlock and seccomp in `protonctl convert` (Q34) | the converter sandbox test | built on Linux; not built on macOS (Phase 4, Q13) |
@@ -231,7 +231,7 @@ check runs.
 | Detecting | "Excluded" can be told from "missing" | eliminate | identical results (I6) | low |
 | Data disclosure | Content reaches the provider | mitigate in aliases mode; accept in off mode | tokenization; raw items one at a time after Touch ID (I14); a link with any scheme or none becomes `link N`, and an address in any script is found (fixed in [#70](https://github.com/matt-w-horn/protonctl/issues/70)) | aliases: medium until Phase 5; off: by choice |
 | Data disclosure | Proton's server decrypts the calendar on each fetch of the link | accept | a dedicated link, Limited view where details are not needed (Q9) | medium |
-| Data disclosure | Content on disk: downloads, exports, a RAM disk | mitigate | none in aliases mode (I15) from the tools, though the CLI still writes some ([#73](https://github.com/matt-w-horn/protonctl/issues/73)); off mode keeps the 2026-10-03 rules | low; medium in Claude Code until [#73](https://github.com/matt-w-horn/protonctl/issues/73) is fixed, since the model can run the CLI |
+| Data disclosure | Content on disk: downloads, exports, a RAM disk | mitigate | none in aliases mode (I15), but where the CLI's `--out` names; off mode keeps the 2026-10-03 rules | low |
 | Unawareness, unintervenability | People in the user's mail never chose to reach a model provider | mitigate | aliases mode exists for them; the Touch ID prompt says where the text goes | medium |
 | Unawareness, unintervenability | The user cannot tell which mode served a result | mitigate | `status`, `doctor`, `get_status` and the instructions name the mode (R26) | low |
 | Unawareness, unintervenability | protonctl cannot delete what the provider keeps | transfer | the Claude account's data controls | medium |
@@ -295,7 +295,7 @@ so; #75 changes none. Open work is in the issues.
 | A link without `http`, `https` or `ftp` keeps its path and query, a `webcal://` share link included (Q19); a non-ASCII address in free text is not found | medium; low to medium | [#70](https://github.com/matt-w-horn/protonctl/issues/70) |
 | The readers have no memory limit; signals are not confined on Linux before 6.12 (R21) | medium; low | [#71](https://github.com/matt-w-horn/protonctl/issues/71), fixed 2026-10-07 |
 | The Drive CLI is checked, then run again by path (Q24, I5); on Linux its path and pin live in the config, which the model can edit | medium; medium | [#72](https://github.com/matt-w-horn/protonctl/issues/72) |
-| The CLI writes to disk in aliases mode: `drive manifest`, `--export`, a cloud-only `drive cat` (R10, M2.7) | low to medium | [#73](https://github.com/matt-w-horn/protonctl/issues/73) |
+| The CLI writes to disk in aliases mode: `drive manifest`, `--export`, a cloud-only `drive cat` (R10, M2.7) | low to medium | [#73](https://github.com/matt-w-horn/protonctl/issues/73), fixed 2026-10-07 |
 | The name canon removes `Pan`, `Sri` and `M.` as honorifics, so two people can share an alias | low | [#74](https://github.com/matt-w-horn/protonctl/issues/74), fixed 2026-10-07 |
 | `live-check.py` prints a failed call's error text; Dependabot's auto-merge is not bound to the reviewed commit | low; low | [#75](https://github.com/matt-w-horn/protonctl/issues/75) |
 
