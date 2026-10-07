@@ -343,8 +343,9 @@ impl Registry {
     }
 }
 
+/// A link's host, with or without a scheme before it.
 fn host(url: &str) -> Option<String> {
-    let rest = url.split_once("://")?.1;
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let host = rest[..end].rsplit('@').next()?;
     let host = host.split(':').next()?;
@@ -1547,6 +1548,40 @@ mod tests {
             assert!(!out.contains(leak), "{leak} in {out}");
         }
         assert!(out.contains("link 1"), "{out}");
+    }
+
+    /// A link with any scheme, or with none, becomes `link N` and its
+    /// host's alias, and an address in any script becomes an alias (#70).
+    /// The same link with its host in another case keeps its number.
+    #[test]
+    fn links_without_an_http_scheme_and_non_ascii_addresses_are_rewritten() {
+        let v = json!({ "message": {
+            "from": "Sam Okafor <sam@okafor.example>",
+            "body": "Calendar: webcal://calendar.proton.me/api/calendar/v1/url/AbCdEf123/calendar.ics?CacheKey=k9&PassphraseKey=SeCrEtPaSs. \
+                     Reset at www.example.com/reset?token=Zx81secretToken or WWW.Example.com/reset?token=Zx81secretToken. \
+                     Join zoom.us/j/81234567890?pwd=SeCrEtPwd. \
+                     Write to jürgen.müller@bücher.de or 张伟@例子.中国.",
+        } });
+        let out = run_as(Tool::GetMessage, None, &Names::default(), v);
+        let text = out.to_string();
+        for leak in [
+            "AbCdEf123",
+            "SeCrEtPaSs",
+            "Zx81secretToken",
+            "81234567890",
+            "SeCrEtPwd",
+            "jürgen",
+            "bücher",
+            "张伟",
+            "例子",
+        ] {
+            assert!(!text.contains(leak), "{leak} in {text}");
+        }
+        let body = out["message"]["body"].as_str().unwrap();
+        for n in 1..=3 {
+            assert!(body.contains(&format!("link {n} (")), "link {n} in {body}");
+        }
+        assert!(!body.contains("link 4"), "{body}");
     }
 
     /// A domain outside the short list of top-level domains is found when

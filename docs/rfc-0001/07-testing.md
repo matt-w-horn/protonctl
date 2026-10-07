@@ -3,7 +3,7 @@
 # 7. Testing
 
 Built (on macOS on 2026-10-04, `cargo test` ran 247 tests: 238 unit, 9
-against the built binary, and 3 ignored. On Linux on 2026-10-07 it ran 260: 247 unit, 13
+against the built binary, and 3 ignored. On Linux on 2026-10-07 it ran 263: 250 unit, 13
 against the built binary; 9 more are ignored by default: one lists Drive
 through the real CLI; three reach a Secret Service and one runs against
 Dovecot, all four in `scripts/check.sh`; three run only as the children
@@ -658,17 +658,48 @@ missing ones:
   form, and a person stays a person. Built: `organizations_that_send_mail_are_typed_organization` in
   `src/privacy/detect/dict.rs`, shown to fail with every name typed
   person.
+- Links and addresses in text (Phase 2, [#70](https://github.com/matt-w-horn/protonctl/issues/70);
+  built 2026-10-07): a link with any scheme, `webcal://` included,
+  becomes one `link N` with its path and query (Q19), and so does a
+  domain followed by a path or query, with any top-level domain, or by a
+  fragment, with one on the short list. A domain after `@` stays its
+  address's, and a file's anchor such as `04-design.md#settings` and
+  text such as `and/or` and `km/h` stay as they are. An address in
+  letters and digits of any script is found whole, with a mark after a
+  letter in decomposed form, and the same link with its host in another
+  case keeps its number. A closing quote after a link stays out of it.
+  Built: `links_of_any_scheme_or_none_are_found` and
+  `addresses_in_any_script_are_found` in
+  `src/privacy/detect/pattern.rs`, `other_forms` in
+  `src/privacy/canon.rs`, and
+  `links_without_an_http_scheme_and_non_ascii_addresses_are_rewritten`
+  in `src/privacy/pipeline.rs`, each shown to fail on the patterns of
+  2026-10-06: the `webcal://` share link, `www.example.com/reset?token=…`
+  and `zoom.us/j/…?pwd=…` kept their path and query, and
+  `jürgen.müller@bücher.de` and `张伟@例子.中国` passed raw. The
+  exceptions for `@` and for a file's anchor were each shown to fail
+  with their rule removed; `ordinary_text_is_left_alone` holds the
+  anchor and `and/or`. Not covered: a top-level domain in punycode
+  (`xn--…`). A path whose first part looks like a domain, such as
+  `Node.js/Deno`, becomes a link, which hides more than it must.
 - Evaluation (Phase 2, defect D1 in [section 9](09-rollout.md#phase-2-defects-found-on-real-results)):
   aliases mode over a labeled synthetic corpus that plants each person,
   organization and project in every form D2 to D7 name (surname, given
   name, initials, middle initial, typing and OCR misspellings, run-in
   CJK text, organizations that send mail and that never do, projects),
+  and links and addresses that appear only in a body, with and without
+  an `http` scheme and in ASCII and other scripts (#70),
   reporting per form and entity type how many came back whole, with a
   word of the name left, with a second alias, linked by `maybeSameAs`, or
-  typed wrong. The report is a snapshot, so each fix shows as the change
-  in its row. Built: `what_passes_raw_per_form` in `src/privacy/eval.rs`,
-  shown to fail when the process dictionary was emptied (the
-  process-only full name came back raw).
+  typed wrong. A link's words end at `/`, `?`, `#`, `&` and `=`, and a
+  link is typed right when it reads `link N`. The report is a snapshot,
+  so each fix shows as the change in its row. Built:
+  `what_passes_raw_per_form` in `src/privacy/eval.rs`, shown to fail
+  when the process dictionary was emptied (the process-only full name
+  came back raw). On the patterns of 2026-10-06 the links without an
+  `http` scheme came back 3 of 3 with a word left and typed wrong, and
+  the non-ASCII addresses 2 of 2 whole; with #70 fixed, every link and
+  address row reads 0.
 - Recall (Phase 5): per entity type and language, on a labeled synthetic
   corpus in English, German, French and one non-Latin script at least.
   Results are recorded, with no pass mark until there is a measured
