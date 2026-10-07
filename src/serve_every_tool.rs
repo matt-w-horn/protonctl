@@ -1786,6 +1786,17 @@ fn memory() -> PathBuf {
     crate::content::memory_mount()
 }
 
+/// Deletes the download folder and detaches the memory disk when dropped,
+/// as `serve` does when it stops; a failing child test unwinds through it,
+/// so on macOS it leaves no RAM disk attached until restart.
+struct RemoveDownloads;
+
+impl Drop for RemoveDownloads {
+    fn drop(&mut self) {
+        crate::content::remove_downloads();
+    }
+}
+
 /// T7's child: run by `aliases_mode_writes_no_file` with a throwaway home
 /// and temporary folder, and a no-op anywhere else.
 #[tokio::test]
@@ -1794,6 +1805,7 @@ async fn every_tool_in_a_throwaway_home() {
     let Some(fixtures) = std::env::var_os(CHILD) else {
         return;
     };
+    let _removed = RemoveDownloads;
     let before = watched();
     let memory = memory();
     let mut emptied = |tool: &str| {
@@ -1806,8 +1818,6 @@ async fn every_tool_in_a_throwaway_home() {
     let run = every_tool(Path::new(&fixtures), &mut emptied).await;
     drop(run);
     let new = new_since(&before);
-    // As `serve` does when it stops.
-    crate::content::remove_downloads();
     assert!(new.is_empty(), "aliases mode wrote {new:?}");
 }
 
@@ -1821,6 +1831,7 @@ async fn the_cli_in_a_throwaway_home() {
     let Some(fixtures) = std::env::var_os(CHILD) else {
         return;
     };
+    let _removed = RemoveDownloads;
     let fixtures = Path::new(&fixtures);
     let (_drive, root, cli, _) = drive_fixtures(fixtures);
     // A configured export folder, in the watched home: what the refused
@@ -1903,6 +1914,5 @@ async fn the_cli_in_a_throwaway_home() {
             saved.display()
         ));
     }
-    crate::content::remove_downloads();
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
