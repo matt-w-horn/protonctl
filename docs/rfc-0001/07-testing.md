@@ -686,7 +686,12 @@ missing ones:
   mail search that leaves out today's mail, failing on any alias that is
   new, gone or of another type (2026-10-06,
   [#14](https://github.com/matt-w-horn/protonctl/issues/14); not yet
-  run live). `--reveal` comes with Phase 3.
+  run live). In both modes a failed call prints only its error code, or
+  `error text` when the error has none, and the message's length, never
+  the message, which in off mode can carry a Drive path or the Drive
+  CLI's stderr (2026-10-07,
+  [#75](https://github.com/matt-w-horn/protonctl/issues/75)). `--reveal`
+  comes with Phase 3.
 
 R1 is tested for both services that reach the account. The stand-in
 `proton-drive` in `src/drive/mod.rs` and `tests/convert.rs` answers only

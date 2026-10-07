@@ -136,6 +136,25 @@ def calendar_note(data: dict) -> str:
     return counts(data) + f", fetchedAt {fetched}/{len(sources)}, freshness {'yes' if data.get('freshness') else 'NO'}"
 
 
+def failure(reply: dict, text: str) -> str:
+    """A failed call's code and length, never its text: off-mode errors can
+    quote a Drive path or the Drive CLI's stderr."""
+    if "error" in reply:
+        error = reply["error"]
+        code = error.get("code")
+        shown = code if isinstance(code, int) else "?"
+        return f"rpc error {shown}, message {len(str(error.get('message') or ''))} chars"
+    try:
+        fault = json.loads(text)
+    except ValueError:
+        fault = None
+    if isinstance(fault, dict) and isinstance(fault.get("error"), str):
+        code = fault["error"]
+        shown = code if re.fullmatch(r"[a-z_]{1,40}", code) else "?"
+        return f"error {shown}, message {len(str(fault.get('message') or ''))} chars"
+    return f"error text, {len(text)} chars"
+
+
 def call(name: str, args: dict, describe=counts, label: str = "") -> dict | None:
     called.add(name)
     shown = f"{name}{f' ({label})' if label else ''}"
@@ -146,7 +165,7 @@ def call(name: str, args: dict, describe=counts, label: str = "") -> dict | None
     text = (result.get("content") or [{}])[0].get("text", "")
     if "error" in reply or result.get("isError"):
         failures.append(shown)
-        print(f"FAIL  {shown:<34} {took:5.1f}s  {(reply.get('error', {}).get('message') or text)[:160]}")
+        print(f"FAIL  {shown:<34} {took:5.1f}s  {failure(reply, text)}")
         return None
     global last_text
     last_text = text
