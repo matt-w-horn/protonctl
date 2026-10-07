@@ -1434,17 +1434,18 @@ async fn every_tool(base: &Path, after_each: &mut dyn FnMut(&str)) -> Run {
         get_file_metadata_aliases,
         req
     );
-    // On a Mac this would attach a RAM disk, which the drive tests make
-    // only where they run alone.
-    #[cfg(target_os = "linux")]
-    call!(
-        h,
-        REMOTE,
-        "read a cloud-only file",
-        None,
-        read_file_content_aliases,
-        read(CLOUD)
-    );
+    // On a Mac this attaches a RAM disk, one per process, which the drive
+    // test detaches; so there it runs only in T7's child, which runs alone.
+    if cfg!(target_os = "linux") || std::env::var_os(CHILD).is_some() {
+        call!(
+            h,
+            REMOTE,
+            "read a cloud-only file",
+            None,
+            read_file_content_aliases,
+            read(CLOUD)
+        );
+    }
     let req = SearchFilesAliases {
         query: "plan".into(),
         ..Default::default()

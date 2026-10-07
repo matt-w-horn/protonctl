@@ -641,10 +641,12 @@ missing ones:
   in the cache folder (Q37). On macOS they also allow the memory disk's
   mount point while it is empty, since it stays mounted until the process
   exits: run first on a Mac on 2026-10-06, the CLI test failed on that
-  folder alone. With a file planted on the disk at each cloud-only read,
-  the CLI test failed on `drive cat` and `drive get --out`;
-  `aliases_mode_writes_no_file` still passed, so on macOS none of its
-  calls reads through the memory disk. Neither watches the folders a reader finds
+  folder alone. On macOS `every_tool` reads a cloud-only file only in
+  T7's child, since the RAM disk is one per process and the drive test
+  detaches it. With a file planted on the disk at each cloud-only read,
+  both tests failed: the CLI test on `drive cat` and `drive get --out`,
+  T7 on `read_file_content`; before that read was added on macOS, T7
+  passed with the plant. Neither watches the folders a reader finds
   through the system: on
   Linux the readers can write only to `/dev/null` (Landlock), and on macOS they run
   unconfined until Phase 4.
