@@ -46,7 +46,8 @@ const fn case(
 /// Watanabe, Priya Raman (known to the process only), John and Jane Lee
 /// (who share a surname) and 王小明; organizations are Acme Billing and
 /// Notely, which send mail, and Globex and Initech, which never do;
-/// Falcon and Bluebird are projects.
+/// Falcon and Bluebird are projects. Links and addresses that appear only
+/// in a body close it.
 const CASES: &[Case] = &[
     // D2: full names are the baseline; short forms are the defect.
     case(
@@ -207,6 +208,57 @@ const CASES: &[Case] = &[
         "Bluebird launch",
         false,
     ),
+    // #70: a link is `link N` with any scheme or none (Q19), and an
+    // address is found in any script.
+    case(
+        "link with http scheme",
+        "link",
+        "https://example.com/reset?token=Zx81secretToken",
+        "https://example.com/reset?token=Zx81secretToken",
+        false,
+    ),
+    case(
+        "link without http scheme",
+        "link",
+        "webcal://calendar.proton.me/api/calendar/v1/url/AbCdEf123/calendar.ics?CacheKey=k9&PassphraseKey=SeCrEtPaSs",
+        "webcal://calendar.proton.me/api/calendar/v1/url/AbCdEf123/calendar.ics?CacheKey=k9&PassphraseKey=SeCrEtPaSs",
+        false,
+    ),
+    case(
+        "link without http scheme",
+        "link",
+        "www.example.com/reset?token=Zx81secretToken",
+        "www.example.com/reset?token=Zx81secretToken",
+        false,
+    ),
+    case(
+        "link without http scheme",
+        "link",
+        "zoom.us/j/81234567890?pwd=SeCrEtPwd",
+        "zoom.us/j/81234567890?pwd=SeCrEtPwd",
+        false,
+    ),
+    case(
+        "address in ASCII, body only",
+        "email",
+        "dana.ruiz@ruiz-events.example",
+        "dana.ruiz@ruiz-events.example",
+        false,
+    ),
+    case(
+        "address in non-ASCII, body only",
+        "email",
+        "jürgen.müller@bücher.de",
+        "jürgen.müller@bücher.de",
+        false,
+    ),
+    case(
+        "address in non-ASCII, body only",
+        "email",
+        "张伟@例子.中国",
+        "张伟@例子.中国",
+        false,
+    ),
 ];
 
 /// Each person's and organization's address, for the From of a local case.
@@ -270,11 +322,12 @@ struct Row {
 /// A word that carries a name, of the full name or of the planted form
 /// (so a misspelled word counts too), standing alone in `text`: two
 /// letters or more, and neither a common word from the alias list nor an
-/// honorific.
+/// honorific. A link's words end at the characters that part its path
+/// and query, which no name holds.
 fn has_word_of(text: &str, c: &Case) -> bool {
-    c.full
-        .split_whitespace()
-        .chain(c.text.split_whitespace())
+    let words = |s: &'static str| s.split(|ch: char| ch.is_whitespace() || "/?#&=".contains(ch));
+    words(c.full)
+        .chain(words(c.text))
         .map(|w| w.trim_matches('.'))
         .filter(|w| {
             w.chars().count() >= 2
@@ -296,7 +349,8 @@ fn has_word_of(text: &str, c: &Case) -> bool {
 /// planted, left (`part`), with an
 /// alias other than the one the name's full form has in the same result
 /// (`split`), of those how many name that alias in `maybeSameAs`
-/// (`linked`), and how many carry another entity type (`mistyped`).
+/// (`linked`), and how many carry another entity type (`mistyped`); a
+/// link carries its own type when it reads `link N`.
 fn report() -> String {
     static BETWEEN: LazyLock<Regex> = LazyLock::new(|| Regex::new("«([^»]*)»").expect("fixed"));
     static ALIAS: LazyLock<Regex> =
@@ -348,11 +402,16 @@ fn report() -> String {
                 row.linked += 1;
             }
         }
-        if let Some(alias) = &alias
-            && entities[alias]["type"]
-                .as_str()
-                .is_some_and(|t| t != c.expect)
-        {
+        let mistyped = if c.expect == "link" {
+            !between.starts_with("link ")
+        } else {
+            alias.as_ref().is_some_and(|alias| {
+                entities[alias]["type"]
+                    .as_str()
+                    .is_some_and(|t| t != c.expect)
+            })
+        };
+        if mistyped {
             row.mistyped += 1;
         }
     }
