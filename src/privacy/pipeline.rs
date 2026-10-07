@@ -1947,6 +1947,44 @@ mod tests {
         );
     }
 
+    /// R13 (#69): a page edge anywhere inside a name only this result's
+    /// From holds, which the process dictionary that cuts pages lacks,
+    /// leaves no part of the name raw on either page.
+    #[tokio::test]
+    async fn a_page_edge_inside_a_header_name_leaves_no_half_raw() {
+        let body = "Venue is booked. Thanks, Dana Okonkwo will sign tomorrow.";
+        let name = body.find("Dana").unwrap();
+        let process = Dictionary::new(&Names::default()).unwrap();
+        let cut: crate::content::Cut =
+            std::sync::Arc::new(move |text, at| crate::privacy::detect::around(&process, text, at));
+        for edge in name + 1..name + "Dana Okonkwo".len() {
+            let (end, start) = crate::content::restricted(cut.clone(), async {
+                (
+                    crate::content::cut_at(body, edge, 0),
+                    crate::content::start_at(body, edge),
+                )
+            })
+            .await;
+            for page in [&body[..end], &body[start..]] {
+                let v = json!({ "message": {
+                    "from": "Dana Okonkwo <dana@ruiz-events.example>",
+                    "body": page,
+                } });
+                let out = run_as(Tool::GetMessage, None, &Names::default(), v);
+                let mut text = out["message"]["body"].as_str().unwrap().to_lowercase();
+                for alias in out["entities"].as_object().unwrap().keys() {
+                    text = text.replace(&alias.to_lowercase(), "");
+                }
+                let parts = ["dan", "ana", "oko", "kon", "onk", "nkw", "kwo"];
+                assert!(
+                    !parts.iter().any(|p| text.contains(p)),
+                    "edge {edge}: {page:?} became {:?}",
+                    out["message"]["body"]
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_result_over_the_cap_is_refused() {
         let big = json!({ "content": "word ".repeat(CAP / 4) });
