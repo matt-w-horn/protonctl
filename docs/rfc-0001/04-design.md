@@ -78,7 +78,10 @@ protonctl mail attachment MESSAGE_ID INDEX [--out DIR]
 ```
 
 Output is JSON on stdout; logs go to stderr. Exit codes: 0 success, 1 failure,
-2 usage error. Writes are no longer planned. `logout` also deletes the
+2 usage error. Writes are no longer planned. In aliases mode the CLI
+refuses `drive manifest` and the `--export` and `--inline` options, and
+reads a cloud-only file through the folder in memory, as the tools do
+(R10). `logout` also deletes the
 privacy key and the setting, after which no old reference or handle
 resolves. `--raw` on every command that prints content in aliases mode
 (R19) is not built (Phase 3).

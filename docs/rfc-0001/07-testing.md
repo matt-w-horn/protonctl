@@ -3,11 +3,11 @@
 # 7. Testing
 
 Built (on macOS on 2026-10-04, `cargo test` ran 247 tests: 238 unit, 9
-against the built binary, and 3 ignored. On Linux on 2026-10-07 it ran 265: 252 unit, 13
-against the built binary; 10 more are ignored by default: one lists Drive
+against the built binary, and 3 ignored. On Linux on 2026-10-07 it ran 266: 253 unit, 13
+against the built binary; 11 more are ignored by default: one lists Drive
 through the real CLI, one is a timing to run with `--release`, four reach
 a Secret Service and one reaches Dovecot, which `scripts/check.sh` runs
-in a throwaway keyring or container, and three run as the child of
+in a throwaway keyring or container, and four run as the child of
 another test. The macOS-only tests do not run on Linux, and the
 Linux-only tests do not run on a Mac). Live,
 `scripts/live-check.py` runs every tool once over MCP, as the Claude app
@@ -626,9 +626,20 @@ missing ones:
   `aliases_mode_writes_no_file` in `src/serve_every_tool.rs` runs the
   test binary again with a throwaway home and temporary folder, makes
   every call, and fails on a new file in either or on anything left in
-  the memory folder after a call. It allows the Drive CLI's lock file
-  while the file is empty, and it stays in the cache folder (Q37). It
-  does not watch the folders a reader finds through the system: on
+  the memory folder after a call. Beside it,
+  `the_cli_in_aliases_mode_writes_no_file` runs the CLI's commands that
+  could write, in aliases mode, the same way: `drive manifest` and the
+  `--export` and `--inline` options of `drive get` and `mail attachment`
+  are refused, a cloud-only `drive cat` reads through the memory folder,
+  and `drive get --out` saves only where `--out` names. Before the fix
+  for [#73](https://github.com/matt-w-horn/protonctl/issues/73), it
+  failed on `drive manifest` and both `--export` options, which wrote
+  into the export folder, and on `drive cat`, which made the download
+  folder; the `--inline` options failed only on the refusal's wording,
+  since the CLI's default `--out` already refused them. Both tests allow
+  the Drive CLI's lock file while the file is empty, and the lock stays
+  in the cache folder (Q37). Neither watches the folders a reader finds
+  through the system: on
   Linux the readers can write only to `/dev/null` (Landlock), and on macOS they run
   unconfined until Phase 4.
 - No images or bytes, in aliases mode: no result carries image content, an
