@@ -207,6 +207,25 @@ sets no window finds nothing. An empty result over a defaulted window
 therefore carries a `note` naming the window and saying to pass `startTime`
 and `endTime`.
 
+**Hosts** (M1.1, recorded 2026-10-06 in off mode, with `1432169`
+installed; counts and log shapes only):
+
+- Claude Code: `get_status`, `list_calendars`, `list_events`,
+  `search_threads` and `list_folder` each returned a result in one
+  session. Its MCP log,
+  `~/Library/Caches/claude-cli-nodejs/<project>/mcp-logs-proton/`, holds
+  connection events, tool names and timings, and no arguments or results.
+  The session transcript under `~/.claude/projects/<project>/` (a folder
+  of mode 0700) holds every result in full. No `mcp__proton` allow rule was set,
+  so whether a glob such as `mcp__proton__get_*` matches is not checked.
+- Claude Desktop: `~/Library/Logs/Claude/mcp-server-proton.log` holds one
+  line per message, `method="tools/call" id=N params` from the client and
+  `id=N result(N blocks)` from the server, with no tool name, arguments or
+  content; over 152 tool calls no result field name (`messageId`,
+  `eventId`, `localModified`) appeared there, nor one of those or `path`
+  in `main.log`. The server wrote no stderr in that time, so where it lands
+  is not seen.
+
 ---
 
 [← 11. Platforms](11-platforms.md) · [Contents](../rfc-0001.md#contents) · [Appendix B: Proton's open-source code →](appendix-b-proton-code.md)

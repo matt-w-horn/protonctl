@@ -305,9 +305,10 @@ if files and not aliases:
 elif not files:
     print("skip  get_file_metadata, read, download    no file found")
 # A PDF's text, and an image as image content.
-# Over 1 KB: a real PDF is larger than its own trailer.
+# Over 1 KB: a real PDF is larger than its own trailer. Up to 64 MiB, the
+# most read_file_content reads.
 pdfs = (call("search_files", {"query": "*.pdf", "kind": "file", "pageSize": 25}, label="*.pdf") or {}).get("files") or []
-pdfs = [f for f in pdfs if (f.get("size") or 0) > 1024]
+pdfs = [f for f in pdfs if 1024 < (f.get("size") or 0) <= 64 * 1024 * 1024]
 def pdf_pages(d: dict) -> str:
     """Page images: how many, each after a "Page N:" label, and which pages."""
     images = sum(b.get("type") == "image" for b in blocks)
@@ -325,7 +326,7 @@ elif pdfs:
     ), label="pdf")
     call("read_file_content", {"path": pdfs[0]["path"], "page": 1}, pdf_pages, label="pdf pages")
 else:
-    print("skip  read_file_content (pdf)            no PDF over 1 KB found")
+    print("skip  read_file_content (pdf)            no PDF of 1 KB to 64 MiB found")
 images = (call("search_files", {"query": "*.png", "kind": "file", "pageSize": 25}, label="*.png") or {}).get("files") or []
 images = [f for f in images if 0 < (f.get("size") or 0) <= 5 * 1024 * 1024]
 if images and aliases:

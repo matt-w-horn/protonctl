@@ -638,7 +638,15 @@ missing ones:
   folder; the `--inline` options failed only on the refusal's wording,
   since the CLI's default `--out` already refused them. Both tests allow
   the Drive CLI's lock file while the file is empty, and the lock stays
-  in the cache folder (Q37). Neither watches the folders a reader finds
+  in the cache folder (Q37). On macOS they also allow the memory disk's
+  mount point while it is empty, since it stays mounted until the process
+  exits: run first on a Mac on 2026-10-06, the CLI test failed on that
+  folder alone. On macOS `every_tool` reads a cloud-only file only in
+  T7's child, since the RAM disk is one per process and the drive test
+  detaches it. With a file planted on the disk at each cloud-only read,
+  both tests failed: the CLI test on `drive cat` and `drive get --out`,
+  T7 on `read_file_content`; before that read was added on macOS, T7
+  passed with the plant. Neither watches the folders a reader finds
   through the system: on
   Linux the readers can write only to `/dev/null` (Landlock), and on macOS they run
   unconfined until Phase 4.

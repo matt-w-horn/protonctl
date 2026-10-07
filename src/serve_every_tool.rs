@@ -1434,17 +1434,18 @@ async fn every_tool(base: &Path, after_each: &mut dyn FnMut(&str)) -> Run {
         get_file_metadata_aliases,
         req
     );
-    // On a Mac this would attach a RAM disk, which the drive tests make
-    // only where they run alone.
-    #[cfg(target_os = "linux")]
-    call!(
-        h,
-        REMOTE,
-        "read a cloud-only file",
-        None,
-        read_file_content_aliases,
-        read(CLOUD)
-    );
+    // On a Mac this attaches a RAM disk, one per process, which the drive
+    // test detaches; so there it runs only in T7's child, which runs alone.
+    if cfg!(target_os = "linux") || std::env::var_os(CHILD).is_some() {
+        call!(
+            h,
+            REMOTE,
+            "read a cloud-only file",
+            None,
+            read_file_content_aliases,
+            read(CLOUD)
+        );
+    }
     let req = SearchFilesAliases {
         query: "plan".into(),
         ..Default::default()
@@ -1754,24 +1755,46 @@ fn watched() -> BTreeSet<PathBuf> {
 }
 
 /// What is under the home and the temporary folder that was not in
-/// `before`, less the Drive CLI's lock file, which every protonctl process
-/// takes around a run of the CLI, while it is empty and so holds no
-/// content (R10).
+/// `before`, less two things that hold no content (R10) while they are
+/// empty: the Drive CLI's lock file, which every protonctl process takes
+/// around a run of the CLI, and on macOS the memory disk's mount point,
+/// which stays until the process exits.
 fn new_since(before: &BTreeSet<PathBuf>) -> Vec<PathBuf> {
     let lock = std::env::temp_dir().join("protonctl-test/cli.lock");
     let lock_empty = std::fs::metadata(&lock).is_ok_and(|m| m.len() == 0);
+    let mount = crate::content::memory_mount();
+    let mount_empty = files_under(&mount).is_empty();
     watched()
         .difference(before)
         .filter(|p| !(lock_empty && (**p == lock || Some(p.as_path()) == lock.parent())))
+        .filter(|p| !(mount_empty && (**p == mount || Some(p.as_path()) == mount.parent())))
         .cloned()
         .collect()
 }
 
-/// The folder in memory (here /dev/shm) a cloud-only read fetches into:
-/// allowed, but empty again after every call.
+/// The folder in memory a cloud-only read fetches into: allowed, but empty
+/// again after every call. On Linux it is on /dev/shm.
 #[cfg(target_os = "linux")]
 fn memory() -> PathBuf {
     crate::platform::memory_disk(Path::new("unused")).unwrap()
+}
+
+/// On macOS it is the memory disk's mount point, mounted at the first
+/// cloud-only read.
+#[cfg(not(target_os = "linux"))]
+fn memory() -> PathBuf {
+    crate::content::memory_mount()
+}
+
+/// Deletes the download folder and detaches the memory disk when dropped,
+/// as `serve` does when it stops; a failing child test unwinds through it,
+/// so on macOS it leaves no RAM disk attached until restart.
+struct RemoveDownloads;
+
+impl Drop for RemoveDownloads {
+    fn drop(&mut self) {
+        crate::content::remove_downloads();
+    }
 }
 
 /// T7's child: run by `aliases_mode_writes_no_file` with a throwaway home
@@ -1782,24 +1805,19 @@ async fn every_tool_in_a_throwaway_home() {
     let Some(fixtures) = std::env::var_os(CHILD) else {
         return;
     };
+    let _removed = RemoveDownloads;
     let before = watched();
-    #[cfg(target_os = "linux")]
     let memory = memory();
     let mut emptied = |tool: &str| {
-        #[cfg(target_os = "linux")]
         assert_eq!(
             files_under(&memory),
             BTreeSet::new(),
             "{tool} left these in memory"
         );
-        #[cfg(not(target_os = "linux"))]
-        let _ = tool;
     };
     let run = every_tool(Path::new(&fixtures), &mut emptied).await;
     drop(run);
     let new = new_since(&before);
-    // As `serve` does when it stops.
-    crate::content::remove_downloads();
     assert!(new.is_empty(), "aliases mode wrote {new:?}");
 }
 
@@ -1813,6 +1831,7 @@ async fn the_cli_in_a_throwaway_home() {
     let Some(fixtures) = std::env::var_os(CHILD) else {
         return;
     };
+    let _removed = RemoveDownloads;
     let fixtures = Path::new(&fixtures);
     let (_drive, root, cli, _) = drive_fixtures(fixtures);
     // A configured export folder, in the watched home: what the refused
@@ -1854,7 +1873,6 @@ async fn the_cli_in_a_throwaway_home() {
         (&cloud, &["drive", "cat", CLOUD], true),
         (&cloud, &["drive", "get", CLOUD, "--out", out_arg], true),
     ];
-    #[cfg(target_os = "linux")]
     let memory = memory();
     let mut problems = Vec::new();
     let mut read_text = String::new();
@@ -1880,7 +1898,6 @@ async fn the_cli_in_a_throwaway_home() {
         if !new.is_empty() {
             problems.push(format!("{line}: wrote {new:?}"));
         }
-        #[cfg(target_os = "linux")]
         if !files_under(&memory).is_empty() {
             problems.push(format!("{line}: left {:?} in memory", files_under(&memory)));
         }
@@ -1897,6 +1914,5 @@ async fn the_cli_in_a_throwaway_home() {
             saved.display()
         ));
     }
-    crate::content::remove_downloads();
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
