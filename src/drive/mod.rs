@@ -1787,12 +1787,9 @@ pub(crate) mod tests {
     /// does. Any call but the four protonctl makes fails, and is recorded in
     /// `unexpected.txt` for `FakeCli` to fail the test with (R1).
     fn fake_cli(dir: &Path) -> FakeCli {
-        use std::os::unix::fs::PermissionsExt;
-        let script = dir.join("proton-drive");
-        std::fs::write(
-            &script,
-            r#"#!/bin/sh
-here=$(dirname "$0")
+        let script = cli::tests::stand_in(
+            dir,
+            r#"here=$(dirname "$0")
 env > "$here/env.txt"
 printf '%s\n' "$@" > "$here/argv.txt"
 echo "$*" >> "$here/calls.txt"
@@ -1823,9 +1820,7 @@ fi
 printf 'hello' > "$dest/$(basename "$8" | tr '<>:"|?*' '_______')"
 echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":0,"failures":[]}'
 "#,
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         FakeCli {
             unexpected: dir.join("unexpected.txt"),
             cli: Cli::trusted(script),

@@ -3,7 +3,7 @@
 //! uploader's claim, `claimedSha1`), so a copy on this Mac can be matched
 //! against a file that is only in the cloud without downloading it.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 
 use anyhow::Context as _;
@@ -76,18 +76,24 @@ impl Sha256 {
     pub fn of_file(path: &Path) -> anyhow::Result<Self> {
         let mut f =
             std::fs::File::open(path).with_context(|| format!("cannot read {}", path.display()))?;
+        Self::of_copy(&mut f, &mut std::io::sink())
+            .with_context(|| format!("cannot read {}", path.display()))
+    }
+
+    /// Copy `from` to its end into `to`, and return the SHA-256 of the
+    /// bytes copied: one read, so what is hashed is what is written.
+    pub fn of_copy(from: &mut impl Read, to: &mut impl Write) -> std::io::Result<Self> {
         let mut h = Context::new(&SHA256);
         let mut buf = vec![0; CHUNK];
         loop {
-            let n = f
-                .read(&mut buf)
-                .with_context(|| format!("cannot read {}", path.display()))?;
+            let n = from.read(&mut buf)?;
             if n == 0 {
                 let mut out = [0; 32];
                 out.copy_from_slice(h.finish().as_ref());
                 return Ok(Self(out));
             }
             h.update(&buf[..n]);
+            to.write_all(&buf[..n])?;
         }
     }
 }
@@ -168,6 +174,10 @@ pub(crate) mod tests {
         let path = dir.path().join("data");
         std::fs::write(&path, &data).unwrap();
         assert_eq!(file(&path).unwrap(), bytes(&data));
+        // The Drive CLI's copy (Q24): every byte written, and hashed once.
+        let mut copy = Vec::new();
+        let sha = Sha256::of_copy(&mut data.as_slice(), &mut copy).unwrap();
+        assert_eq!((sha, copy), (Sha256::of(&data), data));
         let s = bytes(b"hello");
         let added = |claim: Option<&str>| {
             let mut v = json!({});

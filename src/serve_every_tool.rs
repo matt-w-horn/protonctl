@@ -424,12 +424,9 @@ fn events() -> crate::calendar::ics::Feed {
 /// copies the file of that name from `files/` into the folder named last.
 /// It writes nothing anywhere else.
 fn stand_in_cli(dir: &Path) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt as _;
-    let script = dir.join("proton-drive");
-    std::fs::write(
-        &script,
-        r#"#!/bin/sh
-here=$(dirname "$0")
+    crate::drive::cli::tests::stand_in(
+        dir,
+        r#"here=$(dirname "$0")
 case "$2" in
 list|info)
   f="$here/$2$(printf '%s' "$4" | tr / _).json"
@@ -445,9 +442,6 @@ download)
 esac
 "#,
     )
-    .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    script
 }
 
 /// One node as the CLI prints it: a file when it has a size.
