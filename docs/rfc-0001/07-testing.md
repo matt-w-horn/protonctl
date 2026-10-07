@@ -3,11 +3,12 @@
 # 7. Testing
 
 Built (on macOS on 2026-10-04, `cargo test` ran 247 tests: 238 unit, 9
-against the built binary, and 3 ignored. On Linux on 2026-10-05 it ran 217: 208 unit, 9
-against the built binary; 4 more are ignored by default: one lists Drive
-through the real CLI, two reach a Secret Service and run in
-`scripts/check.sh`, and one is the sandbox probe, which another test
-runs as a child. The macOS-only tests do not run on Linux, and the
+against the built binary, and 3 ignored. On Linux on 2026-10-07 it ran 260: 247 unit, 13
+against the built binary; 9 more are ignored by default: one lists Drive
+through the real CLI; three reach a Secret Service and one runs against
+Dovecot, all four in `scripts/check.sh`; three run only as the children
+of other tests (the sandbox probe, the locked-keyring probe and the
+throwaway-home run); and one is a timing measurement. The macOS-only tests do not run on Linux, and the
 Linux-only tests do not run on a Mac). Live,
 `scripts/live-check.py` runs every tool once over MCP, as the Claude app
 does, against the real calendar link, Bridge and Drive, and prints counts
@@ -533,7 +534,15 @@ missing ones:
   mention, back to its start or past its end (shown to fail with the old
   `truncate`, which left `to ann`). These are
   `an_address_cut_by_a_page_edge_does_not_leak` in `src/serve.rs` and
-  `aliases_mode_truncates_beside_a_mention` in `src/content.rs`.
+  `aliases_mode_truncates_beside_a_mention` in `src/content.rs`. Added
+  2026-10-06 (#69): a page edge at every byte inside "Dana Okonkwo", a
+  name only the message's own From holds, so the process dictionary that
+  cuts pages lacks it, leaves no part of it raw on the page before the
+  edge or the page from it
+  (`a_page_edge_inside_a_header_name_leaves_no_half_raw` in
+  `src/privacy/pipeline.rs`); and a cut or a start inside a word moves to
+  the word's start, or a cut past its end when the word starts the piece
+  (`aliases_mode_cuts_between_words` in `src/content.rs`).
 - Rotation: a server running while `rotate-key` replaces the key gives new
   aliases on its next call, and refuses the old handles. Built at the key:
   `a_rotated_key_is_picked_up_on_the_next_call` and
