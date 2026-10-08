@@ -1,57 +1,146 @@
-{"id":"en-01","lang":"en","kind":"mail","text":"Hi {person:given|Dana}, thanks for the notes. I spoke with {person:full|Kenji Watanabe} and he agrees we should move the {project:project|Falcon} rewrite to March."}
-{"id":"en-02","lang":"en","kind":"mail","text":"Per our call, {person:surname|Ruiz} will send the signed lease to {org:org|Hargrove & Pell LLP} by Friday."}
-{"id":"en-03","lang":"en","kind":"mail","text":"Can you loop in {person:initials|JL} on the {org:org|Initech} renewal? Also cc {person:honorific|Dr. Okafor}."}
-{"id":"en-04","lang":"en","kind":"mail","text":"Reminder: the {project:project|Bluebird} launch review is Tuesday. {person:full|Priya Raman} will present the budget and {person:full|Tomás Herrera} the timeline."}
-{"id":"en-05","lang":"en","kind":"ocr","text":"Invoice 2291 issued to {person:ocr|Dana Ru1z}, {location:location|14 Wren Street, Portland}. Payable to {org:org|Globex Corporation}."}
-{"id":"en-06","lang":"en","kind":"mail","text":"Sorry, {person:typing|Kenji Watanbe} asked me to resend the deck. {person:given|Kenji} is out until Monday."}
-{"id":"en-07","lang":"en","kind":"subject","text":"Re: {org:org|Notely} export for {person:full|Mara Lindqvist}"}
-{"id":"en-08","lang":"en","kind":"file","text":"Projects/{project:project|Orion}/Interview notes - {person:full|Sam Okafor}.docx"}
-{"id":"en-09","lang":"en","kind":"calendar","text":"1:1 {person:given|Dana} / {person:given|Priya} (prep for {org:org|Acme} QBR)"}
-{"id":"en-10","lang":"en","kind":"mail","text":"May I ask whether Apple pie or Mercury fillings came up at the dentist? Spring is busy, so Friday works. Best, {person:given|Ines}"}
-{"id":"en-11","lang":"en","kind":"mail","text":"{person:surname|Lee} v. {org:org|Acme Holdings} was settled; {person:honorific|Ms. Patel} drafted the release and {person:initials|K.W.} reviewed it."}
-{"id":"en-12","lang":"en","kind":"mail","text":"We are moving our storage from {product:product|Dropbox} to {product:product|Proton Drive} next quarter, per {person:full|Alex Chen}."}
-{"id":"en-13","lang":"en","kind":"ocr","text":"Patient: {person:ocr|Priya Rarnan}  DOB 1984-03-12  Referred by {person:ocr|Dr. J0hn Lee}, {org:org|Riverside Clinic}."}
-{"id":"en-14","lang":"en","kind":"mail","text":"{person:given|Will}, {person:given|Grace} and {person:given|Hope} all signed up. {person:given|Grant} approved the grant, and {person:given|Mark} marked it done."}
-{"id":"en-15","lang":"en","kind":"mail","text":"The {project:project|Nightjar} migration is blocked on {org:org|Northwind Traders}. {person:surname|Lindqvist} owns the follow-up."}
-{"id":"de-01","lang":"de","kind":"mail","text":"Hallo {person:given|Jürgen}, Frau {person:surname|Schäfer} hat das Angebot von {org:org|Brandt & Söhne GmbH} geprüft."}
-{"id":"de-02","lang":"de","kind":"mail","text":"Das Projekt {project:project|Kranich} startet im Mai; {person:full|Lena Hoffmann} leitet es zusammen mit {person:full|Mehmet Yılmaz}."}
-{"id":"de-03","lang":"de","kind":"mail","text":"Laut {person:surname|Hoffmanns} Notiz wurde der Vertrag mit der {org:org|Stadtwerke Lindau} verlängert."}
-{"id":"de-04","lang":"de","kind":"ocr","text":"Rechnung an {person:ocr|Jurgen Sch4fer}, {location:location|Lindenstraße 8, 88131 Lindau}."}
-{"id":"de-05","lang":"de","kind":"mail","text":"Sehr geehrte Damen und Herren, die Sonne scheint, die Bank ist geschlossen, und die Post kommt morgen."}
-{"id":"fr-01","lang":"fr","kind":"mail","text":"Bonjour {person:given|Élodie}, M. {person:surname|Durand} a validé le devis de {org:org|Lefèvre et Associés}."}
-{"id":"fr-02","lang":"fr","kind":"mail","text":"Le projet {project:project|Héron} est confié à {person:full|Camille Moreau} ; {person:initials|CM} présentera jeudi."}
-{"id":"fr-03","lang":"fr","kind":"calendar","text":"Déjeuner avec {person:full|Jean-Baptiste Rousseau} chez {org:org|Banque Martel}"}
-{"id":"fr-04","lang":"fr","kind":"mail","text":"Madame la directrice, la {location:location|Loire} est en crue et l'Été sera long. Cordialement."}
-{"id":"es-01","lang":"es","kind":"mail","text":"Hola {person:given|Lucía}, el Sr. {person:surname|Fernández} firmó con {org:org|Grupo Altamira} ayer."}
-{"id":"es-02","lang":"es","kind":"mail","text":"El proyecto {project:project|Cóndor} depende de {person:full|María José Ortega} y de {person:full|Diego Salazar}."}
-{"id":"es-03","lang":"es","kind":"ocr","text":"Factura para {person:ocr|Luc1a Fernandez}, {location:location|Calle Mayor 12, Sevilla}."}
-{"id":"it-01","lang":"it","kind":"mail","text":"Ciao {person:given|Giulia}, il dott. {person:surname|Bianchi} ha parlato con {org:org|Studio Legale Conti}."}
-{"id":"it-02","lang":"it","kind":"mail","text":"Il progetto {project:project|Airone} passa a {person:full|Marco Esposito} da lunedì."}
-{"id":"nl-01","lang":"nl","kind":"mail","text":"Hoi {person:given|Sanne}, {person:full|Pieter van der Berg} heeft het contract met {org:org|Bakker Logistiek} getekend."}
-{"id":"nl-02","lang":"nl","kind":"mail","text":"Het project {project:project|Reiger} wordt geleid door {person:surname|De Vries}."}
-{"id":"pt-01","lang":"pt","kind":"mail","text":"Olá {person:given|João}, a {person:full|Ana Beatriz Costa} enviou a proposta da {org:org|Construtora Ribeiro}."}
-{"id":"pt-02","lang":"pt","kind":"mail","text":"O projeto {project:project|Garça} começa em junho com {person:surname|Oliveira}."}
-{"id":"ja-01","lang":"ja","kind":"mail","text":"{person:full|渡辺健二}さん、明日の会議に{person:full|佐藤美咲}さんも参加します。{org:org|山田商事}の件です。"}
-{"id":"ja-02","lang":"ja","kind":"mail","text":"{person:surname|渡辺}部長から{project:project|ハヤブサ}計画の資料が届きました。"}
-{"id":"ja-03","lang":"ja","kind":"calendar","text":"{person:surname|佐藤}さんと打ち合わせ（{org:org|東和銀行}）"}
-{"id":"ja-04","lang":"ja","kind":"mail","text":"今日は雨ですが、明日は晴れるそうです。よろしくお願いします。"}
-{"id":"zh-01","lang":"zh","kind":"mail","text":"请与{person:cjk|王小明}开会，讨论{org:org|华信科技}的合同。"}
-{"id":"zh-02","lang":"zh","kind":"mail","text":"{person:full|李静}已经把{project:project|青鸟}项目的预算发给{person:full|陈建国}了。"}
-{"id":"zh-03","lang":"zh","kind":"mail","text":"{person:surname|王}经理明天去{location:location|杭州}出差。"}
-{"id":"zh-04","lang":"zh","kind":"mail","text":"今天天气很好，我们下午三点开会，请准时参加。"}
-{"id":"ko-01","lang":"ko","kind":"mail","text":"{person:full|김민준}님, {org:org|한빛전자}와의 계약서를 {person:full|이서연}님께 보내 주세요."}
-{"id":"ko-02","lang":"ko","kind":"mail","text":"{project:project|두루미} 프로젝트는 {person:surname|박} 팀장이 맡습니다."}
-{"id":"ar-01","lang":"ar","kind":"mail","text":"مرحباً {person:given|ليلى}، أرسل {person:full|خالد العمري} العقد إلى {org:org|شركة النخيل للتجارة} أمس."}
-{"id":"ar-02","lang":"ar","kind":"mail","text":"مشروع {project:project|الصقر} يبدأ الشهر القادم بإشراف {person:full|سارة حداد}."}
-{"id":"ar-03","lang":"ar","kind":"mail","text":"الطقس جميل اليوم، والاجتماع في الساعة الثالثة."}
-{"id":"hi-01","lang":"hi","kind":"mail","text":"नमस्ते {person:given|अनीता}, {person:full|राहुल शर्मा} ने {org:org|सूर्या इंडस्ट्रीज़} का प्रस्ताव भेजा है।"}
-{"id":"hi-02","lang":"hi","kind":"mail","text":"{project:project|गरुड़} परियोजना की ज़िम्मेदारी {person:surname|वर्मा} जी की है।"}
-{"id":"ru-01","lang":"ru","kind":"mail","text":"Здравствуйте, {person:given|Ольга}! {person:full|Дмитрий Соколов} подписал договор с {org:org|ООО «Северный ветер»}."}
-{"id":"ru-02","lang":"ru","kind":"mail","text":"Проект {project:project|Журавль} передан {person:surname|Ивановой}."}
-{"id":"tr-01","lang":"tr","kind":"mail","text":"Merhaba {person:given|Elif}, {person:full|Murat Demir} {org:org|Anadolu Lojistik} ile görüştü."}
-{"id":"tr-02","lang":"tr","kind":"mail","text":"{project:project|Turna} projesi {person:surname|Kaya} Hanım'a devredildi."}
-{"id":"en-16","lang":"en","kind":"file","text":"Taxes/2025/{org:org|Harbor Point CPA} - engagement letter ({person:full|Dana Ruiz}).pdf"}
-{"id":"en-17","lang":"en","kind":"subject","text":"Fwd: offer from {org:org|Vandelay Industries} — thoughts, {person:given|Jo}?"}
-{"id":"en-18","lang":"en","kind":"mail","text":"Spoke to {person:given|Raj} and {person:given|Mei} about {project:project|Atlas}; {person:initials|RS} will draft the RFC."}
-{"id":"en-19","lang":"en","kind":"mail","text":"Your {product:product|Notely Pro} trial ends soon. Upgrade to keep syncing with {product:product|Google Calendar}."}
-{"id":"en-20","lang":"en","kind":"mail","text":"Thanks to everyone at {org:org|St. Brigid's Parish} for the fundraiser, especially {person:full|Fr. Michael O'Neill} and {person:full|Siobhán Kelly}."}
+{"id": "en-01", "lang": "en", "kind": "mail", "text": "Hi {person:given|Dana}, thanks for the notes. I spoke with {person:full|Kenji Watanabe} and he agrees we should move the {project:full|Falcon} rewrite to March."}
+{"id": "en-02", "lang": "en", "kind": "mail", "text": "Per our call, {person:surname|Ruiz} will send the signed lease to {organization:full|Hargrove & Pell LLP} by Friday."}
+{"id": "en-03", "lang": "en", "kind": "mail", "text": "Can you loop in {person:initials|JL} on the {organization:full|Initech} renewal? Also cc {person:honorific|Dr. Okafor}."}
+{"id": "en-04", "lang": "en", "kind": "mail", "text": "Reminder: the {project:full|Bluebird} launch review is Tuesday. {person:full|Priya Raman} will present the budget and {person:full|Tomás Herrera} the timeline."}
+{"id": "en-05", "lang": "en", "kind": "ocr", "text": "Invoice 2291 issued to {person:ocr|Dana Ru1z}, {location:full|14 Wren Street, Portland}. Payable to {organization:full|Globex Corporation}."}
+{"id": "en-06", "lang": "en", "kind": "mail", "text": "Sorry, {person:typing|Kenji Watanbe} asked me to resend the deck. {person:given|Kenji} is out until Monday."}
+{"id": "en-07", "lang": "en", "kind": "subject", "text": "Re: {organization:full|Notely} export for {person:full|Mara Lindqvist}"}
+{"id": "en-08", "lang": "en", "kind": "file", "text": "Projects/{project:full|Orion}/Interview notes - {person:full|Sam Okafor}.docx"}
+{"id": "en-09", "lang": "en", "kind": "calendar", "text": "1:1 {person:given|Dana} / {person:given|Priya} (prep for {organization:full|Acme} QBR)"}
+{"id": "en-10", "lang": "en", "kind": "mail", "text": "May I ask whether Apple pie or Mercury fillings came up at the dentist? Spring is busy, so Friday works. Best, {person:given|Ines}"}
+{"id": "en-11", "lang": "en", "kind": "mail", "text": "{person:surname|Lee} v. {organization:full|Acme Holdings} was settled; {person:honorific|Ms. Patel} drafted the release and {person:initials|K.W.} reviewed it."}
+{"id": "en-12", "lang": "en", "kind": "mail", "text": "We are moving our storage from {product:full|Dropbox} to {product:full|Proton Drive} next quarter, per {person:full|Alex Chen}."}
+{"id": "en-13", "lang": "en", "kind": "ocr", "text": "Patient: {person:ocr|Priya Rarnan}  DOB 1984-03-12  Referred by {person:ocr|Dr. J0hn Lee}, {organization:full|Riverside Clinic}."}
+{"id": "en-14", "lang": "en", "kind": "mail", "text": "{person:given|Will}, {person:given|Grace} and {person:given|Hope} all signed up. {person:given|Grant} approved the grant, and {person:given|Mark} marked it done."}
+{"id": "en-15", "lang": "en", "kind": "mail", "text": "The {project:full|Nightjar} migration is blocked on {organization:full|Northwind Traders}. {person:surname|Lindqvist} owns the follow-up."}
+{"id": "de-01", "lang": "de", "kind": "mail", "text": "Hallo {person:given|Jürgen}, Frau {person:surname|Schäfer} hat das Angebot von {organization:full|Brandt & Söhne GmbH} geprüft."}
+{"id": "de-02", "lang": "de", "kind": "mail", "text": "Das Projekt {project:full|Kranich} startet im Mai; {person:full|Lena Hoffmann} leitet es zusammen mit {person:full|Mehmet Yılmaz}."}
+{"id": "de-03", "lang": "de", "kind": "mail", "text": "Laut {person:surname|Hoffmanns} Notiz wurde der Vertrag mit der {organization:full|Stadtwerke Lindau} verlängert."}
+{"id": "de-04", "lang": "de", "kind": "ocr", "text": "Rechnung an {person:ocr|Jurgen Sch4fer}, {location:full|Lindenstraße 8, 88131 Lindau}."}
+{"id": "de-05", "lang": "de", "kind": "mail", "text": "Sehr geehrte Damen und Herren, die Sonne scheint, die Bank ist geschlossen, und die Post kommt morgen."}
+{"id": "fr-01", "lang": "fr", "kind": "mail", "text": "Bonjour {person:given|Élodie}, M. {person:surname|Durand} a validé le devis de {organization:full|Lefèvre et Associés}."}
+{"id": "fr-02", "lang": "fr", "kind": "mail", "text": "Le projet {project:full|Héron} est confié à {person:full|Camille Moreau} ; {person:initials|CM} présentera jeudi."}
+{"id": "fr-03", "lang": "fr", "kind": "calendar", "text": "Déjeuner avec {person:full|Jean-Baptiste Rousseau} chez {organization:full|Banque Martel}"}
+{"id": "fr-04", "lang": "fr", "kind": "mail", "text": "Madame la directrice, la {location:full|Loire} est en crue et l'Été sera long. Cordialement."}
+{"id": "es-01", "lang": "es", "kind": "mail", "text": "Hola {person:given|Lucía}, el Sr. {person:surname|Fernández} firmó con {organization:full|Grupo Altamira} ayer."}
+{"id": "es-02", "lang": "es", "kind": "mail", "text": "El proyecto {project:full|Cóndor} depende de {person:full|María José Ortega} y de {person:full|Diego Salazar}."}
+{"id": "es-03", "lang": "es", "kind": "ocr", "text": "Factura para {person:ocr|Luc1a Fernandez}, {location:full|Calle Mayor 12, Sevilla}."}
+{"id": "it-01", "lang": "it", "kind": "mail", "text": "Ciao {person:given|Giulia}, il dott. {person:surname|Bianchi} ha parlato con {organization:full|Studio Legale Conti}."}
+{"id": "it-02", "lang": "it", "kind": "mail", "text": "Il progetto {project:full|Airone} passa a {person:full|Marco Esposito} da lunedì."}
+{"id": "nl-01", "lang": "nl", "kind": "mail", "text": "Hoi {person:given|Sanne}, {person:full|Pieter van der Berg} heeft het contract met {organization:full|Bakker Logistiek} getekend."}
+{"id": "nl-02", "lang": "nl", "kind": "mail", "text": "Het project {project:full|Reiger} wordt geleid door {person:surname|De Vries}."}
+{"id": "pt-01", "lang": "pt", "kind": "mail", "text": "Olá {person:given|João}, a {person:full|Ana Beatriz Costa} enviou a proposta da {organization:full|Construtora Ribeiro}."}
+{"id": "pt-02", "lang": "pt", "kind": "mail", "text": "O projeto {project:full|Garça} começa em junho com {person:surname|Oliveira}."}
+{"id": "ja-01", "lang": "ja", "kind": "mail", "text": "{person:full|渡辺健二}さん、明日の会議に{person:full|佐藤美咲}さんも参加します。{organization:full|山田商事}の件です。"}
+{"id": "ja-02", "lang": "ja", "kind": "mail", "text": "{person:surname|渡辺}部長から{project:full|ハヤブサ}計画の資料が届きました。"}
+{"id": "ja-03", "lang": "ja", "kind": "calendar", "text": "{person:surname|佐藤}さんと打ち合わせ（{organization:full|東和銀行}）"}
+{"id": "ja-04", "lang": "ja", "kind": "mail", "text": "今日は雨ですが、明日は晴れるそうです。よろしくお願いします。"}
+{"id": "zh-01", "lang": "zh", "kind": "mail", "text": "请与{person:cjk|王小明}开会，讨论{organization:full|华信科技}的合同。"}
+{"id": "zh-02", "lang": "zh", "kind": "mail", "text": "{person:full|李静}已经把{project:full|青鸟}项目的预算发给{person:full|陈建国}了。"}
+{"id": "zh-03", "lang": "zh", "kind": "mail", "text": "{person:surname|王}经理明天去{location:full|杭州}出差。"}
+{"id": "zh-04", "lang": "zh", "kind": "mail", "text": "今天天气很好，我们下午三点开会，请准时参加。"}
+{"id": "ko-01", "lang": "ko", "kind": "mail", "text": "{person:full|김민준}님, {organization:full|한빛전자}와의 계약서를 {person:full|이서연}님께 보내 주세요."}
+{"id": "ko-02", "lang": "ko", "kind": "mail", "text": "{project:full|두루미} 프로젝트는 {person:surname|박} 팀장이 맡습니다."}
+{"id": "ar-01", "lang": "ar", "kind": "mail", "text": "مرحباً {person:given|ليلى}، أرسل {person:full|خالد العمري} العقد إلى {organization:full|شركة النخيل للتجارة} أمس."}
+{"id": "ar-02", "lang": "ar", "kind": "mail", "text": "مشروع {project:full|الصقر} يبدأ الشهر القادم بإشراف {person:full|سارة حداد}."}
+{"id": "ar-03", "lang": "ar", "kind": "mail", "text": "الطقس جميل اليوم، والاجتماع في الساعة الثالثة."}
+{"id": "hi-01", "lang": "hi", "kind": "mail", "text": "नमस्ते {person:given|अनीता}, {person:full|राहुल शर्मा} ने {organization:full|सूर्या इंडस्ट्रीज़} का प्रस्ताव भेजा है।"}
+{"id": "hi-02", "lang": "hi", "kind": "mail", "text": "{project:full|गरुड़} परियोजना की ज़िम्मेदारी {person:surname|वर्मा} जी की है।"}
+{"id": "ru-01", "lang": "ru", "kind": "mail", "text": "Здравствуйте, {person:given|Ольга}! {person:full|Дмитрий Соколов} подписал договор с {organization:full|ООО «Северный ветер»}."}
+{"id": "ru-02", "lang": "ru", "kind": "mail", "text": "Проект {project:full|Журавль} передан {person:surname|Ивановой}."}
+{"id": "tr-01", "lang": "tr", "kind": "mail", "text": "Merhaba {person:given|Elif}, {person:full|Murat Demir} {organization:full|Anadolu Lojistik} ile görüştü."}
+{"id": "tr-02", "lang": "tr", "kind": "mail", "text": "{project:full|Turna} projesi {person:surname|Kaya} Hanım'a devredildi."}
+{"id": "en-16", "lang": "en", "kind": "file", "text": "Taxes/2025/{organization:full|Harbor Point CPA} - engagement letter ({person:full|Dana Ruiz}).pdf"}
+{"id": "en-17", "lang": "en", "kind": "subject", "text": "Fwd: offer from {organization:full|Vandelay Industries} — thoughts, {person:given|Jo}?"}
+{"id": "en-18", "lang": "en", "kind": "mail", "text": "Spoke to {person:given|Raj} and {person:given|Mei} about {project:full|Atlas}; {person:initials|RS} will draft the RFC."}
+{"id": "en-19", "lang": "en", "kind": "mail", "text": "Your {product:full|Notely Pro} trial ends soon. Upgrade to keep syncing with {product:full|Google Calendar}."}
+{"id": "en-20", "lang": "en", "kind": "mail", "text": "Thanks to everyone at {organization:full|St. Brigid's Parish} for the fundraiser, especially {person:full|Fr. Michael O'Neill} and {person:full|Siobhán Kelly}."}
+{"id": "d2-01", "lang": "en", "kind": "mail", "from": "Dana Ruiz", "text": "Notes: {person:full-in-headers|Dana Ruiz} said yes."}
+{"id": "d2-02", "lang": "en", "kind": "mail", "from": "Kenji Watanabe", "text": "Notes: {person:full-in-headers|Kenji Watanabe} said yes."}
+{"id": "d2-03", "lang": "en", "kind": "mail", "text": "Notes: {person:full-process-only|Priya Raman} said yes."}
+{"id": "d2-04", "lang": "en", "kind": "mail", "from": "Dana Ruiz", "text": "Notes: {person:surname|Ruiz=Dana Ruiz} said yes."}
+{"id": "d2-05", "lang": "en", "kind": "mail", "from": "Kenji Watanabe", "text": "Notes: {person:surname|Watanabe=Kenji Watanabe} said yes."}
+{"id": "d2-06", "lang": "en", "kind": "mail", "text": "Notes: {person:surname|Raman=Priya Raman} said yes."}
+{"id": "d2-07", "lang": "en", "kind": "mail", "from": "Kenji Watanabe", "text": "Notes: {person:surname-honorific|Dr. Watanabe=Kenji Watanabe} said yes."}
+{"id": "d2-08", "lang": "en", "kind": "mail", "from": "John Lee", "text": "Notes: {person:surname-shared|Lee=John Lee} said yes."}
+{"id": "d2-09", "lang": "en", "kind": "mail", "from": "Dana Ruiz", "text": "Notes: {person:given|Dana=Dana Ruiz} said yes."}
+{"id": "d2-10", "lang": "en", "kind": "mail", "from": "Kenji Watanabe", "text": "Notes: {person:given|Kenji=Kenji Watanabe} said yes."}
+{"id": "d2-11", "lang": "en", "kind": "mail", "from": "Dana Ruiz", "text": "Notes: {person:middle-initial|Dana M. Ruiz=Dana Ruiz} said yes."}
+{"id": "d3-01", "lang": "en", "kind": "mail", "from": "Dana Ruiz", "text": "Notes: {person:initials|DR=Dana Ruiz} said yes."}
+{"id": "d3-02", "lang": "en", "kind": "mail", "from": "Kenji Watanabe", "text": "Notes: {person:initials|KW=Kenji Watanabe} said yes."}
+{"id": "d3-03", "lang": "en", "kind": "mail", "from": "Kenji Watanabe", "text": "Notes: {person:initials-dotted|K.W.=Kenji Watanabe} said yes."}
+{"id": "d4-01", "lang": "en", "kind": "mail", "from": "Dana Ruiz", "text": "Notes: {person:typing|Dnaa Ruiz=Dana Ruiz} said yes."}
+{"id": "d4-02", "lang": "en", "kind": "mail", "from": "Kenji Watanabe", "text": "Notes: {person:typing|Kenji Watanbe=Kenji Watanabe} said yes."}
+{"id": "d4-03", "lang": "en", "kind": "mail", "from": "Dana Ruiz", "text": "Notes: {person:ocr|Dana Ru1z=Dana Ruiz} said yes."}
+{"id": "d4-04", "lang": "en", "kind": "mail", "from": "Kenji Watanabe", "text": "Notes: {person:ocr|Kenj1 Watanabe=Kenji Watanabe} said yes."}
+{"id": "d4-05", "lang": "en", "kind": "mail", "text": "Notes: {person:ocr|Priya Rarnan=Priya Raman} said yes."}
+{"id": "b25-01", "lang": "zh", "kind": "mail", "from": "王小明", "text": "Notes: 与{person:cjk|王小明}开会 said yes."}
+{"id": "d7-01", "lang": "en", "kind": "mail", "from": "Acme Billing", "text": "Notes: {organization:sends-mail|Acme Billing} said yes."}
+{"id": "d7-02", "lang": "en", "kind": "mail", "from": "Notely", "text": "Notes: {organization:sends-mail|Notely} said yes."}
+{"id": "d7-03", "lang": "en", "kind": "mail", "from": "Acme Billing", "text": "Notes: {organization:short|Acme=Acme Billing} said yes."}
+{"id": "d7-04", "lang": "en", "kind": "mail", "text": "Notes: {organization:never-in-mail|Globex Corporation} said yes."}
+{"id": "d7-05", "lang": "en", "kind": "mail", "text": "Notes: {organization:never-in-mail|Initech LLC} said yes."}
+{"id": "d5-01", "lang": "en", "kind": "mail", "text": "Notes: the {project:in-text|Falcon} rewrite said yes."}
+{"id": "d5-02", "lang": "en", "kind": "mail", "text": "Notes: {project:in-text|Bluebird} launch said yes."}
+{"id": "l70-01", "lang": "en", "kind": "mail", "text": "Notes: {link:http|https://example.com/reset?token=Zx81secretToken} said yes."}
+{"id": "l70-02", "lang": "en", "kind": "mail", "text": "Notes: {link:no-http|webcal://calendar.proton.me/api/calendar/v1/url/AbCdEf123/calendar.ics?CacheKey=k9&PassphraseKey=SeCrEtPaSs} said yes."}
+{"id": "l70-03", "lang": "en", "kind": "mail", "text": "Notes: {link:no-http|www.example.com/reset?token=Zx81secretToken} said yes."}
+{"id": "l70-04", "lang": "en", "kind": "mail", "text": "Notes: {link:no-http|zoom.us/j/81234567890?pwd=SeCrEtPwd} said yes."}
+{"id": "a70-01", "lang": "en", "kind": "mail", "text": "Notes: {email:ascii|dana.ruiz@ruiz-events.example} said yes."}
+{"id": "a70-02", "lang": "de", "kind": "mail", "text": "Notes: {email:non-ascii|jürgen.müller@bücher.de} said yes."}
+{"id": "a70-03", "lang": "zh", "kind": "mail", "text": "Notes: {email:non-ascii|张伟@例子.中国} said yes."}
+{"id": "en-21", "lang": "en", "kind": "mail", "text": "Please send the signed NDA to {person:full|Harriet Oyelaran-Smith} at {organization:full|Oyelaran Smith Chambers}; {person:possessive|Harriet's=Harriet Oyelaran-Smith} assistant, {person:given|Tobias}, is cc'd."}
+{"id": "en-22", "lang": "en", "kind": "mail", "text": "ATTN: {person:caps|MARTA KOWALCZYK} — your parcel from {organization:full|Northgate Supply Co.} is at the depot."}
+{"id": "en-23", "lang": "en", "kind": "mail", "text": "{person:full|Omar Haddad} will chair. {person:surname|Haddad=Omar Haddad} asked that the {project:full|Kestrel} budget be circulated by {person:given|Nia}."}
+{"id": "en-24", "lang": "en", "kind": "mail", "text": "Best regards,\n{person:full|Leila Nasser}\nSenior Counsel, {organization:full|Pembrook & Vale}\n{location:full|22 Harbour Road, Bristol}"}
+{"id": "en-25", "lang": "en", "kind": "mail", "text": "The smoke detectors in the hallway need new batteries, and the caulk clear we ordered is back-ordered until May."}
+{"id": "en-26", "lang": "en", "kind": "mail", "text": "Will you be at the march on Saturday? Bring the drill, the level and a tube of clear silicone."}
+{"id": "en-27", "lang": "en", "kind": "mail", "text": "We compared {product:full|Notion}, {product:full|Obsidian} and {product:full|Apple Notes}; {person:given|Femi} prefers {product:full|Obsidian} for the {project:full|Lantern} docs."}
+{"id": "en-28", "lang": "en", "kind": "mail", "text": "Flights to {location:full|Reykjavík} are cheap in March; {person:full|Ines Carvalho} suggested the hotel near {location:full|Lake Tjörnin}."}
+{"id": "en-29", "lang": "en", "kind": "calendar", "text": "Dentist — {person:honorific|Dr. Achterberg} ({organization:full|Brightsmile Dental}), {location:full|Elm Street}"}
+{"id": "en-30", "lang": "en", "kind": "file", "text": "Clients/{organization:full|Harbor Point CPA}/{person:full|Rosa Delgado} - W-9.pdf"}
+{"id": "en-31", "lang": "en", "kind": "ocr", "text": "SHIP TO: {person:ocr|R0sa De1gado}, {location:full|9 Cannery Row, Monterey CA}  ORDER #44812  CARRIER: {organization:full|Pacific Freight Lines}"}
+{"id": "en-32", "lang": "en", "kind": "mail", "text": "{person:full|Jean-Luc D'Ambrosio} and {person:full|Mary-Kate Ó Briain} both RSVP'd; {person:initials|JLD=Jean-Luc D'Ambrosio} will bring slides."}
+{"id": "en-33", "lang": "en", "kind": "subject", "text": "Invoice 0199 — {organization:full|Tallgrass Landscaping} — {person:full|Priya Raman}"}
+{"id": "en-34", "lang": "en", "kind": "mail", "text": "fyi {person:lower|dana} said the {project:full|Falcon} cutover slipped; {person:surname|Okafor} knows."}
+{"id": "en-35", "lang": "en", "kind": "mail", "text": "Spring Sale: Save on Garden Furniture, Outdoor Lighting and Patio Heaters. Offer ends Sunday."}
+{"id": "en-36", "lang": "en", "kind": "mail", "text": "{organization:full|Hargrove & Pell LLP} ({organization:short|H&P=Hargrove & Pell LLP}) sent the retainer; {person:surname|Pell} signed for the firm."}
+{"id": "en-37", "lang": "en", "kind": "mail", "text": "Meet at {location:full|Union Station}, then the office at {location:full|450 Spear Street, San Francisco}."}
+{"id": "en-38", "lang": "en", "kind": "mail", "text": "{project:full|Project Nightjar} ships on {product:full|Kubernetes}; {person:full|Wen Zhao} owns the {product:full|Terraform} modules."}
+{"id": "en-39", "lang": "en", "kind": "mail", "text": "Your order of two smoke detectors and one tube of caulk clear has shipped. Track it in the {product:full|ParcelPal} app."}
+{"id": "en-40", "lang": "en", "kind": "mail", "text": "Thanks, {person:given|Grace}. The grant from {organization:full|The Wren Foundation} covers {project:full|Atlas}; {person:full|Mark Ellery} will mark the milestones."}
+{"id": "de-06", "lang": "de", "kind": "mail", "text": "Guten Tag {person:honorific|Herr Dr. Albrecht}, die {organization:full|Müller & Weber Steuerberatung} hat die Unterlagen für {person:full|Katrin Albrecht} erhalten."}
+{"id": "de-07", "lang": "de", "kind": "mail", "text": "Die Bank hat am Montag geschlossen; der Flug nach {location:full|Berlin} ist gestrichen, und das Wetter bleibt kalt."}
+{"id": "de-08", "lang": "de", "kind": "mail", "text": "{person:genitive|Katrin Albrechts=Katrin Albrecht} Vortrag über das Projekt {project:full|Kranich} war gut besucht."}
+{"id": "de-09", "lang": "de", "kind": "file", "text": "Verträge/{organization:full|Stadtwerke Lindau}/Kündigung {person:full|Jürgen Schäfer}.pdf"}
+{"id": "de-10", "lang": "de", "kind": "mail", "text": "Der Rauchmelder im Flur piept, und die Fugenmasse ist bestellt. Schönes Wochenende!"}
+{"id": "fr-05", "lang": "fr", "kind": "mail", "text": "{person:full|Aïcha Benali} de {organization:full|Cabinet Lefèvre} confirme le rendez-vous à {location:full|Lyon} ; {person:honorific|Mme Benali=Aïcha Benali} apportera le dossier {project:full|Héron}."}
+{"id": "fr-06", "lang": "fr", "kind": "mail", "text": "Le printemps arrive, la mer est calme et le marché du samedi est ouvert."}
+{"id": "es-04", "lang": "es", "kind": "mail", "text": "La {organization:full|Clínica Santa Lucía} envió el informe de {person:full|Lucía Fernández}; la {person:honorific|Dra. Ortega} lo revisará en {location:full|Madrid}."}
+{"id": "es-05", "lang": "es", "kind": "mail", "text": "El sol brilla, el banco está cerrado y la reunión es a las tres."}
+{"id": "it-03", "lang": "it", "kind": "mail", "text": "{person:full|Chiara Romano} ({organization:full|Studio Romano}) ha spostato l'incontro a {location:full|Torino}."}
+{"id": "nl-03", "lang": "nl", "kind": "mail", "text": "{person:full|Anouk de Groot} van {organization:full|Gemeente Utrecht} belt morgen over project {project:full|Reiger}."}
+{"id": "pt-03", "lang": "pt", "kind": "mail", "text": "{person:full|Tiago Nunes} da {organization:full|Farmácia Central} confirmou a entrega em {location:full|Porto}."}
+{"id": "pl-01", "lang": "pl", "kind": "mail", "text": "Dzień dobry {person:given|Agnieszko}, pan {person:surname|Nowak} z {organization:full|Zakłady Mięsne Lubicz} przesłał umowę."}
+{"id": "pl-02", "lang": "pl", "kind": "mail", "text": "Projekt {project:full|Żuraw} prowadzi {person:full|Katarzyna Wiśniewska} z {location:full|Gdańska}."}
+{"id": "sv-01", "lang": "sv", "kind": "mail", "text": "Hej {person:given|Erik}, {person:full|Astrid Lindqvist-Berg} på {organization:full|Nordlund Bygg AB} har skickat offerten."}
+{"id": "sv-02", "lang": "sv", "kind": "mail", "text": "Det regnar i dag, men i morgon blir det sol. Vi ses klockan tre."}
+{"id": "el-01", "lang": "el", "kind": "mail", "text": "Καλημέρα {person:given|Ελένη}, ο κύριος {person:surname|Παπαδόπουλος} από την {organization:full|Αιγαίο Ναυτιλιακή} έστειλε το συμβόλαιο."}
+{"id": "uk-01", "lang": "uk", "kind": "mail", "text": "Доброго дня, {person:given|Оксано}! {person:full|Андрій Коваленко} з {organization:full|ТОВ «Дніпро Буд»} підписав договір щодо проєкту {project:full|Лелека}."}
+{"id": "ru-03", "lang": "ru", "kind": "mail", "text": "Сегодня холодно, встреча перенесена на четверг."}
+{"id": "vi-01", "lang": "vi", "kind": "mail", "text": "Chào {person:given|Linh}, anh {person:full|Nguyễn Văn Thành} từ {organization:full|Công ty Hoàng Long} đã gửi hợp đồng cho dự án {project:full|Sếu Đầu Đỏ}."}
+{"id": "id-01", "lang": "id", "kind": "mail", "text": "Halo {person:given|Dewi}, Bapak {person:full|Budi Santoso} dari {organization:full|PT Nusantara Logistik} sudah mengirim proposal untuk proyek {project:full|Cendrawasih}."}
+{"id": "fa-01", "lang": "fa", "kind": "mail", "text": "سلام {person:given|مریم}، آقای {person:full|رضا کریمی} از {organization:full|شرکت پارس انرژی} قرارداد پروژه {project:full|سیمرغ} را فرستاد."}
+{"id": "he-01", "lang": "he", "kind": "mail", "text": "שלום {person:given|נועה}, {person:full|דוד לוי} מ{organization:full|חברת כרמל טכנולוגיות} שלח את החוזה לפרויקט {project:full|עגור}."}
+{"id": "cs-01", "lang": "cs", "kind": "mail", "text": "Dobrý den, {person:full|Petra Dvořáková} z {organization:full|Pražské vodovody} potvrdila schůzku v {location:full|Brně}."}
+{"id": "fi-01", "lang": "fi", "kind": "mail", "text": "Hei {person:given|Aino}, {person:full|Mikko Virtanen} ({organization:full|Pohjola Rakennus Oy}) lähetti tarjouksen projektista {project:full|Kurki}."}
+{"id": "hu-01", "lang": "hu", "kind": "mail", "text": "Kedves {person:given|Eszter}, {person:full|Kovács Péter} a {organization:full|Dunamenti Kft.} részéről elküldte a {project:full|Daru} projekt tervét."}
+{"id": "ro-01", "lang": "ro", "kind": "mail", "text": "Bună {person:given|Ioana}, domnul {person:surname|Popescu} de la {organization:full|Transilvania Construct SRL} a trimis contractul."}
+{"id": "tr-03", "lang": "tr", "kind": "mail", "text": "Hava bugün güzel, toplantı saat üçte."}
+{"id": "sw-01", "lang": "sw", "kind": "mail", "text": "Habari {person:given|Amina}, Bw. {person:full|Juma Mwangi} kutoka {organization:full|Kampuni ya Kilimanjaro Safaris} ametuma mkataba wa mradi wa {project:full|Korongo}."}
+{"id": "th-01", "lang": "th", "kind": "mail", "text": "สวัสดีคุณ{person:given|สมชาย} คุณ{person:full|วิภา ศรีสุข} จาก{organization:full|บริษัท สยามพัฒนา จำกัด} ส่งสัญญาโครงการ{project:full|นกกระเรียน}มาแล้ว"}
+{"id": "ja-05", "lang": "ja", "kind": "mail", "text": "{person:full|マイケル・ブラウン}さんが{product:full|スラック}で{project:full|ツバメ}計画について連絡しました。"}
+{"id": "ko-03", "lang": "ko", "kind": "mail", "text": "오늘은 날씨가 좋네요. 내일 세 시에 뵙겠습니다."}
+{"id": "zh-05", "lang": "zh", "kind": "mail", "text": "{person:full|张伟}建议把文件从{product:full|百度网盘}搬到{product:full|Proton Drive}，下周在{location:full|深圳}开会。"}
+{"id": "ar-04", "lang": "ar", "kind": "mail", "text": "سيعقد الاجتماع في {location:full|دبي} بحضور {person:full|نورا الفهد} من {organization:full|مجموعة الخليج}."}
+{"id": "hi-03", "lang": "hi", "kind": "mail", "text": "{person:full|प्रिया रमन} कल {location:full|बेंगलुरु} जा रही हैं; {organization:full|आर्यन इंफ्रा} का प्रस्ताव तैयार है।"}

@@ -430,6 +430,7 @@ impl Server {
         let Some(keys) = session.keys.clone() else {
             return Ok(fault(&Fault::PrivacyKeyMissing, self.mode));
         };
+        let model = session.model.clone();
         let result = tokio::time::timeout_at(
             deadline,
             answered(async {
@@ -459,12 +460,15 @@ impl Server {
             you: self.app.you(),
             names: &names,
             incomplete: &incomplete,
+            model: model.as_deref(),
+            deadline: Some(deadline.into_std()),
         };
         // A panic in a stage fails the call like any other error (R13).
         let out = std::panic::catch_unwind(AssertUnwindSafe(|| pipeline::run(value, &keys, &ctx)));
         Ok(match out {
             Ok(Ok(v)) => CallToolResult::success(vec![ContentBlock::text(v.to_string())]),
             Ok(Err(PipelineError::TooLarge)) => fault(&Fault::TooLarge, self.mode),
+            Ok(Err(PipelineError::Timeout)) => fault(&Fault::Timeout, self.mode),
             _ => fault(&Fault::PipelineFailed, self.mode),
         })
     }
@@ -1056,6 +1060,15 @@ impl ServerHandler for Server {
 }
 
 pub async fn run(app: Arc<App>) -> Result<()> {
+    // The name model loads once per process (RFC Q23): started here in
+    // aliases mode, so the first call waits for the rest of it at most.
+    if app.privacy.started() == Some(Mode::Aliases) {
+        let app = Arc::clone(&app);
+        std::thread::spawn(move || {
+            // A failure is reported by the first call, and by `doctor`.
+            app.privacy.model().ok();
+        });
+    }
     // Expired downloads also go when no tool is called. The interval counts
     // only awake time, so after the Mac wakes they go within a minute.
     tokio::spawn(async {

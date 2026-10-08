@@ -55,6 +55,9 @@ pub enum Fault {
     PrivacyModeChanged,
     PrivacyKeyMissing,
     PrivacyKeyUnreadable,
+    /// Aliases mode, and the name model is not installed, fails its hash
+    /// or its test sentence, or does not load (RFC Q23, M5.2).
+    ModelUnavailable,
     PipelineFailed,
     Internal,
 }
@@ -84,6 +87,7 @@ impl Fault {
             Self::PrivacyModeChanged => "privacy_mode_changed",
             Self::PrivacyKeyMissing => "privacy_key_missing",
             Self::PrivacyKeyUnreadable => "privacy_key_unreadable",
+            Self::ModelUnavailable => "name_model_unavailable",
             Self::PipelineFailed => "pipeline_failed",
             Self::Internal => "internal",
         }
@@ -123,6 +127,14 @@ impl Fault {
             Self::PrivacyKeyUnreadable => {
                 "The privacy key cannot be read; the user can run `protonctl doctor`.".into()
             }
+            Self::ModelUnavailable => format!(
+                "The name model is not installed, or does not work: {} must hold otter.onnx and tokenizer.json; the user can run `protonctl doctor`.",
+                if cfg!(target_os = "macos") {
+                    "~/Library/Application Support/protonctl/model"
+                } else {
+                    "$XDG_DATA_HOME/protonctl/model (default ~/.local/share/protonctl/model)"
+                }
+            ),
             Self::PipelineFailed => {
                 "protonctl could not tokenize this result, so it returns nothing.".into()
             }

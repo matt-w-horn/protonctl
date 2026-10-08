@@ -127,6 +127,10 @@ pub fn cache_dir() -> PathBuf {
     home().join("Library/Caches/protonctl")
 }
 
+pub fn data_dir() -> PathBuf {
+    home().join("Library/Application Support/protonctl")
+}
+
 #[expect(
     clippy::unnecessary_wraps,
     reason = "Linux has no such place, and both systems share this signature"

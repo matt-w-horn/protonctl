@@ -35,10 +35,14 @@ pub enum EntityType {
     Secret,
     NationalId,
     Account,
+    /// A project's name, found by the model (Phase 5, D5).
+    Project,
+    /// A product's name, found by the model (Phase 5, D7).
+    Product,
 }
 
 impl EntityType {
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 15] = [
         Self::Person,
         Self::Organization,
         Self::Location,
@@ -52,6 +56,8 @@ impl EntityType {
         Self::Secret,
         Self::NationalId,
         Self::Account,
+        Self::Project,
+        Self::Product,
     ];
 
     pub fn tag(self) -> u8 {
@@ -69,6 +75,8 @@ impl EntityType {
             Self::Secret => 0x0C,
             Self::NationalId => 0x0D,
             Self::Account => 0x0E,
+            Self::Project => 0x0F,
+            Self::Product => 0x10,
         }
     }
 
@@ -77,10 +85,16 @@ impl EntityType {
     }
 
     /// The alias's class: one for every kind of name, so a detector that
-    /// retypes a name keeps its alias (RFC Q19).
+    /// retypes a name keeps its alias (RFC Q19). Projects and products
+    /// share it (Q23): the dictionary types a sender "Notely" an
+    /// organization where the model types it a product.
     pub fn class(self) -> AliasClass {
         match self {
-            Self::Person | Self::Organization | Self::Location => AliasClass::Name,
+            Self::Person
+            | Self::Organization
+            | Self::Location
+            | Self::Project
+            | Self::Product => AliasClass::Name,
             other => AliasClass::Of(other),
         }
     }
@@ -363,7 +377,9 @@ mod tests {
                 "ip",
                 "secret",
                 "national_id",
-                "account"
+                "account",
+                "name",
+                "name"
             ]
         );
     }

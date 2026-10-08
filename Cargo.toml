@@ -34,6 +34,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 strum = { version = "0.27", features = ["derive"] }
 tempfile = "3"
+# The name model (RFC Q23, M5.2): Otter's tokenizer, without the crate's
+# HTTP features (R3), and tract, a pure-Rust ONNX runtime, with its
+# multithreaded matrix multiply.
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }
+tract-linalg = { version = "0.23.8", features = ["multithread-mm"] }
+tract-onnx = "0.23.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-std", "io-util", "net", "signal", "sync", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 toml = "0.9"
@@ -69,6 +75,28 @@ tokio = { version = "1", features = ["test-util"] }
 # The installed binary is a release build; overflow panics there instead of
 # wrapping silently, as it already does in debug builds and tests.
 overflow-checks = true
+
+# The name model's runtime, built optimized in `cargo test` too: a debug
+# build of tract takes minutes over one window, and its debug-only check of
+# each node's output shape rejects this graph's broadcast `Where` (the
+# logits still match PyTorch's, `the_runtime_gives_pytorch_s_logits`).
+[profile.dev.package.tract-core]
+opt-level = 3
+debug-assertions = false
+[profile.dev.package.tract-linalg]
+opt-level = 3
+debug-assertions = false
+[profile.dev.package.tract-data]
+opt-level = 3
+debug-assertions = false
+[profile.dev.package.tract-onnx]
+opt-level = 3
+debug-assertions = false
+[profile.dev.package.tract-hir]
+opt-level = 3
+debug-assertions = false
+[profile.dev.package.tokenizers]
+opt-level = 3
 
 # Lint table (tested 2026-10-03), plus print_stdout for a stdio MCP server.
 # Overrides are #[expect(lint, reason = "...")] at the site.

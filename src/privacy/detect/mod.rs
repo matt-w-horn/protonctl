@@ -1,8 +1,9 @@
 //! Detectors find mentions in text (RFC section 6, Pipeline step 3): regex
-//! with validators, and the dictionary of names the result's headers and
-//! the mailbox hold. A model, Otter (RFC Q23), joins them in Phase 5.
+//! with validators, the dictionary of names the result's headers and the
+//! mailbox hold, and one model, Otter (RFC Q23), for names in no header.
 
 pub mod dict;
+pub mod model;
 pub mod pattern;
 
 use super::ident::{Algorithm, EntityType};
@@ -21,12 +22,15 @@ pub enum Kind {
 
 /// A detector, as `detectors` names it. The order of the variants is the
 /// tie order: of two overlapping mentions of equal length, the one found by
-/// the earlier detector wins.
+/// the earlier detector wins. The model comes last: it runs after the
+/// dictionary, which knows a name's type from a header, and finds only
+/// what neither of the others claimed (`add_model`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Detector {
     Dictionary,
     Regex,
+    Model,
 }
 
 /// What a mention stands for (RFC section 6, Canonical values): the value
@@ -76,6 +80,20 @@ pub fn settle(mut found: Vec<Mention>) -> Vec<Mention> {
     }
     kept.sort_by_key(|m| m.start);
     kept
+}
+
+/// Add the model's mentions to those the patterns and the dictionary
+/// found, leaving out any that overlaps one of theirs: the dictionary
+/// knows a name's type and its full form from a header, and a pattern's
+/// value is one the model has no label for, so each keeps what it found
+/// and the model adds names in no header (RFC Q23).
+pub fn add_model(found: &mut Vec<Mention>, model: Vec<Mention>) {
+    let taken: Vec<(usize, usize)> = found.iter().map(|m| (m.start, m.end)).collect();
+    found.extend(
+        model
+            .into_iter()
+            .filter(|m| taken.iter().all(|&(s, e)| m.end <= s || m.start >= e)),
+    );
 }
 
 /// How far either side of a cut `around` looks: more than any mention

@@ -1,7 +1,7 @@
 //! The privacy setting (RFC R26) and aliases mode (section 6). `Privacy`
-//! holds the mode the server started in and the key; `check()` runs before
-//! every call, in both modes, and the pipeline rewrites every aliases-mode
-//! result before it leaves (R13).
+//! holds the mode the server started in, the key and the name model;
+//! `check()` runs before every call, in both modes, and the pipeline
+//! rewrites every aliases-mode result before it leaves (R13).
 
 pub mod canon;
 pub mod detect;
@@ -14,11 +14,12 @@ pub mod key;
 pub mod pipeline;
 pub mod words;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Result, bail};
 
+use detect::model::{LoadError, Model};
 pub use error::Fault;
 use key::{KeySource, KeyWatch, Keys};
 
@@ -74,12 +75,33 @@ pub fn store_mode(mode: Mode) -> Result<()> {
     secret::set_with_comment(&Account::PrivacyMode, &value, mode.as_str())
 }
 
+/// Where the name model comes from (RFC Q23): its folder, or in tests
+/// none.
+pub trait ModelSource: Send + Sync {
+    /// The model, loaded once per process. `Ok(None)` only in tests: the
+    /// pipeline then runs the patterns and the dictionary alone, and
+    /// `detectors` says so.
+    fn load(&self) -> Result<Option<Arc<Model>>, LoadError>;
+}
+
+/// The model in `detect::model::dir()`, checked and tested on load.
+pub struct StoredModel;
+
+impl ModelSource for StoredModel {
+    fn load(&self) -> Result<Option<Arc<Model>>, LoadError> {
+        Model::load().map(|m| Some(Arc::new(m)))
+    }
+}
+
 /// One call's view: the mode, and in aliases mode the keys as they were
-/// when the call began, so a rotation never changes keys mid-call.
+/// when the call began, so a rotation never changes keys mid-call, and
+/// the name model.
 #[derive(Clone, Debug)]
 pub struct Session {
     pub mode: Mode,
     pub keys: Option<Arc<Keys>>,
+    /// `None` in off mode, and in tests that run without a model.
+    pub model: Option<Arc<Model>>,
 }
 
 impl Session {
@@ -97,22 +119,57 @@ pub struct Privacy {
     refusing: AtomicBool,
     source: Box<dyn ModeSource>,
     keys: KeyWatch,
+    model_source: Box<dyn ModelSource>,
+    /// The model, loaded on the first aliases-mode call and kept; a load
+    /// that failed stays failed until the process restarts, as a mode
+    /// change does (R26), so no call reads the files again.
+    model: OnceLock<Result<Option<Arc<Model>>, String>>,
 }
 
 impl Privacy {
+    /// With no model: the pipeline tests that need one pass it to the
+    /// pipeline themselves.
+    #[cfg(test)]
     pub fn new(source: Box<dyn ModeSource>, keys: Box<dyn KeySource>) -> Self {
+        Self::with_model(source, keys, Box::new(tests::NoModel))
+    }
+
+    pub fn with_model(
+        source: Box<dyn ModeSource>,
+        keys: Box<dyn KeySource>,
+        model_source: Box<dyn ModelSource>,
+    ) -> Self {
         let started = source.read().map_err(|e| format!("{e:#}"));
         Self {
             started,
             refusing: AtomicBool::new(false),
             source,
             keys: KeyWatch::new(keys),
+            model_source,
+            model: OnceLock::new(),
         }
     }
 
     /// The secret store's mode and key.
     pub fn stored() -> Self {
-        Self::new(Box::new(StoredMode), Box::new(key::StoredKey))
+        Self::with_model(
+            Box::new(StoredMode),
+            Box::new(key::StoredKey),
+            Box::new(StoredModel),
+        )
+    }
+
+    /// The name model, loaded on first use; `serve` calls this at start
+    /// in aliases mode so the first call does not wait for it.
+    pub fn model(&self) -> Result<Option<Arc<Model>>, Fault> {
+        #[expect(
+            clippy::map_err_ignore,
+            reason = "R13: the cause names the model's path; `doctor` shows it, a fault does not"
+        )]
+        self.model
+            .get_or_init(|| self.model_source.load().map_err(|e| e.to_string()))
+            .clone()
+            .map_err(|_| Fault::ModelUnavailable)
     }
 
     /// The mode this process started in, as `get_status` and the tool list
@@ -149,14 +206,29 @@ impl Privacy {
             Some(Mode::Off) => Ok(Session {
                 mode: Mode::Off,
                 keys: None,
+                model: None,
             }),
             Some(Mode::Aliases) => match self.keys.current() {
                 Ok(Some(keys)) => Ok(Session {
                     mode: Mode::Aliases,
                     keys: Some(keys),
+                    // Without a working model every call is refused (R13).
+                    model: self.model()?,
                 }),
                 Ok(None) => Err(Fault::PrivacyKeyMissing),
                 Err(_) => Err(Fault::PrivacyKeyUnreadable),
+            },
+        }
+    }
+
+    /// The model for `doctor`, in aliases mode: where it loaded from, or
+    /// why it did not, with the path a fault leaves out.
+    pub fn model_check(&self) -> anyhow::Result<String> {
+        match self.model() {
+            Ok(_) => Ok(format!("loaded from {}", detect::model::dir().display())),
+            Err(_) => match self.model.get() {
+                Some(Err(cause)) => anyhow::bail!("{cause}"),
+                _ => anyhow::bail!("the name model could not be loaded a moment ago"),
             },
         }
     }
@@ -189,6 +261,7 @@ impl Privacy {
                 ),
                 Ok(_) => anyhow::bail!("the privacy key could not be read a moment ago"),
             },
+            Err(Fault::ModelUnavailable) => self.model_check().map(|_| "aliases"),
             Err(f) => anyhow::bail!("{}", f.message()),
         }
     }
@@ -212,6 +285,24 @@ pub mod tests {
 
     /// A mode a test can change; `Err` stands for an unreadable setting.
     pub struct FakeMode(pub Mutex<Result<Option<Mode>, ()>>);
+
+    /// No model: the pipeline runs without one, and `detectors` says so.
+    pub struct NoModel;
+
+    impl ModelSource for NoModel {
+        fn load(&self) -> Result<Option<Arc<Model>>, LoadError> {
+            Ok(None)
+        }
+    }
+
+    /// A model folder with nothing in it.
+    struct NotInstalled;
+
+    impl ModelSource for NotInstalled {
+        fn load(&self) -> Result<Option<Arc<Model>>, LoadError> {
+            Err(LoadError::NotInstalled("/nowhere/model".into()))
+        }
+    }
 
     impl ModeSource for Arc<FakeMode> {
         fn read(&self) -> Result<Option<Mode>> {
@@ -253,6 +344,33 @@ pub mod tests {
         let (p, m, _) = privacy(None, None);
         *m.0.lock().unwrap() = Ok(Some(Mode::Off));
         assert_eq!(p.check().unwrap_err(), Fault::PrivacyModeChanged);
+    }
+
+    /// M5.2, R13: aliases mode with its key but no working model refuses
+    /// every call, as it does without its key, and keeps refusing after
+    /// the files appear, until a restart; `doctor` names the folder.
+    #[test]
+    fn aliases_mode_refuses_without_a_working_model() {
+        let mode = Arc::new(FakeMode(Mutex::new(Ok(Some(Mode::Aliases)))));
+        let key = Arc::new(FakeKey(Mutex::new(Some([3; 32]))));
+        let p = Privacy::with_model(Box::new(mode), Box::new(key), Box::new(NotInstalled));
+        assert_eq!(p.check().unwrap_err(), Fault::ModelUnavailable);
+        assert_eq!(p.check().unwrap_err(), Fault::ModelUnavailable);
+        let said = format!("{:#}", p.diagnose().unwrap_err());
+        assert!(
+            said.contains("not installed") && said.contains("/nowhere/model"),
+            "{said}"
+        );
+        assert!(format!("{:#}", p.model_check().unwrap_err()).contains("/nowhere/model"));
+        let message = Fault::ModelUnavailable.message();
+        assert!(
+            message.contains("protonctl/model") && message.contains("not installed"),
+            "{message}"
+        );
+        // Off mode needs no model.
+        let mode = Arc::new(FakeMode(Mutex::new(Ok(Some(Mode::Off)))));
+        let p = Privacy::with_model(Box::new(mode), Box::new(Arc::new(FakeKey::default())), Box::new(NotInstalled));
+        assert_eq!(p.check().unwrap().mode, Mode::Off);
     }
 
     #[test]

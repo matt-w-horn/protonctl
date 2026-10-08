@@ -208,6 +208,14 @@ pub fn cache_dir() -> PathBuf {
         .join("protonctl")
 }
 
+pub fn data_dir() -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home().join(".local/share"))
+        .join("protonctl")
+}
+
 /// No Proton Drive app is known for Linux, so Drive lists through the CLI.
 pub fn cloud_storage() -> Option<PathBuf> {
     None
