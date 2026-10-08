@@ -17,7 +17,7 @@
 | Q11 | All services tokenized at once | decided 2026-10-04 |  |
 | Q26 | The privacy layer is optional | decided 2026-10-04; proposal confirmed |  |
 | Q12 | Signing identity and install path | decided 2026-10-04 |  |
-| Q13 | `sandbox-exec` still enforced | open | Phase 4 |
+| Q13 | `sandbox-exec` still enforced | decided 2026-10-07 |  |
 | Q14 | Drive downloads to stdout, or a RAM disk | decided 2026-10-04 |  |
 | Q15 | Reaching LocalAuthentication | open | Phase 3 |
 | Q16 | Token cost of words and base64url | decided 2026-10-04 |  |
@@ -396,6 +396,43 @@
     Phase 4, as the text Vision finds in it. A user who wants page images
     uses off mode (Q26).
 
+- Q13, decided 2026-10-07 on macOS 27.0 (26A428), M4.1
+  ([#21](https://github.com/matt-w-horn/protonctl/issues/21)):
+  `sandbox-exec` is deprecated, as its manual says, and still enforces.
+  PDFKit through `osascript` and `textutil` run behind `protonctl convert`,
+  as poppler and pandoc do on Linux, under one profile that
+  `platform::macos::confine` builds with the reader's path and puts in
+  front of the reader as `/usr/bin/sandbox-exec -p`; without `unsafe` the
+  process cannot call `sandbox_init` itself. The profile is `(deny
+  default)` plus the allows each reader was measured to fail without,
+  found by failure, since denials are not logged (`log show` prints none,
+  with `(debug deny)` too), then each removed in turn: exec of the reader
+  alone; reads of `/`, `/usr/bin`, `/usr/share` and `/System/Library`, and
+  the metadata of `/System` and `/System/Volumes/Data`; the `hw.`
+  sysctls; and `/usr/lib`, which no fixture needed, kept for libraries
+  outside the shared cache. Each allow's reason is on `READER_PROFILE` in
+  `src/platform/macos.rs`. Nothing else is allowed: no file write
+  anywhere, no network, no fork or exec of another program, no signal, and
+  no Mach service, so no Keychain (`SecItemCopyMatching` returns -50 where
+  it returns -25300 for a missing item outside), no Apple Events
+  (`Application("Finder")` finds no application), no `doShellScript`, no
+  `NSTask`, no WindowServer, font or preferences daemon, and no user font.
+  `(subpath "/System")` was tried and does not reach the data volume
+  through `/System/Volumes/Data`, since firmlinks resolve first; the
+  narrower set is used anyway. Measured costs: a page image carries sRGB
+  in place of the display's profile, the same to the eye; a PDF whose
+  font is not embedded renders with a substitute; a PDF is parsed once
+  per page image, as on Linux, where the one `osascript` run rendered
+  four. `sandbox-exec` exits 65 for a profile that does not compile and 71
+  for a reader it cannot run, and `convert::sandbox_failed` reads both as
+  the sandbox's failure, as it does `convert`'s own 70. `textutil` exits 0
+  and prints nothing for a file it cannot open, so a damaged document
+  reads as empty text on macOS, where pandoc's failure is reported. Left
+  open: Vision (M4.2) was not measured; the readers have no memory limit
+  on macOS, where Linux has 2 GiB and pandoc's heap (#71); a crashed
+  reader's state still goes to `~/Library/Logs/DiagnosticReports`, as
+  macOS's crash reporter, not the reader, writes it.
+
 - Q17, decided 2026-10-07 for Phase 3
   ([#23](https://github.com/matt-w-horn/protonctl/issues/23)): the
   settings are in the README's
@@ -462,11 +499,7 @@
   the deny rules decided.
 
 - Open, to check before the phase that depends on each
-  ([#21](https://github.com/matt-w-horn/protonctl/issues/21) and [#22](https://github.com/matt-w-horn/protonctl/issues/22)):
-  - Q13 (Phase 4): `sandbox-exec` is marked deprecated in its man page.
-    Check that it still enforces a profile on the current macOS, and that
-    Vision, PDFKit through `osascript`, and `textutil` run under a profile
-    that denies network access and file writes.
+  ([#22](https://github.com/matt-w-horn/protonctl/issues/22)):
   - Q15 (Phase 3): does a LocalAuthentication prompt appear when protonctl
     runs as a child of Claude Desktop, as a child of Claude Code, and inside
     Claude Code's sandbox? Which route reaches it with unsafe code

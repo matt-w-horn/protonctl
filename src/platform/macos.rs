@@ -139,12 +139,50 @@ pub fn cloud_only(meta: &Metadata) -> bool {
     meta.st_flags() & SF_DATALESS != 0
 }
 
-/// macOS runs PDFKit and `textutil` directly until Phase 4 picks their
-/// sandbox (Q13), so `protonctl convert` is not used here yet.
-pub fn sandbox() -> Result<()> {
-    Err(anyhow!(
-        "the sandbox for macOS's document readers is Phase 4's work (RFC-0001 Q13)"
-    ))
+/// The document readers' sandbox profile (RFC R21, Q13), for
+/// `/usr/bin/sandbox-exec`, with the reader's path in place of `{reader}`.
+/// `sandbox-exec` is deprecated in its manual and still enforces: measured
+/// on macOS 27.0 (26A428) on 2026-10-07. Each allow is one a reader failed
+/// without, starting from `(deny default)`, and nothing else is allowed: no
+/// file write anywhere, no network, no other process (no fork, no exec but
+/// the reader's own, no signal), and no Mach service, so no Keychain
+/// (`securityd`), no Apple Events (osascript finds no application), no
+/// shell, no `WindowServer`, no font or preferences daemon. `file-read*` on
+/// `/` and `/System/Library`: both readers, for dyld, the frameworks, the
+/// fonts and the OSA components. `/usr/bin` as a literal, and the metadata
+/// of `/System` and `/System/Volumes/Data`: osascript, which otherwise
+/// finds no JavaScript component. `/usr/share`: ICU's data, which
+/// `JavaScriptCore` reads for text in other scripts. `/usr/lib`: no fixture
+/// needs it; kept because dyld loads the libraries outside the shared cache
+/// from there on demand. The `hw.` sysctls: osascript. Denied, and measured
+/// harmless: `/Library/Fonts` and the user's fonts, so a PDF whose font is
+/// not embedded renders with a substitute; and the display's colour
+/// profile, so page images carry sRGB.
+const READER_PROFILE: &str = r#"(version 1)
+(deny default)
+(allow process-exec (literal "{reader}"))
+(allow file-read* (literal "{reader}") (literal "/") (literal "/usr/bin") (subpath "/usr/lib") (subpath "/usr/share") (subpath "/System/Library"))
+(allow file-read-metadata (literal "/System") (literal "/System/Volumes/Data"))
+(allow sysctl-read (sysctl-name-prefix "hw."))
+"#;
+
+/// `sandbox-exec` with the readers' profile in front of `reader`. Without
+/// `unsafe`, this process cannot call `sandbox_init` itself. `sandbox-exec`
+/// exits 65 when the profile does not compile and 71 when it cannot run the
+/// reader (`convert::sandbox_failed`), and otherwise becomes the reader, in
+/// the same process, so the reader's exit is its own.
+pub fn confine(reader: &str) -> Result<Command> {
+    // The path is quoted into the profile as it stands.
+    ensure!(
+        !reader.contains(['"', '\\']),
+        "a reader's path cannot hold a quote or a backslash: {reader}"
+    );
+    let mut command = Command::new("/usr/bin/sandbox-exec");
+    command
+        .arg("-p")
+        .arg(READER_PROFILE.replace("{reader}", reader))
+        .arg(reader);
+    Ok(command)
 }
 
 /// The memory disk's size: two of the largest files `drive` reads inline
@@ -257,5 +295,146 @@ fn eject(device: &str) {
     });
     if let Err(e) = ejected {
         eprintln!("protonctl: cannot eject the memory disk {device}: {e:#}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::ErrorKind;
+
+    use super::*;
+
+    /// Set in the child that `the_sandbox_confines_a_reader` starts, with
+    /// where the parent put the files the probe tries, the port it listens
+    /// on, and the account of the Keychain item it made.
+    const PROBE: &str = "PROTONCTL_SANDBOX_PROBE";
+    const PROBE_DIR: &str = "PROTONCTL_PROBE_DIR";
+    const PROBE_PORT: &str = "PROTONCTL_PROBE_PORT";
+    const PROBE_ACCOUNT: &str = "PROTONCTL_PROBE_ACCOUNT";
+    /// The Keychain service of the throwaway item: never protonctl's own.
+    const PROBE_SERVICE: &str = "protonctl-test-sandbox-probe";
+
+    /// Deletes the throwaway item when dropped, after a panic too.
+    struct TestItem(String);
+
+    impl Drop for TestItem {
+        fn drop(&mut self) {
+            secret_delete(PROBE_SERVICE, &self.0).ok();
+        }
+    }
+
+    /// M4.1's exit (R21, Q13): a process under the readers' profile reaches
+    /// no network, no other process and no Keychain item, writes nothing,
+    /// and reads only the system's own files, yet can still run. The
+    /// profile applies to a program `sandbox-exec` starts, so the probe is
+    /// this test binary again, with only `sandbox_probe` selected, under
+    /// `confine`. The item it tries is made here under a test service,
+    /// read back here to show it is readable, and deleted after.
+    #[test]
+    fn the_sandbox_confines_a_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("before"), "x").unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let _socket = std::os::unix::net::UnixListener::bind(dir.path().join("sock")).unwrap();
+        let account = format!("probe-{}", std::process::id());
+        // A stale one, from a run that crashed, would make the write an
+        // update, which asks the user; deleting asks nothing.
+        secret_delete(PROBE_SERVICE, &account).unwrap();
+        secret_set(PROBE_SERVICE, &account, b"test").unwrap();
+        let item = TestItem(account.clone());
+        assert_eq!(
+            secret_get(PROBE_SERVICE, &account).unwrap().as_deref(),
+            Some(&b"test"[..])
+        );
+        let exe = std::env::current_exe().unwrap();
+        let out = confine(exe.to_str().unwrap())
+            .unwrap()
+            .args(["platform::macos::tests::sandbox_probe", "--exact"])
+            .args(["--include-ignored", "--nocapture", "--test-threads=1"])
+            .env(PROBE, "1")
+            .env(PROBE_DIR, dir.path())
+            .env(PROBE_PORT, port.to_string())
+            .env(PROBE_ACCOUNT, &account)
+            .output()
+            .unwrap();
+        drop(item);
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{said}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(said.contains("1 passed"), "{said}");
+    }
+
+    #[test]
+    #[ignore = "runs only as the child of the_sandbox_confines_a_reader"]
+    fn sandbox_probe() {
+        if std::env::var_os(PROBE).is_none() {
+            return;
+        }
+        let dir = PathBuf::from(std::env::var_os(PROBE_DIR).unwrap());
+        let port: u16 = std::env::var(PROBE_PORT).unwrap().parse().unwrap();
+        let account = std::env::var(PROBE_ACCOUNT).unwrap();
+        let denied = |what: &str, r: std::io::Result<()>| {
+            let e = r.expect_err(what);
+            assert_eq!(e.kind(), ErrorKind::PermissionDenied, "{what}: {e}");
+        };
+        denied(
+            "TCP, to a port the parent listens on",
+            std::net::TcpStream::connect(("127.0.0.1", port)).map(drop),
+        );
+        denied("UDP", std::net::UdpSocket::bind("127.0.0.1:0").map(drop));
+        denied(
+            "a Unix socket the parent listens on",
+            std::os::unix::net::UnixStream::connect(dir.join("sock")).map(drop),
+        );
+        denied(
+            "a write to the temporary folder",
+            std::fs::write(dir.join("probe"), "x"),
+        );
+        denied(
+            "a read of the temporary folder",
+            std::fs::read(dir.join("before")).map(drop),
+        );
+        denied(
+            "a read of the home folder",
+            std::fs::read_dir(home()).map(drop),
+        );
+        // Where reads are allowed, the sandbox's refusal (EPERM) is told
+        // from the sealed system volume's (EROFS), which a profile that
+        // allowed writes would give.
+        denied("a write to /usr/bin", std::fs::write("/usr/bin/probe", "x"));
+        denied(
+            "a write to /System/Library",
+            std::fs::write("/System/Library/probe", "x"),
+        );
+        denied(
+            "a chmod of the user's file",
+            std::fs::set_permissions(dir.join("before"), std::fs::Permissions::from_mode(0o644)),
+        );
+        denied(
+            "a new process",
+            Command::new("/usr/bin/true").status().map(drop),
+        );
+        // securityd is a Mach service, and the profile names none.
+        let read = secret_get(PROBE_SERVICE, &account);
+        assert!(
+            read.is_err(),
+            "the Keychain item was read in the sandbox: {read:?}"
+        );
+        // What a reader needs still works: the system's fonts, frameworks
+        // and libraries, its own folder, and a thread. Only the reader
+        // itself is readable in `/usr/bin`, and here that is this binary.
+        std::fs::read_dir("/System/Library/Fonts").unwrap();
+        std::fs::metadata("/System/Library/Frameworks/PDFKit.framework").unwrap();
+        std::fs::metadata("/usr/lib/dyld").unwrap();
+        std::fs::metadata("/usr/bin").unwrap();
+        denied(
+            "a read of a program that is not the reader",
+            std::fs::metadata("/usr/bin/textutil").map(drop),
+        );
+        assert_eq!(std::thread::spawn(|| 7).join().unwrap(), 7);
     }
 }

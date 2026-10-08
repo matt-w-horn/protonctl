@@ -50,7 +50,7 @@ flowchart TB
 | 1b | The maintainer writes the policy table: a class for each write tool, and what the server does with each class; Mail and Drive write tools; sandbox write tests | withdrawn 2026-10-04: protonctl is read-only (Q5) |
 | 2 | The privacy setting (R26) and `setup drive`; then aliases mode: the privacy pipeline for all three services at once, at `reply()`, over results, errors and page tokens, failing closed: privacy key, aliases, references, handles, sealed page tokens, keyed digests, the `entities` table, `detectors` and `guidance`; regex with validators and the name dictionary; `download_file`, `export_drive_manifest`, the CLI's `drive manifest`, the `export` and `inline` options, the export and download folders, page images, image content and inline bytes absent in aliases mode and kept in off mode; a panic hook in both modes (R25); the leak test and the `live-check.py` checks. The CLI may be tokenized here too, ahead of Phase 3, since in Phase 2 it is the easy way around the pipeline in Claude Code | built and tested on Linux 2026-10-04; on a Mac the same day, M2.8 (cloud-only reads), the setup commands, signing (Q12) and the aliases-mode live run passed, and the off-mode live run passed (M1.2); the role-play on real results and the other Mac checks have not run ([#16](https://github.com/matt-w-horn/protonctl/issues/16), [#17](https://github.com/matt-w-horn/protonctl/issues/17), [#18](https://github.com/matt-w-horn/protonctl/issues/18), [#19](https://github.com/matt-w-horn/protonctl/issues/19) and [#20](https://github.com/matt-w-horn/protonctl/issues/20)); the defects below are open; the CLI is not tokenized |
 | 3 | In aliases mode, the `reveal_*` tools, and the CLI tokenized with `--raw` and `--out` behind user presence; Claude Code sandbox settings documented (Q17) | to do; answer Q15 first. The sandbox settings are documented (M3.4, 2026-10-07) |
-| 4 | PDFKit and `textutil` under a sandbox profile, directly or behind `protonctl convert`, in both modes; Vision OCR for images and scans in aliases mode; on Linux, poppler and pandoc in `protonctl convert` (MP4) and Tesseract for OCR | to do on macOS; answer Q13 first. On Linux the readers were built 2026-10-05, ahead of this phase (MP4); OCR is to do |
+| 4 | PDFKit and `textutil` under a sandbox profile, directly or behind `protonctl convert`, in both modes; Vision OCR for images and scans in aliases mode; on Linux, poppler and pandoc in `protonctl convert` (MP4) and Tesseract for OCR | M4.1 built 2026-10-07 (Q13): PDFKit and `textutil` behind `protonctl convert` under `sandbox-exec`, in both modes. On Linux the readers were built 2026-10-05, ahead of this phase (MP4). OCR (M4.2) is to do on both systems |
 | 5 | One model finds names in free text: Otter (multilingual, Q23) through `tract`, as configuration (files pinned by SHA-256, labels, threshold); recall measured per entity type and language on a labeled synthetic corpus; the dictionary's name rules stay until that evaluation shows one redundant | to do, next, before Phases 3 and 4 (Q40); Q23 decided 2026-10-05, after a proof of concept |
 | 6 | Summary and question views from a local model, written with aliases; finer domain types and titles from signatures as hints | to do; Q38, open, names the runtime |
 | 7 | A Linux VM helper for the riskiest formats; an optional allowlist of names kept in plaintext. Privacy Filter as a second check was dropped on 2026-10-05 (Q39) | to do |
@@ -339,7 +339,13 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
 ### Phase 4: isolated converters
 
 - M4.1 Answer Q13; the sandbox profile; PDFKit and `textutil` under it.
-  Exit: the converter sandbox test.
+  Exit: the converter sandbox test. Built 2026-10-07
+  ([#21](https://github.com/matt-w-horn/protonctl/issues/21)): the
+  readers run behind `protonctl convert` under a `(deny default)`
+  `sandbox-exec` profile, and `doctor` reads a sample through each. The
+  macOS probe (`the_sandbox_confines_a_reader` in `src/platform/macos.rs`)
+  and `tests/convert.rs` pass, and fail with writes, the network, Mach
+  services or new processes allowed. No memory limit on macOS yet.
 - M4.2 Vision OCR for images and scans, replacing `"text": null` (R22).
   Exit: a synthetic page's words come back.
 

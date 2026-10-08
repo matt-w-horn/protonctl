@@ -228,15 +228,14 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   `/usr/bin/security` included ([section 5](05-security.md)). Binding the item to user
   presence would need the data-protection keychain, and so an entitlement
   that an ad-hoc signed binary cannot carry (Q12).
-- R21. From Phase 4, PDFKit, `textutil` and Vision run only in a child
-  process under a sandbox profile that denies network access, Keychain
-  access and file writes (Q13). They already run as child processes, with
-  an empty environment, a 60 s limit and a 32 MiB cap on output:
-  PDFKit through a fixed script in `/usr/bin/osascript`, and
-  `/usr/bin/textutil`. Phase 4 either starts those under the profile or
-  moves them behind `protonctl convert`, whichever Q13 shows works. On
-  Linux, poppler and pandoc already run behind `protonctl convert`, under
-  Landlock and seccomp (Q34).
+- R21. PDFKit, `textutil` and Vision run only in a child process under a
+  sandbox profile that denies network access, Keychain access and file
+  writes (Q13). Built 2026-10-07 for PDFKit, through a fixed script in
+  `/usr/bin/osascript`, and `/usr/bin/textutil`: each runs behind
+  `protonctl convert`, under `sandbox-exec` with a deny-default profile,
+  with an empty environment, a 60 s limit and a 32 MiB cap on output.
+  Vision comes with M4.2. On Linux, poppler and pandoc run behind the same
+  command, under Landlock and seccomp (Q34).
   Bytes go in on stdin and UTF-8 text comes out on stdout. The parent
   process tokenizes the text (R13).
 - R22. In aliases mode, from Phase 2, results MUST NOT contain image
