@@ -1,14 +1,18 @@
 //! `protonctl convert`: one document reader, run on stdin inside a sandbox
-//! (RFC R21, Q34). On Linux, where the readers are poppler's `pdftotext`
-//! and `pdftoppm`, and `pandoc`, the server starts this as a child
-//! for each document it reads. The child enters the sandbox, then becomes
-//! the reader, so a hostile document that takes the reader over can read
-//! only the system's own programs and libraries, write nothing, and reach
-//! no network. The document goes in on stdin; the text or image comes back
-//! on stdout. macOS runs its readers directly until Phase 4 (Q13).
+//! (RFC R21, Q13, Q34). The server starts this as a child for each document
+//! it reads. The child confines itself, then becomes the reader, so a
+//! hostile document that takes the reader over can read only the system's
+//! own programs and libraries, write nothing, and reach no network and no
+//! other process. The document goes in on stdin; the text or image comes
+//! back on stdout. On macOS the readers are PDFKit, through a fixed script
+//! in `osascript`, and `textutil`, under a `sandbox-exec` profile; on
+//! Linux, poppler's `pdftotext` and `pdftoppm`, and pandoc, under Landlock
+//! and seccomp. Both print a PDF's text with a form feed after each page,
+//! and one page as a JPEG.
 
 use std::os::unix::process::CommandExt as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::ExitStatus;
 
 use anyhow::{Result, bail};
 
@@ -16,14 +20,31 @@ use crate::extract::pipe;
 
 /// The exit code of `protonctl convert` when it fails before the reader
 /// runs: no reader exits with it (`pdftotext` uses 0 to 3 and 99, pandoc
-/// none of 70), so the parent can tell "the sandbox failed" from "the
-/// reader could not read this document". `EX_SOFTWARE` in sysexits.h.
+/// none of 70, and the macOS readers 1 to 3), so the parent can tell "the
+/// sandbox failed" from "the reader could not read this document".
+/// `EX_SOFTWARE` in sysexits.h.
 pub const SANDBOX_FAILED: i32 = 70;
+
+/// On macOS, `sandbox-exec`'s own exits, before the reader runs: a profile
+/// that does not compile (`EX_DATAERR`) and a reader it cannot run
+/// (`EX_OSERR`), measured on macOS 27.
+const SANDBOX_EXEC_FAILED: [i32; 2] = [65, 71];
+
+/// A program to run under the sandbox for `Check`, which reads nothing.
+const TRUE: &str = "/usr/bin/true";
+
+/// Whether a `convert` child failed in the sandbox rather than in the
+/// reader.
+pub fn sandbox_failed(status: ExitStatus) -> bool {
+    status.code().is_some_and(|code| {
+        code == SANDBOX_FAILED || (cfg!(target_os = "macos") && SANDBOX_EXEC_FAILED.contains(&code))
+    })
+}
 
 /// One run of a reader.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::Subcommand)]
 pub enum Job {
-    /// Enter the sandbox and exit: `doctor`'s check.
+    /// Enter the sandbox and run `true` in it: `doctor`'s check.
     Check,
     /// A PDF's text, each page followed by a form feed.
     PdfText,
@@ -43,34 +64,93 @@ pub enum Job {
     },
 }
 
-/// A document format pandoc reads.
+/// A document format the readers take. `textutil` reads the old binary
+/// Word format too; pandoc does not, and `extract` says so before asking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, strum::IntoStaticStr)]
 #[strum(serialize_all = "lowercase")]
 pub enum Format {
     Docx,
+    Doc,
     Odt,
     Rtf,
 }
 
-/// A reader program, and the Debian and Ubuntu package that installs it.
+/// A reader program, and what installs it: on Linux the Debian and Ubuntu
+/// package; on macOS the system, which always has it.
 #[derive(Clone, Copy, Debug)]
 pub struct Reader {
     pub path: &'static str,
     pub package: &'static str,
 }
 
+#[cfg(target_os = "linux")]
 const PDFTOTEXT: Reader = Reader {
     path: "/usr/bin/pdftotext",
     package: "poppler-utils",
 };
+#[cfg(target_os = "linux")]
 const PDFTOPPM: Reader = Reader {
     path: "/usr/bin/pdftoppm",
     package: "poppler-utils",
 };
+#[cfg(target_os = "linux")]
 const PANDOC: Reader = Reader {
     path: "/usr/bin/pandoc",
     package: "pandoc",
 };
+#[cfg(target_os = "macos")]
+const OSASCRIPT: Reader = Reader {
+    path: "/usr/bin/osascript",
+    package: "macOS",
+};
+#[cfg(target_os = "macos")]
+const TEXTUTIL: Reader = Reader {
+    path: "/usr/bin/textutil",
+    package: "macOS",
+};
+
+/// Every page's text, read by PDFKit from stdin, each followed by a form
+/// feed as `pdftotext` prints them. Exits 1 for a file PDFKit cannot open
+/// and 2 for one that needs a password.
+#[cfg(target_os = "macos")]
+const PDF_TEXT_SCRIPT: &str = r#"ObjC.import("PDFKit");
+ObjC.import("stdlib");
+function run() {
+  const data = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
+  const doc = $.PDFDocument.alloc.initWithData(data);
+  if (doc.isNil()) $.exit(1);
+  if (doc.isLocked) $.exit(2);
+  let text = "";
+  for (let i = 0; i < doc.pageCount; i++) text += (ObjC.unwrap(doc.pageAtIndex(i).string) || "") + "\f";
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData($(text).dataUsingEncoding($.NSUTF8StringEncoding));
+}"#;
+
+/// Page `argv[0]` (counted from 1) rendered by PDFKit with its long edge
+/// `argv[1]` pixels, written to stdout as JPEG. Exits 1 and 2 as the text
+/// script does, and 3 for a page the PDF does not have.
+#[cfg(target_os = "macos")]
+const PDF_PAGE_SCRIPT: &str = r#"ObjC.import("PDFKit");
+ObjC.import("AppKit");
+ObjC.import("stdlib");
+function run(argv) {
+  const [page, edge] = argv.map(Number);
+  const doc = $.PDFDocument.alloc.initWithData($.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile);
+  if (doc.isNil()) $.exit(1);
+  if (doc.isLocked) $.exit(2);
+  if (!(page >= 1 && page <= doc.pageCount)) $.exit(3);
+  const p = doc.pageAtIndex(page - 1);
+  const box = p.boundsForBox($.kPDFDisplayBoxCropBox).size;
+  const scale = edge / Math.max(box.width, box.height);
+  const size = $.NSMakeSize(Math.round(box.width * scale), Math.round(box.height * scale));
+  const image = p.thumbnailOfSizeForBox(size, $.kPDFDisplayBoxCropBox);
+  const bitmap = $.NSBitmapImageRep.imageRepWithData(image.TIFFRepresentation);
+  const jpeg = bitmap.representationUsingTypeProperties($.NSBitmapImageFileTypeJPEG, $({ NSImageCompressionFactor: 0.85 }));
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData(jpeg);
+}"#;
+
+fn strings(a: &[&str]) -> Vec<String> {
+    a.iter().map(ToString::to_string).collect()
+}
 
 impl Job {
     /// The reader and its arguments; `None` for `Check`. Each reads stdin
@@ -80,13 +160,13 @@ impl Job {
     /// built to fill memory stops at once with "Heap exhausted" (R21, #71).
     /// Measured with pandoc 3.1.3, a 2 MB Word file whose XML is 8 MB (5.7
     /// MB of text) needs 1 GiB and fails at 768 MiB.
+    #[cfg(target_os = "linux")]
     fn command(self) -> Option<(Reader, Vec<String>)> {
-        let args = |a: &[&str]| a.iter().map(ToString::to_string).collect::<Vec<_>>();
         Some(match self {
             Self::Check => return None,
             Self::PdfText => (
                 PDFTOTEXT,
-                args(&["-enc", "UTF-8", "-eol", "unix", "-", "-"]),
+                strings(&["-enc", "UTF-8", "-eol", "unix", "-", "-"]),
             ),
             Self::PdfPage { page, edge } => {
                 let page = page.to_string();
@@ -104,7 +184,7 @@ impl Job {
                     &edge,
                     "-",
                 ];
-                (PDFTOPPM, args(&a))
+                (PDFTOPPM, strings(&a))
             }
             Self::Document { format } => {
                 let from: &str = format.into();
@@ -119,7 +199,41 @@ impl Job {
                     "plain",
                     "--wrap=none",
                 ];
-                (PANDOC, args(&a))
+                (PANDOC, strings(&a))
+            }
+        })
+    }
+
+    /// The reader and its arguments; `None` for `Check`. PDFKit runs in
+    /// `osascript` from a script given on the command line, and `textutil`
+    /// reads stdin; each writes stdout.
+    #[cfg(target_os = "macos")]
+    fn command(self) -> Option<(Reader, Vec<String>)> {
+        Some(match self {
+            Self::Check => return None,
+            Self::PdfText => (
+                OSASCRIPT,
+                strings(&["-l", "JavaScript", "-e", PDF_TEXT_SCRIPT]),
+            ),
+            Self::PdfPage { page, edge } => {
+                let page = page.to_string();
+                let edge = edge.to_string();
+                let a = ["-l", "JavaScript", "-e", PDF_PAGE_SCRIPT, &page, &edge];
+                (OSASCRIPT, strings(&a))
+            }
+            Self::Document { format } => {
+                let format: &str = format.into();
+                let a = [
+                    "-stdin",
+                    "-stdout",
+                    "-convert",
+                    "txt",
+                    "-encoding",
+                    "UTF-8",
+                    "-format",
+                    format,
+                ];
+                (TEXTUTIL, strings(&a))
             }
         })
     }
@@ -146,18 +260,30 @@ impl Job {
     }
 }
 
-/// In the child: enter the sandbox, then become the reader. A reader job
-/// returns only when it could not start; `Check` returns `Ok`.
+/// In the child: confine the reader, then become it. Returns only when it
+/// could not start.
 pub fn run(job: Job) -> Result<()> {
-    crate::platform::sandbox()?;
-    let Some((reader, args)) = job.command() else {
-        return Ok(());
+    let (program, args) = match job.command() {
+        Some((reader, args)) => (reader.path, args),
+        None => (TRUE, Vec::new()),
     };
-    let err = std::process::Command::new(reader.path)
+    let err = crate::platform::confine(program)?
         .args(args)
         .env_clear()
         .exec();
-    bail!("cannot run {}: {err}", reader.path)
+    bail!("cannot run {program}: {err}")
+}
+
+/// This program, to start `protonctl convert` from. On Linux
+/// `/proc/self/exe` is this very program even once its file is replaced;
+/// macOS keeps no such handle, so a server whose binary was deleted reads
+/// no more documents until it is restarted.
+fn own_program() -> Result<PathBuf> {
+    if cfg!(target_os = "linux") {
+        Ok(PathBuf::from("/proc/self/exe"))
+    } else {
+        Ok(std::env::current_exe()?)
+    }
 }
 
 /// What a reader made of one input.
@@ -175,10 +301,10 @@ pub enum Outcome {
 }
 
 /// In the parent: run `job` on `input` in the sandbox, as a child of this
-/// very binary, so a binary replaced while the server runs still converts.
-/// Unit tests run as the test harness, which has no `convert`, so there the
-/// reader runs directly, unsandboxed, on the tests' own files; the
-/// integration tests in `tests/convert.rs` run it through the sandbox.
+/// very binary. Unit tests run as the test harness, which has no
+/// `convert`, so there the reader runs directly, unsandboxed, on the tests'
+/// own files; the integration tests in `tests/convert.rs` run it through
+/// the sandbox.
 pub async fn read(job: Job, input: &[u8]) -> Result<Outcome> {
     let Some((reader, args)) = job.command() else {
         bail!("{job:?} reads nothing");
@@ -187,14 +313,16 @@ pub async fn read(job: Job, input: &[u8]) -> Result<Outcome> {
         return Ok(Outcome::Missing(reader.package));
     }
     let (status, out) = if cfg!(test) {
-        pipe(reader.path, &args, input).await?
+        pipe(Path::new(reader.path), &args, input).await?
     } else {
-        pipe("/proc/self/exe", &job.argv(), input).await?
+        pipe(&own_program()?, &job.argv(), input).await?
     };
-    match status.code() {
-        Some(0) => Ok(Outcome::Read(out)),
-        Some(SANDBOX_FAILED) => Ok(Outcome::NoSandbox),
-        _ => Ok(Outcome::Unreadable),
+    if status.success() {
+        Ok(Outcome::Read(out))
+    } else if sandbox_failed(status) {
+        Ok(Outcome::NoSandbox)
+    } else {
+        Ok(Outcome::Unreadable)
     }
 }
 
@@ -218,6 +346,7 @@ pub async fn check() -> Result<String> {
             SAMPLE_RTF,
         ),
     ];
+    let program = own_program()?;
     let (mut read, mut missing, mut failed) = (Vec::new(), Vec::new(), Vec::new());
     for (job, sample) in jobs {
         let reader = job.command().map(|(r, _)| r);
@@ -228,7 +357,7 @@ pub async fn check() -> Result<String> {
             continue;
         }
         let name = reader.map_or("the sandbox", |r| r.path);
-        let mut child = tokio::process::Command::new("/proc/self/exe")
+        let mut child = tokio::process::Command::new(&program)
             .args(job.argv())
             .env_clear()
             .stdin(std::process::Stdio::piped())
@@ -241,8 +370,8 @@ pub async fn check() -> Result<String> {
         }
         let out = child.wait_with_output().await?;
         if out.status.success() && (reader.is_none() || !out.stdout.is_empty()) {
-            read.extend(reader.map(|r| r.path));
-        } else if out.status.code() == Some(SANDBOX_FAILED) {
+            read.extend(reader.map(|r| r.path).filter(|p| !read.contains(p)));
+        } else if sandbox_failed(out.status) {
             let said = String::from_utf8_lossy(&out.stderr);
             failed.push(format!("{name} cannot run in the sandbox: {}", said.trim()));
         } else {
@@ -291,6 +420,9 @@ mod tests {
                 format: Format::Docx,
             },
             Job::Document {
+                format: Format::Doc,
+            },
+            Job::Document {
                 format: Format::Odt,
             },
             Job::Document {
@@ -304,5 +436,23 @@ mod tests {
             );
             assert_eq!(parsed.unwrap().job, job, "{argv:?}");
         }
+    }
+
+    /// The sandbox's own exits are told from a reader's: `convert`'s 70 on
+    /// both systems, and on macOS `sandbox-exec`'s 65 and 71; a reader's 1
+    /// to 3 are the document's fault.
+    #[test]
+    fn a_sandbox_failure_is_told_from_a_reader_s() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let exit = |code: i32| ExitStatus::from_raw(code << 8);
+        assert!(sandbox_failed(exit(SANDBOX_FAILED)));
+        for code in [0, 1, 2, 3, 99] {
+            assert!(!sandbox_failed(exit(code)), "{code}");
+        }
+        for code in SANDBOX_EXEC_FAILED {
+            assert_eq!(sandbox_failed(exit(code)), cfg!(target_os = "macos"));
+        }
+        // A signal is no sandbox failure either.
+        assert!(!sandbox_failed(ExitStatus::from_raw(9)));
     }
 }

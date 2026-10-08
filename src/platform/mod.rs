@@ -95,9 +95,12 @@ pub fn remove_memory_disk() {
     imp::remove_memory_disk();
 }
 
-/// Confine this process, and every program it runs, as a document reader
-/// (R21): no file writes, no network, reads of the system's own programs
-/// and libraries only. It cannot be undone.
-pub fn sandbox() -> Result<()> {
-    imp::sandbox()
+/// The command that becomes the document reader at `reader`, confined
+/// (R21): no file writes, no network, no other process, reads of the
+/// system's own programs and libraries only. On Linux this process enters
+/// the sandbox itself, which cannot be undone, and the command is the
+/// reader; on macOS the command is `sandbox-exec` with the readers' profile,
+/// in front of the reader (Q13).
+pub fn confine(reader: &str) -> Result<std::process::Command> {
+    imp::confine(reader)
 }

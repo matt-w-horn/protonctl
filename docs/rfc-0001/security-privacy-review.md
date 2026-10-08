@@ -50,8 +50,8 @@ made, are in commit 7786b3e.
 
 In scope: protonctl's process (server and CLI), its config and its items
 in the Keychain or, on Linux, the Secret Service, its memory folder, its
-children (the Drive CLI, curl, `osascript` and `textutil`, and on Linux
-`protonctl convert` with poppler and pandoc), and what crosses from them
+children (the Drive CLI, curl, and `protonctl convert` with `osascript`
+and `textutil`, or on Linux poppler and pandoc), and what crosses from them
 to the Claude hosts. Out of scope, as non-goals
 of [section 1](01-goals.md): code running as root, anyone with access to
 the Proton account, Proton's own clients and servers, and the hosts'
@@ -103,10 +103,9 @@ flowchart TB
             BR["Mail Bridge"]
             CLI["proton-drive"]
             CURL["curl"]
-            CONV["macOS: osascript, textutil"]
         end
-        subgraph sbx["TB3: Linux sandbox: Landlock, seccomp"]
-            CVT["protonctl convert:<br/>poppler or pandoc"]
+        subgraph sbx["TB3: reader sandbox: sandbox-exec;<br/>on Linux Landlock, seccomp"]
+            CVT["protonctl convert:<br/>osascript or textutil;<br/>on Linux poppler or pandoc"]
         end
     end
     PROTON[("Proton servers")]
@@ -145,7 +144,7 @@ flowchart TB
 |---|---|---|---|
 | F1 | tool calls and results | names, IDs, digests, images as Proton shows them | aliases, handles, keyed digests, refs; raw text only after Touch ID |
 | F2 | IMAP commands and messages | EXAMINE and `BODY.PEEK` only | same |
-| F3, F4, F5 | to the Drive CLI: paths in argv, a cleared environment; to curl: the link on stdin; to the converters: file bytes on stdin, on Linux to `protonctl convert`, which enters the sandbox and then runs poppler or pandoc | as built; F5 sandboxed on Linux (Q34) | same; F5 sandboxed on macOS from Phase 4 |
+| F3, F4, F5 | to the Drive CLI: paths in argv, a cleared environment; to curl: the link on stdin; to the converters: file bytes on stdin to `protonctl convert`, which confines and then runs the reader | as built; F5 sandboxed on both systems (Q13, Q34) | same |
 | F6, F8 | reads of the Drive folder and the config | as built | same |
 | F7 | secrets and the privacy setting, from the Keychain or, on Linux, the Secret Service over D-Bus | Bridge password, links, the setting | plus the privacy key |
 | F14 | a cloud-only Drive file: the CLI writes it into the memory folder, and protonctl reads it, then deletes it | none: F15 instead | a per-process RAM disk on macOS; on Linux a 0700 folder under `$XDG_RUNTIME_DIR`, used only on tmpfs with every swap encrypted or zram; gone at exit (I15) |
@@ -181,7 +180,7 @@ check runs.
 | I15 | In aliases mode protonctl writes no content to disk (R10) | aliases | no download or export folder; a RAM disk for cloud-only Drive files (Q14), on Linux `$XDG_RUNTIME_DIR` when it is tmpfs, private, and every swap is encrypted | the no-disk test; the memory disk test | built and tested, every tool against a throwaway home, and the CLI's commands that could write; on macOS the readers' own writes are not watched until Phase 4 |
 | I16 | Logs and panics carry no content (R25) | both | WARN-level logs; a panic hook | the stderr test; a planted panic | built |
 | I18 | A feature on Linux meets the same requirement as on macOS, or is absent ([section 11](11-platforms.md)) | both | tools registered per platform; `get_status` names what is absent and why | a surface snapshot per platform and mode | P1 to P4 built: no tool is absent on Linux, and each mode's one snapshot passes on Linux; whether `reveal_*` is absent there is P5 (Phase 3) |
-| I17 | Converters reach no network, Keychain or file writes (R21) | both | a sandbox profile; on Linux, Landlock and seccomp in `protonctl convert` (Q34) | the converter sandbox test | built on Linux; not built on macOS (Phase 4, Q13) |
+| I17 | Converters reach no network, Keychain or file writes (R21) | both | `protonctl convert`: on macOS a `sandbox-exec` profile (Q13), on Linux Landlock and seccomp (Q34) | the converter sandbox test | built: Linux 2026-10-05, macOS 2026-10-07 |
 
 ## 3. Threats
 
@@ -208,7 +207,7 @@ check runs.
 | Denial of service | A crafted file stalls a converter | F5 | mitigate | 60 s limit, 32 MiB output cap, `kill_on_drop`; on Linux, 2 GiB of address space per reader and a 1 GiB pandoc heap, and no reader starts a process that would outlive the limit ([#71](https://github.com/matt-w-horn/protonctl/issues/71), built 2026-10-07) | low on Linux: a file built to fill memory stops in about a second, and a read still takes up to 2 GiB for up to 60 s; medium on macOS, whose readers have no memory limit until Phase 4 |
 | Denial of service | Injected text runs `rotate-key`, `setup privacy --off` or `logout` through the CLI | CLI | mitigate | Phase 2: they refuse when stdin is not a terminal, which a faked terminal (`script`) defeats; Phase 3: user presence ([API specification](lld-api.md#command-line)) | medium in Claude Code until Phase 3 |
 | Elevation of privilege | The model uses the shell to run `proton-drive`, read the Drive folder or speak IMAP, around protonctl | TB0 | transfer | Claude Code's sandbox with the README's settings (Q17, seen 2026-10-07): the folder and Bridge's port are closed, `proton-drive` runs but cannot reach Proton; R19 covers protonctl's own CLI only | high in Claude Code without the settings, low with them; none in Cowork |
-| Elevation of privilege | A crafted PDF or image exploits a converter | F5 | mitigate | on Linux, Landlock and seccomp in `protonctl convert`, built 2026-10-05 (I17, Q34); on macOS, a sandbox profile (Phase 4); a VM helper for the riskiest formats (Phase 7) | low on Linux: seccomp refuses signals to other processes on every kernel, not only from 6.12, where Landlock scopes them, and a core size of 1 keeps a crashed reader's core from a file or a `\|` handler, though not from an `@` socket handler, which Linux 6.17 added ([#71](https://github.com/matt-w-horn/protonctl/issues/71)); medium on macOS until Phase 4 |
+| Elevation of privilege | A crafted PDF or image exploits a converter | F5 | mitigate | on Linux, Landlock and seccomp in `protonctl convert`, built 2026-10-05 (I17, Q34); on macOS, `sandbox-exec` with a deny-default profile in `protonctl convert`, built 2026-10-07 (Q13); a VM helper for the riskiest formats (Phase 7) | low on Linux: seccomp refuses signals to other processes on every kernel, not only from 6.12, where Landlock scopes them, and a core size of 1 keeps a crashed reader's core from a file or a `\|` handler, though not from an `@` socket handler, which Linux 6.17 added ([#71](https://github.com/matt-w-horn/protonctl/issues/71)); low on macOS, where no Mach service, so no Keychain, Apple Event or shell, is reachable, though the readers have no memory limit there and a crash still reaches the system's crash reporter |
 | Information disclosure | On Linux, any process in the user's session reads protonctl's Secret Service items over D-Bus once the collection is unlocked, with no per-program prompt like the Keychain's | TB0 | accept | a collection unlocked only while needed; Q31 chose the Secret Service, which Bridge and the Drive CLI need on Linux anyway | medium on Linux |
 | Elevation of privilege | On Linux the model usually has a shell, in Claude Code or Claude Desktop's Code tab | TB0 | transfer | Claude Code's sandbox (Q17; its settings were checked on macOS only) | high on Linux without a sandbox |
 | Elevation of privilege | A dependency is compromised | TB1 | mitigate | a small set; `Cargo.lock`; `cargo deny` | low |

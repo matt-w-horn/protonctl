@@ -563,10 +563,7 @@ async fn doctor(app: &App) -> bool {
     if app.privacy.started() == Some(privacy::Mode::Aliases) {
         check("name model", app.privacy.model_check());
     }
-    // macOS runs its readers without a sandbox until Phase 4 (Q13).
-    if cfg!(target_os = "linux") {
-        check("document readers", convert::check().await);
-    }
+    check("document readers", convert::check().await);
     if matches!(&app.drive, Err(e) if e == DRIVE_NOT_SET_UP) {
         println!("skip  drive: not set up (protonctl setup drive)");
     } else {

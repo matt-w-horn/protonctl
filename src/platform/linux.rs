@@ -387,7 +387,7 @@ fn x32(call: i64) -> i64 {
 /// call ends the process. A second filter answers `clone3`, whose flags it
 /// cannot read, as a kernel without it would, so libc starts a thread with
 /// `clone`, which the first filter reads.
-pub fn sandbox() -> Result<()> {
+fn sandbox() -> Result<()> {
     use landlock::{
         ABI, Access as _, AccessFs, AccessNet, Ruleset, RulesetAttr as _, RulesetCreatedAttr as _,
         RulesetStatus, Scope, path_beneath_rules,
@@ -449,6 +449,12 @@ pub fn sandbox() -> Result<()> {
         seccompiler::apply_filter(&filter)?;
     }
     Ok(())
+}
+
+/// Enter the sandbox here, in the process that will become `reader`.
+pub fn confine(reader: &str) -> Result<std::process::Command> {
+    sandbox()?;
+    Ok(std::process::Command::new(reader))
 }
 
 /// `statfs`'s type for tmpfs, a file system in memory and swap.

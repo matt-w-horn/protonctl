@@ -1,19 +1,20 @@
-//! The document readers on Linux (RFC R21, Q34), against the built binary:
-//! `protonctl convert` runs each reader in its sandbox, and `drive cat`
-//! reads documents through it as the server does. They need poppler-utils
-//! and pandoc. The fixtures: `two-pages.pdf` was written by hand, one
-//! Helvetica line per page; the Word, OpenDocument and RTF files were made
-//! by pandoc 3.1.3 from "Word text, Café." and "Second paragraph.".
-//! `fills-memory.docx` was made by Python's `zipfile`, deflated: a
-//! `[Content_Types].xml` and `_rels/.rels` naming `word/document.xml`, which
-//! is one paragraph holding one run of 200 MiB of "x".
-#![cfg(target_os = "linux")]
+//! The document readers (RFC R21, Q13, Q34), against the built binary:
+//! `protonctl convert` runs each reader in its sandbox, and on Linux `drive
+//! cat` reads documents through it as the server does. On Linux they need
+//! poppler-utils and pandoc; on macOS they are PDFKit and `textutil`. The
+//! fixtures: `two-pages.pdf` was written by hand, one Helvetica line per
+//! page; the Word, OpenDocument and RTF files were made by pandoc 3.1.3
+//! from "Word text, Café." and "Second paragraph.". `fills-memory.docx` was
+//! made by Python's `zipfile`, deflated: a `[Content_Types].xml` and
+//! `_rels/.rels` naming `word/document.xml`, which is one paragraph holding
+//! one run of 200 MiB of "x".
 #![expect(
     clippy::unwrap_used,
     reason = "integration tests: a panic is a failed test"
 )]
 
 use std::io::Write as _;
+#[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -30,14 +31,16 @@ fn fixture(name: &str) -> PathBuf {
 /// The built binary, with an empty environment and no D-Bus session, so it
 /// never reaches the user's own keyring.
 fn protonctl() -> Command {
-    for (tool, package) in [
-        ("/usr/bin/pdftotext", "poppler-utils"),
-        ("/usr/bin/pandoc", "pandoc"),
-    ] {
-        assert!(
-            Path::new(tool).exists(),
-            "these tests need {package}: install it"
-        );
+    if cfg!(target_os = "linux") {
+        for (tool, package) in [
+            ("/usr/bin/pdftotext", "poppler-utils"),
+            ("/usr/bin/pandoc", "pandoc"),
+        ] {
+            assert!(
+                Path::new(tool).exists(),
+                "these tests need {package}: install it"
+            );
+        }
     }
     let mut c = Command::new(env!("CARGO_BIN_EXE_protonctl"));
     c.env_clear()
@@ -63,24 +66,38 @@ fn convert(args: &[&str], input: &[u8]) -> Output {
     child.wait_with_output().unwrap()
 }
 
+/// Each reader reads its fixture through `convert`, which on macOS is
+/// `sandbox-exec` with the readers' profile and on Linux the sandboxed
+/// process itself. The readers differ in detail: `pdftotext` ends a page
+/// with blank lines before the form feed, where PDFKit does not, and pandoc
+/// puts a blank line between paragraphs, where `textutil` does not.
 #[test]
 fn each_reader_runs_in_its_sandbox() {
     let pdf = std::fs::read(fixture("two-pages.pdf")).unwrap();
     let text = convert(&["pdf-text"], &pdf);
     assert!(text.status.success(), "{text:?}");
     let text = String::from_utf8(text.stdout).unwrap();
-    assert!(
-        text.contains("Café — accents.\n\n\u{C}Page two here."),
-        "{text:?}"
-    );
+    let pages = if cfg!(target_os = "macos") {
+        "Café — accents.\u{C}Page two here.\u{C}"
+    } else {
+        "Café — accents.\n\n\u{C}Page two here."
+    };
+    assert!(text.contains(pages), "{text:?}");
     let page = convert(&["pdf-page", "--page", "2", "--edge", "300"], &pdf);
+    assert!(page.status.success(), "{page:?}");
     assert!(page.stdout.starts_with(b"\xFF\xD8\xFF"), "{page:?}");
+    assert!(page.stdout.ends_with(b"\xFF\xD9"), "{page:?}");
+    let paragraphs = if cfg!(target_os = "macos") {
+        "Word text, Café.\nSecond paragraph.\n"
+    } else {
+        "Word text, Café.\n\nSecond paragraph.\n"
+    };
     for format in ["docx", "odt", "rtf"] {
         let doc = std::fs::read(fixture(&format!("text.{format}"))).unwrap();
         let out = convert(&["document", "--format", format], &doc);
         assert_eq!(
             String::from_utf8(out.stdout).unwrap(),
-            "Word text, Café.\n\nSecond paragraph.\n",
+            paragraphs,
             "{format}"
         );
     }
@@ -89,12 +106,14 @@ fn each_reader_runs_in_its_sandbox() {
 
 /// A reader's /proc files, read while it waits on stdin once `convert`
 /// has become it, in the same process.
+#[cfg(target_os = "linux")]
 struct Running {
     status: String,
     limits: String,
     cmdline: String,
 }
 
+#[cfg(target_os = "linux")]
 fn running(args: &[&str], reader: &str) -> Running {
     let mut child = protonctl()
         .arg("convert")
@@ -129,6 +148,7 @@ fn running(args: &[&str], reader: &str) -> Running {
 /// second answers `clone3`), no new privileges, and the readers' limits
 /// (R21, #71): 2 GiB of address space and a core size of 1, which keeps a
 /// crashed reader's core from a core handler; pandoc also has a 1 GiB heap.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_reader_holds_the_sandbox() {
     for (args, reader) in [
@@ -171,6 +191,7 @@ fn the_reader_holds_the_sandbox() {
 /// it; with its heap held to 1 GiB it stops in about a second. The reader
 /// is killed at 15 s, so a run without the limit fails here without
 /// taking the machine's memory.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_document_built_to_fill_memory_stops_at_the_heap_limit() {
     let doc = std::fs::read(fixture("fills-memory.docx")).unwrap();
@@ -205,17 +226,42 @@ fn a_document_built_to_fill_memory_stops_at_the_heap_limit() {
 }
 
 /// A damaged PDF is the reader's failure, which the server reports as an
-/// unreadable file, and not the sandbox's, which it reports as an error.
+/// unreadable file, and not the sandbox's, which it reports as an error:
+/// `convert`'s 70, or on macOS `sandbox-exec`'s 65 and 71.
 #[test]
 fn a_damaged_pdf_fails_in_the_reader_not_the_sandbox() {
-    let out = convert(&["pdf-text"], b"%PDF-1.4 damaged");
-    assert_eq!(out.status.code(), Some(1), "{out:?}");
-    assert_ne!(out.status.code(), Some(SANDBOX_FAILED));
+    for args in [
+        &["pdf-text"][..],
+        &["pdf-page", "--page", "1", "--edge", "100"],
+    ] {
+        let out = convert(args, b"%PDF-1.4 damaged");
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {out:?}");
+        assert_ne!(out.status.code(), Some(SANDBOX_FAILED));
+    }
+}
+
+/// On macOS the readers run through `sandbox-exec`, whose own failures
+/// exit 65 and 71: the server reports those as the sandbox's, not the
+/// document's. A profile that names no reader it can run is such a failure.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_reader_the_profile_cannot_run_is_the_sandbox_s_failure() {
+    let out = Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", "(version 1)(deny default)", "/usr/bin/true"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(71), "{out:?}");
+    let out = Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", "(version 1)(deny default", "/usr/bin/true"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(65), "{out:?}");
 }
 
 /// The D-Bus session of the throwaway keyring that `scripts/check.sh`
 /// starts. The keyring's folder is a new one under the temporary folder,
 /// which tells it from the user's own, which this never writes to.
+#[cfg(target_os = "linux")]
 fn throwaway_keyring() -> String {
     let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
     assert!(
@@ -228,6 +274,7 @@ fn throwaway_keyring() -> String {
 /// Pin `cli` as `protonctl setup drive` does once the user confirms it: the
 /// SHA-256 in the comment of the Secret Service item `protonctl`/
 /// `drive-cli-pin` (RFC Q33, #72), as `src/platform/linux.rs` stores one.
+#[cfg(target_os = "linux")]
 fn pin_in_the_keyring(cli: &Path) {
     use secret_service::{EncryptionType, blocking::SecretService};
     let pin = ring::digest::digest(&ring::digest::SHA256, &std::fs::read(cli).unwrap());
@@ -257,6 +304,7 @@ fn pin_in_the_keyring(cli: &Path) {
 /// ones a read makes, and records it, so the test fails on it (R1). It
 /// runs from a sealed memfd, as `/proc/self/fd/N`, which a `#!/bin/sh`
 /// script cannot, so it is one line that has `env -S` run the script.
+#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "needs a Secret Service; scripts/check.sh runs it in a private D-Bus session"]
 fn drive_reads_documents_through_the_sandboxed_readers() {

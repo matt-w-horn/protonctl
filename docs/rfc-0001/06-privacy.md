@@ -317,12 +317,12 @@ Each line is under 200 characters:
 | Mail and attachments | Bridge's IMAP into memory |
 | Drive files the app has synced | read from the app's folder, which adds no copy |
 | Drive files not on this Mac | a per-process RAM disk, since `proton-drive` writes downloads only into a folder (Q14); on Linux, `$XDG_RUNTIME_DIR` |
-| Conversion | bytes to `osascript` (PDFKit) or `textutil` on stdin today, text back on stdout; under a sandbox profile from Phase 4 (R21). On Linux, poppler or pandoc inside `protonctl convert`, under Landlock and seccomp (Q34) |
+| Conversion | bytes on stdin to `protonctl convert`, text back on stdout (R21): on macOS `osascript` (PDFKit) or `textutil` under a `sandbox-exec` profile (Q13); on Linux poppler or pandoc under Landlock and seccomp (Q34) |
 
 The helpers run with an empty environment, so they find the real home and
 per-user temporary folders through the system rather than `HOME` or
-`TMPDIR`. On Linux they can write only to `/dev/null` (Landlock); on macOS, until
-Phase 4, nothing stops them, and the no-disk test
+`TMPDIR`. The readers can write nowhere on macOS and only to `/dev/null`
+on Linux, and the no-disk test
 ([section 7](07-testing.md)) watches only the home and temporary folders
 it gives protonctl. Proton's own clients keep their caches (Bridge's
 encrypted store, the Drive app's folder, the CLI's cache), and the hosts
