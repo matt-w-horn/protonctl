@@ -372,9 +372,12 @@
     tokens takes 7.2 s in a release build (10.3 s in windows of 896,
     9.0 s in 512), not the 3.6 s estimated, and the process holds about
     1.4 GB with the model loaded. int8 and float16 weights were not
-    tried. The weights are not shipped by `scripts/install.sh` yet: the
-    README says how to make them with `scripts/otter-export.py`, and the
-    model folder is `~/Library/Application Support/protonctl/model`
+    tried. The weights are installed by `scripts/install-model.sh` from
+    a folder or a URL, hash-checked before they move (issue
+    [#55](https://github.com/matt-w-horn/protonctl/issues/55), built
+    2026-10-08; hosting is the maintainer's open decision), or made with
+    `scripts/otter-export.py` as the README says. The model folder is
+    `~/Library/Application Support/protonctl/model`
     (Linux: `$XDG_DATA_HOME/protonctl/model`). The model runs over
     results, not queries, so a bare name in a query is still known only
     as [section 6](06-privacy.md) describes.

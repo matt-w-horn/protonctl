@@ -51,7 +51,7 @@ flowchart TB
 | 2 | The privacy setting (R26) and `setup drive`; then aliases mode: the privacy pipeline for all three services at once, at `reply()`, over results, errors and page tokens, failing closed: privacy key, aliases, references, handles, sealed page tokens, keyed digests, the `entities` table, `detectors` and `guidance`; regex with validators and the name dictionary; `download_file`, `export_drive_manifest`, the CLI's `drive manifest`, the `export` and `inline` options, the export and download folders, page images, image content and inline bytes absent in aliases mode and kept in off mode; a panic hook in both modes (R25); the leak test and the `live-check.py` checks. The CLI may be tokenized here too, ahead of Phase 3, since in Phase 2 it is the easy way around the pipeline in Claude Code | built and tested on Linux 2026-10-04; on a Mac the same day, M2.8 (cloud-only reads), the setup commands, signing (Q12) and the aliases-mode live run passed, and the off-mode live run passed (M1.2); the role-play on real results and the other Mac checks have not run ([#16](https://github.com/matt-w-horn/protonctl/issues/16), [#17](https://github.com/matt-w-horn/protonctl/issues/17), [#18](https://github.com/matt-w-horn/protonctl/issues/18), [#19](https://github.com/matt-w-horn/protonctl/issues/19) and [#20](https://github.com/matt-w-horn/protonctl/issues/20)); the defects below are open; the CLI is not tokenized |
 | 3 | In aliases mode, the `reveal_*` tools, and the CLI tokenized with `--raw` and `--out` behind user presence; Claude Code sandbox settings documented (Q17) | to do; answer Q15 first. The sandbox settings are documented (M3.4, 2026-10-07) |
 | 4 | PDFKit and `textutil` under a sandbox profile, directly or behind `protonctl convert`, in both modes; Vision OCR for images and scans in aliases mode; on Linux, poppler and pandoc in `protonctl convert` (MP4) and Tesseract for OCR | M4.1 built 2026-10-07 (Q13): PDFKit and `textutil` behind `protonctl convert` under `sandbox-exec`, in both modes. On Linux the readers were built 2026-10-05, ahead of this phase (MP4). OCR (M4.2) is to do on both systems |
-| 5 | One model finds names in free text: Otter (multilingual, Q23) through `tract`, as configuration (files pinned by SHA-256, labels, threshold); recall measured per entity type and language on a labeled synthetic corpus; the dictionary's name rules stay until that evaluation shows one redundant | built 2026-10-08 (M5.2; [#60](https://github.com/matt-w-horn/protonctl/issues/60)), before Phases 3 and 4 (Q40): recall 0.930 and precision 0.950 on 315 mentions in 28 languages, at a threshold of 0.15; the weights are not yet shipped by `scripts/install.sh`, and the README says how to make them |
+| 5 | One model finds names in free text: Otter (multilingual, Q23) through `tract`, as configuration (files pinned by SHA-256, labels, threshold); recall measured per entity type and language on a labeled synthetic corpus; the dictionary's name rules stay until that evaluation shows one redundant | built 2026-10-08 (M5.2; [#60](https://github.com/matt-w-horn/protonctl/issues/60)), before Phases 3 and 4 (Q40): recall 0.930 and precision 0.950 on 315 mentions in 28 languages, at a threshold of 0.15; the weights are installed by `scripts/install-model.sh` from a folder or a URL, hash-checked (#55); hosting the URL is open |
 | 6 | Summary and question views from a local model, written with aliases; finer domain types and titles from signatures as hints | to do; Q38, open, names the runtime |
 | 7 | A Linux VM helper for the riskiest formats; an optional allowlist of names kept in plaintext. Privacy Filter as a second check was dropped on 2026-10-05 (Q39) | to do |
 | P0 to P5 | Linux ([section 11](11-platforms.md)): P1 builds and tests on Linux before Phase 2; P2 Mail and Calendar; P3 Drive; P4 converters with Phase 4; P5 presence with Phase 3 | P0 and P1 done 2026-10-04, with Q30 to Q35 decided; P2 to P4 built 2026-10-05, without OCR, and the live checks of P2 and P3 have not run ([#27](https://github.com/matt-w-horn/protonctl/issues/27) and [#28](https://github.com/matt-w-horn/protonctl/issues/28)); P5 to do |
@@ -368,9 +368,16 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
   `$XDG_DATA_HOME/protonctl/model`), pinned by SHA-256 in
   `src/privacy/detect/model.rs`, and nothing is fetched at run time
   (`deny.toml` bans HTTP clients; `tokenizers` is built without its HTTP
-  features). Not done: `scripts/install.sh` does not ship the weights;
-  the README's "Install the name model" says how to make them with
-  `scripts/otter-export.py`.
+  features). Built 2026-10-08 ([#55](https://github.com/matt-w-horn/protonctl/issues/55)):
+  `scripts/install-model.sh` installs both files from a folder (`--from`)
+  or a URL base (`--url`), and moves each into the model folder only after
+  its SHA-256 matches the pin read from `model.rs`; the folder is 0700 and
+  the files 0600, so only the user may write them. `scripts/install.sh`
+  fetches nothing; it reports whether the files are in place. Open, for the
+  maintainer: where the weights are hosted, which fills in the README's
+  `MODEL_URL`; and whether int8 or float16 weights keep the evaluation's
+  recall, not measured. Also open: `doctor` names the model folder but not
+  the install command, because that message is `LoadError` in `model.rs`.
 - M5.2 The model detector, for names in no header: people,
   organizations, projects, products and locations, the labels Q23
   measured, and street addresses only if Phase 5 adds a label for them
