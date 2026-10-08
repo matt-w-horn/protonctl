@@ -1,12 +1,14 @@
 # Privacy policy
 
-Last changed: 2026-10-05.
+Last changed: 2026-10-07.
 
 This policy covers protonctl: the program, its command line, and its
-Claude Code plugin. protonctl runs on your Mac and lets Claude read your
-Proton Mail, Calendar and Drive. It is unofficial and not affiliated with
-Proton AG. Proton's apps and services, and Anthropic's Claude apps and
-services, have their own privacy policies. This policy does not cover them.
+Claude Code plugin. protonctl runs on your Mac and lets a host app (Claude
+Code, Claude Desktop or Cowork) read your Proton Mail, Proton Calendar and
+Proton Drive. protonctl is unofficial: it is not affiliated with, endorsed
+or sponsored by Proton AG. Proton's apps and services, and Anthropic's
+Claude apps and services, have their own privacy policies. This policy
+does not cover them.
 
 ## Summary
 
@@ -45,7 +47,7 @@ headers and the names of your calendar's attendees, once for each server
 process. It holds them in memory only, and uses them to find those names in
 other results and replace them with aliases.
 
-The [README](README.md#what-works-now) lists every tool.
+The [README](README.md#what-can-it-read) lists every tool.
 
 ## Where results go
 

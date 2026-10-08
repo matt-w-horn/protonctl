@@ -49,7 +49,7 @@ flowchart TB
 | 1a | `serve`, `setup`, `doctor`, `status`, `logout`; read tools for Mail, Drive and Calendar; registration in both hosts; Cowork local and cloud test | Calendar, Drive and Mail reads built, `download_file` included, 18 tools; the 17 built by then passed `scripts/live-check.py` (2026-10-03), and `list_drive_tree` and PDF page images came after; the full off-mode live run passed (M1.2); Claude Code passed in off mode on 2026-10-06, and the Claude Desktop and Cowork tests have not run (M1.1; [#18](https://github.com/matt-w-horn/protonctl/issues/18)) |
 | 1b | The maintainer writes the policy table: a class for each write tool, and what the server does with each class; Mail and Drive write tools; sandbox write tests | withdrawn 2026-10-04: protonctl is read-only (Q5) |
 | 2 | The privacy setting (R26) and `setup drive`; then aliases mode: the privacy pipeline for all three services at once, at `reply()`, over results, errors and page tokens, failing closed: privacy key, aliases, references, handles, sealed page tokens, keyed digests, the `entities` table, `detectors` and `guidance`; regex with validators and the name dictionary; `download_file`, `export_drive_manifest`, the CLI's `drive manifest`, the `export` and `inline` options, the export and download folders, page images, image content and inline bytes absent in aliases mode and kept in off mode; a panic hook in both modes (R25); the leak test and the `live-check.py` checks. The CLI may be tokenized here too, ahead of Phase 3, since in Phase 2 it is the easy way around the pipeline in Claude Code | built and tested on Linux 2026-10-04; on a Mac the same day, M2.8 (cloud-only reads), the setup commands, signing (Q12) and the aliases-mode live run passed, and the off-mode live run passed (M1.2); the role-play on real results and the other Mac checks have not run ([#16](https://github.com/matt-w-horn/protonctl/issues/16), [#17](https://github.com/matt-w-horn/protonctl/issues/17), [#18](https://github.com/matt-w-horn/protonctl/issues/18), [#19](https://github.com/matt-w-horn/protonctl/issues/19) and [#20](https://github.com/matt-w-horn/protonctl/issues/20)); the defects below are open; the CLI is not tokenized |
-| 3 | In aliases mode, the `reveal_*` tools, and the CLI tokenized with `--raw` and `--out` behind user presence; Claude Code sandbox settings documented (Q17) | to do; answer Q15 first |
+| 3 | In aliases mode, the `reveal_*` tools, and the CLI tokenized with `--raw` and `--out` behind user presence; Claude Code sandbox settings documented (Q17) | to do; answer Q15 first. The sandbox settings are documented (M3.4, 2026-10-07) |
 | 4 | PDFKit and `textutil` under a sandbox profile, directly or behind `protonctl convert`, in both modes; Vision OCR for images and scans in aliases mode; on Linux, poppler and pandoc in `protonctl convert` (MP4) and Tesseract for OCR | M4.1 built 2026-10-07 (Q13): PDFKit and `textutil` behind `protonctl convert` under `sandbox-exec`, in both modes. On Linux the readers were built 2026-10-05, ahead of this phase (MP4). OCR (M4.2) is to do on both systems |
 | 5 | One model finds names in free text: Otter (multilingual, Q23) through `tract`, as configuration (files pinned by SHA-256, labels, threshold); recall measured per entity type and language on a labeled synthetic corpus; the dictionary's name rules stay until that evaluation shows one redundant | to do, next, before Phases 3 and 4 (Q40); Q23 decided 2026-10-05, after a proof of concept |
 | 6 | Summary and question views from a local model, written with aliases; finer domain types and titles from signatures as hints | to do; Q38, open, names the runtime |
@@ -328,7 +328,13 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
 - M3.3 The CLI tokenized by default; `--raw`, `drive get` and `mail
   attachment` behind user presence (R19). Exit: CLI tests.
 - M3.4 Answer Q17 and document the Claude Code sandbox settings. Exit:
-  each denial seen to work.
+  each denial seen to work. Done 2026-10-07 on Claude Code 2.1.293,
+  macOS only: the README's [Claude Code
+  sandbox](../../README.md#claude-code-sandbox) section, each denial
+  seen with the settings and its probe seen to pass without them
+  (Q17). Two of the six are not what the question assumed: running
+  `proton-drive` is not denied, its network is; and `security` is
+  hidden by the sandbox's default, not by a setting.
 
 ### Phase 4: isolated converters
 

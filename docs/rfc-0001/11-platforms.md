@@ -257,8 +257,8 @@ flowchart TB
 On Linux the model usually has a shell, in Claude Code or Claude
 Desktop's Code tab: the residual risk that it runs `proton-drive`, reads
 files or speaks IMAP around protonctl ([section 5](05-security.md)) is
-the normal case there, and Claude Code's sandbox settings (Q17) matter
-more.
+the normal case there, and the Claude Code sandbox settings in the
+README (Q17, checked on macOS only) matter more.
 
 ## Testing
 

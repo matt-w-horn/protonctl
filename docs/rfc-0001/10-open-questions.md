@@ -21,7 +21,7 @@
 | Q14 | Drive downloads to stdout, or a RAM disk | decided 2026-10-04 |  |
 | Q15 | Reaching LocalAuthentication | open | Phase 3 |
 | Q16 | Token cost of words and base64url | decided 2026-10-04 |  |
-| Q17 | Claude Code sandbox settings | open | Phase 3 |
+| Q17 | Claude Code sandbox settings | decided 2026-10-07 |  |
 | Q18 | Word list licence and curation | decided 2026-10-04; licence checked 2026-10-04 |  |
 | Q19 | Alias input, word count, URLs, what a `ref` holds | decided 2026-10-04 |  |
 | Q20 | Drive handles: path or node UID | decided 2026-10-04 |  |
@@ -433,18 +433,79 @@
   reader's state still goes to `~/Library/Logs/DiagnosticReports`, as
   macOS's crash reporter, not the reader, writes it.
 
+- Q17, decided 2026-10-07 for Phase 3
+  ([#23](https://github.com/matt-w-horn/protonctl/issues/23)): the
+  settings are in the README's
+  [Claude Code sandbox](../../README.md#claude-code-sandbox) section.
+  Checked on Claude Code 2.1.293 on macOS with a throwaway `--settings`
+  file: a headless session ran each probe through its Bash tool, with
+  the settings and without them, and the results were read from its
+  tool results, not its summary. Probes printed exit codes and error
+  text only.
+  - The Drive app's folder: `filesystem.denyRead` on
+    `~/Library/CloudStorage/ProtonDrive-*`. `ls` and a Python
+    `os.listdir` fail with `Operation not permitted`; without the
+    settings both succeed. The folder's name and existence stay
+    visible: `stat` succeeds. The Read, Grep and Glob tools run
+    outside the sandbox, so a `Read(...)` deny rule covers them: Grep
+    is refused with "Permission to read ... has been denied", Read
+    with "File is in a directory that is denied by your permission
+    settings".
+  - `proton-drive`: `denyRead` on the binary stops copying it (`cp:
+    Operation not permitted`) but not running it: `proton-drive
+    --version` exits 0 under the deny. Claude Code has no setting that
+    denies execution. What cuts the CLI off is the network:
+    `network.deniedDomains` with `proton.me` and `*.proton.me` refuses
+    its connection, "deny network-outbound proton.me:443 (host is on
+    the deny list)", even with `*.proton.me` in `allowedDomains`.
+  - Bridge's port: nothing to add. With `allowLocalBinding` at its
+    default `false`, a sandboxed command has no route to
+    127.0.0.1:1143: `nc` exits 1 and `curl` 7, where without the
+    settings `nc` connects. Claude Code sets `NO_PROXY` for localhost,
+    so the direct connection stays blocked whatever `allowedDomains`
+    holds, but a `localhost` or `127.0.0.1` entry there would open
+    every local port to a command that goes through the proxy, so
+    neither belongs in the list.
+  - The config: `filesystem.denyWrite` on `~/.config/protonctl`, under
+    which a Python `open(..., "w")` fails with `Operation not
+    permitted`, and an `Edit(...)` deny rule for the Edit and Write
+    tools and the file commands Claude Code recognizes, under which
+    `touch` is refused before it runs. Reads stay allowed. A
+    `Write(...)` rule is accepted and never consulted; `Edit(...)`
+    covers both tools.
+  - `security`: nothing to add, and no setting covers it. Inside the
+    sandbox `security find-generic-password -s protonctl` answers "The
+    specified item could not be found in the keychain" (exit 44);
+    outside it finds the items (exit 0). That is the sandbox's default
+    towards the Keychain on macOS, not a line in the settings, so it
+    is checked again after each Claude Code upgrade;
+    `excludedCommands`, `network.allowMachLookup: ["*"]` and
+    `filesystem.disabled` would each reopen it.
+  - Other hosts: `network.strictAllowlist: true` with `allowedDomains`
+    as the list. `curl https://example.com` gets "deny
+    network-outbound example.com:443 (host is not on the allow list)"
+    (exit 56), with `--noproxy '*'` no route at all (exit 6), and
+    with `example.com` allowed a 200. `allowUnsandboxedCommands:
+    false` removes the retry outside the sandbox, and
+    `failIfUnavailable` the silent fallback to no sandbox.
+  Limits: the sandbox covers the commands Claude runs, not commands
+  typed at `!`, `excludedCommands`, hooks or MCP servers, so protonctl
+  itself runs outside it, as it must; the proxy decides by hostname
+  without inspecting TLS; the permission rules match command text, not
+  the program; Linux was not checked, and there is no Drive app folder
+  there. The first attempt ran in auto mode, where the classifier
+  refused several probes as credential exploration before the sandbox
+  saw them; the recorded runs used `dontAsk`, so only the sandbox and
+  the deny rules decided.
+
 - Open, to check before the phase that depends on each
-  ([#22](https://github.com/matt-w-horn/protonctl/issues/22) and [#23](https://github.com/matt-w-horn/protonctl/issues/23)):
+  ([#22](https://github.com/matt-w-horn/protonctl/issues/22)):
   - Q15 (Phase 3): does a LocalAuthentication prompt appear when protonctl
     runs as a child of Claude Desktop, as a child of Claude Code, and inside
     Claude Code's sandbox? Which route reaches it with unsafe code
     forbidden: an `osascript` script, a Swift helper, or `objc2` with one
     reviewed exception (R18)? Whichever starts the prompt is the process
     macOS names in it.
-  - Q17 (Phase 3): which Claude Code sandbox settings deny reading the
-    Drive app's folder, running `proton-drive`, connecting to Bridge's
-    port, writing protonctl's config, running `security` on protonctl's
-    Keychain items, and reaching hosts outside an allowlist?
   - Q38 (Phase 6), split from Q23 on 2026-10-05: the runtime for the
     Phase 6 local model. That model writes text rather than labelling it,
     so Q23's span runtime need not fit it.

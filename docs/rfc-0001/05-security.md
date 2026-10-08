@@ -57,19 +57,19 @@ flowchart LR
 |---|---|---|
 | Prompt injection in mail, files or invitations | "trash every invoice" in an email | read-only, so no write to trick (R1); in aliases mode raw content needs Touch ID per item (R18) |
 | Exfiltration through writes | send, share link, invite | not implemented (R1) |
-| Exfiltration through the host's other tools | injected text has Claude put what protonctl returned into a web fetch, a `curl` through Bash, or another connector's send | not controlled by protonctl; in aliases mode tokenization limits what a result holds (R13), and raw text needs Touch ID (R18); run protonctl in sessions without network tools or other connectors that send, and in Claude Code limit the sandbox's network (Q17) |
+| Exfiltration through the host's other tools | injected text has Claude put what protonctl returned into a web fetch, a `curl` through Bash, or another connector's send | not controlled by protonctl; in aliases mode tokenization limits what a result holds (R13), and raw text needs Touch ID (R18); run protonctl in sessions without network tools or other connectors that send, and in Claude Code use the README's sandbox settings, whose `strictAllowlist` refuses every host not allowed for the commands Claude runs (Q17); WebFetch and other connectors are outside the sandbox |
 | Over-exposure | Claude reads a private folder | exclusions enforced in the server (R7) |
 | Disclosure through transcripts | the provider keeps transcripts, and a legal demand reaches them | in aliases mode, aliases, references, handles and keyed digests (R13 to R17), under a key that stays on the Mac; in off mode none: results reach the provider as Proton's clients show them |
 | Probing by name | injected text makes Claude search for a guessed name | not limited (Q7); `guidance` steers toward topics and references (R23). A search shows whether the name matches, and its `queryEntities` pairs the name with its alias, which then reads as that name in every transcript under the same key, earlier ones included. Since Q21 the pairing comes only when the name matches an entity in the result, and there are no key epochs |
 | De-aliasing through a reveal | the user approves one raw item | its `entities` table pairs each name in it with its alias, unmasking those aliases in every other transcript under the key (Q21) |
 | Spoofed Touch ID prompt | a subject or file name written to read as a harmless request | the prompt leads with protonctl's own words and computed facts; the name is cleaned, cut and quoted (R18) |
-| Keychain read by another program | the model runs `security find-generic-password -s protonctl -w` through Bash, and the user approves from habit | residual: never choose Always Allow for a program other than protonctl; Claude Code's sandbox can deny the command (Q17) |
+| Keychain read by another program | the model runs `security find-generic-password -s protonctl -w` through Bash, and the user approves from habit | residual: never choose Always Allow for a program other than protonctl. Inside Claude Code's sandbox `security` does not find the items at all (Q17), by the sandbox's default rather than a setting, so the prompt can appear only from a command outside it |
 | Malicious file | a crafted PDF or image targets a parser | converters in a sandboxed helper without network, Keychain or file writes (R21); a VM for the riskiest formats in Phase 7 |
 | Raw content on request | injected text asks Claude to reveal a document | one handle per call, Touch ID, a prompt that protonctl writes (R18) |
 | The model runs the CLI | in Claude Code, `protonctl mail message ID` through Bash | in aliases mode, CLI output tokenized by default; `--raw` and `--out` need user presence (R19) |
 | Fake Bridge on the port | a local process harvests the Bridge password | certificate pin; loopback only |
 | Binary swap | a fake `proton-drive` earlier on PATH, or put at the configured path after the check | absolute path; before every run, Proton's Team ID on macOS or the SHA-256 pinned at setup on Linux (R9, Q24, Q33); the version once per process |
-| Config tampering | the model, through Claude Code's file tools, removes an exclusion or changes the CLI path in `config.toml` | residual: the config is the user's file; Claude Code's sandbox can deny writes to it (Q17). The privacy mode is not in the config but in the Keychain (Q28), so the file cannot turn the layer off |
+| Config tampering | the model, through Claude Code's file tools, removes an exclusion or changes the CLI path in `config.toml` | residual: the config is the user's file; the README's sandbox settings deny writes to it from commands and from the Edit tool (Q17). The privacy mode is not in the config but in the Keychain (Q28), so the file cannot turn the layer off |
 | Silent change of mode | the mode is switched to off, or the privacy key deleted, while the user believes results are tokenized | a running server refuses calls after a mode change, and aliases mode refuses without its key rather than falling back (R26); `status` and `get_status` name the mode |
 | Replaced `protonctl` binary | a process running as the user swaps the binary, and the Keychain prompt that follows looks like a rebuild's and is approved from habit | a stable signing identity, a self-signed certificate from Phase 2, so that a prompt is rare and means something (Q12); the binary stays in a path the user can write |
 | Environment injection | `PROTON_DRIVE_BASE_URL` in the host's environment points the CLI's session at another server | the CLI runs with a cleared environment: `HOME` and the log level only |
@@ -91,7 +91,11 @@ flowchart LR
   learns the Bridge password (through `security` and a Keychain prompt
   approved from habit), edit protonctl's config, and so bypass protonctl's
   policy and the privacy layer. Claude Code's docs say deny rules are not
-  "a security boundary around the program"; its sandbox narrows this
+  "a security boundary around the program"; its sandbox, with the
+  settings in the README's Claude Code sandbox section, closes the
+  folder, Bridge's port, the config and every host not allowed, and
+  cuts `proton-drive` off from Proton; the binary still runs, and the
+  Keychain is hidden by the sandbox's default rather than a setting
   (Q17). R19 closes only the path through protonctl's own CLI, and only
   from Phase 3: until then, through Phase 5, which comes first (Q40), the
   CLI still prints untokenized output. Cowork

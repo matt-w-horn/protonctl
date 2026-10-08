@@ -1,53 +1,116 @@
-# protonctl
+# protonctl: a local, read-only MCP server for Proton Mail, Proton Drive and Proton Calendar
 
-A local MCP server and CLI that lets Claude (Claude Code, Claude Desktop and
-Cowork) read Proton Mail, Calendar and Drive through Proton's own apps. It is
-read-only: it cannot send, share, draft, label, move or delete. It holds no
-Proton password or keys, and keeps its secrets in the macOS Keychain, or on
-Linux in the Secret Service (see [On Linux](#on-linux)). Design and
-requirements: [docs/rfc-0001.md](docs/rfc-0001.md).
+protonctl lets an AI assistant answer questions about your own mail,
+calendar and files in Proton Mail, Proton Calendar and Proton Drive. It is
+a local MCP server (Model Context Protocol, the open standard that AI apps
+use to call tools) and a command-line tool, written in Rust, for macOS and
+Linux. It runs on your computer and reads through the Proton apps you
+already use. It is read-only: it can search and read, and it cannot send,
+share, draft, label, move or delete. The AI apps that call it are its
+hosts; the first supported hosts are Claude Code, Claude Desktop and
+Cowork. A privacy setting, aliases mode, replaces people's names and
+addresses in results with aliases before a host sees them.
 
-![Illustration in three chapters: protonctl answering from synthetic mail and calendar data; where that data goes once Claude reads it; and aliases mode, where the same answers come from results that hold aliases instead of names](docs/demo/protonctl-demo.gif)
+**protonctl is unofficial. It is not affiliated with, endorsed or
+sponsored by Proton AG.** The names Proton Mail, Proton Drive and Proton
+Calendar appear here only to say which services it reads.
+
+## What it does for you
+
+Ask the host a question in your own words. It calls protonctl's tools and
+answers from what they return. Three prompts to try, each with the tools
+that answer it:
+
+- "Which threads this week mention the invoice, and who sent them?"
+  Tools: `search_threads`, then `get_thread`.
+- "What is on my calendar next Tuesday, and does anything overlap?"
+  Tool: `list_events`.
+- "Find the lease PDF in my Drive and summarize its renewal terms."
+  Tools: `search_files`, then `read_file_content`. `search_files` needs the
+  Proton Drive app (see [Add Drive](#add-drive)).
+
+Everything runs on your computer. protonctl sends nothing to its
+developer, and the developer runs no server for it. Mail comes through
+Proton Mail Bridge, files through the Proton Drive app and the official
+Proton Drive CLI, and the calendar through a share link that you make for
+it. protonctl never holds your Proton password or keys. Its secrets go to
+the macOS Keychain, or on Linux to the Secret Service, never to a file.
+
+## What it cannot do
+
+- Send, reply, forward, draft, share, label, move, flag or delete. These
+  capabilities do not exist in protonctl, so no prompt, and no text inside
+  an email, can make it do them. Other tools in the same session can still
+  send; what a result holds is what could leave.
+- Write anything to your Proton account, uploads to Drive included.
+- Read Proton Pass, Contacts, the content of Docs and Sheets, Photos, VPN
+  or Wallet.
+- Run on Windows.
+- Recall a result once a host has it. What the host does with a result,
+  and what its model provider keeps, follows that host's terms
+  ([PRIVACY.md](PRIVACY.md)).
+
+## The privacy setting
+
+protonctl answers no call until you choose one of two modes
+([Choose the privacy setting](#choose-the-privacy-setting) has the
+commands):
+
+- **Off mode**: results as the Proton apps show them, names included.
+- **Aliases mode**: names, email addresses, phone and account numbers,
+  codes and passwords in results become aliases such as
+  `amber-falcon-river`, and one person gets one alias in every chat. The
+  host still answers; protonctl's instructions ask it to call people by
+  their role. protonctl writes nothing to disk in this mode.
+
+Aliases mode does not find every name yet. A name that appears only in
+free text, such as a message body, a subject or a file name, can reach the
+host as written. A model that finds such names is the next step (Phase 5
+in the [RFC](docs/rfc-0001/09-rollout.md)); it is not built.
+
+![Illustration in three chapters: protonctl answering from synthetic mail and calendar data; where that data goes once a host reads it; and aliases mode, where the same answers come from results that hold aliases instead of names](docs/demo/protonctl-demo.gif)
 
 *Illustration with synthetic data, not a recording, about two minutes long.
 Chapter 1 (what it does) shows what is built. Chapter 2 explains where your
-data goes once Claude reads it. Chapter 3 shows aliases mode and
+data goes once a host reads it. Chapter 3 shows aliases mode and
 `setup privacy`, built in Phase 2, and `reveal_message`, which is planned
 for Phase 3 ([RFC-0001](docs/rfc-0001.md)).
 [Full-resolution video (MP4)](https://github.com/matt-w-horn/protonctl/blob/f0414ddc9515df3b0941e76fb6351864e4b80e6d/docs/demo/protonctl-demo.mp4), rendered from
 [`docs/demo/storyboard.html`](docs/demo/storyboard.html) by
 [`docs/demo/render.mjs`](docs/demo/render.mjs).*
 
-protonctl is unofficial and not affiliated with Proton AG.
-
 ## How it fits together
 
 ```mermaid
 flowchart LR
-    CC["Claude Code"] -->|"stdio MCP"| P["protonctl serve"]
-    CD["Claude Desktop<br/>and Cowork"] -->|"stdio MCP"| P
+    subgraph hosts["MCP hosts"]
+        CC["Claude Code"]
+        CD["Claude Desktop<br/>and Cowork"]
+    end
+    CC -->|"stdio MCP"| P["protonctl serve"]
+    CD -->|"stdio MCP"| P
     P -->|"IMAP on 127.0.0.1,<br/>pinned certificate"| B["Proton Mail Bridge"]
     P -->|"signature-checked"| CLI["Proton Drive CLI"]
     P -->|"read-only"| DF["Proton Drive<br/>app folder"]
     P -->|"link on stdin"| CURL["/usr/bin/curl"]
     P --- KC[("macOS Keychain or<br/>Linux Secret Service:<br/>Bridge password,<br/>calendar links,<br/>privacy key and setting")]
-    B --> API[("Proton")]
+    B --> API[("Proton servers")]
     CLI --> API
     CURL -->|"HTTPS GET"| API
 
-    classDef host fill:#E0E7FF,stroke:#4F46E5,color:#1E1B4B
+    classDef host fill:#E0F2FE,stroke:#0284C7,color:#0C4A6E
     classDef core fill:#D1FAE5,stroke:#059669,color:#064E3B
-    classDef prot fill:#EDE9FE,stroke:#7C3AED,color:#2E1065
+    classDef client fill:#F3F4F6,stroke:#6B7280,color:#111827
     classDef store fill:#FEF9C3,stroke:#CA8A04,color:#422006
     classDef ext fill:#E2E8F0,stroke:#475569,color:#0F172A
     class CC,CD host
     class P core
-    class B,CLI,DF,CURL prot
+    class B,CLI,DF,CURL client
     class KC store
     class API ext
 ```
 
-## What works now
+## What can it read?
 
 | Service | Through | Tools |
 |---|---|---|
@@ -81,17 +144,19 @@ is removed after an hour, or when the server stops. With `export: true` it
 goes to the export folder instead (see Configuration). With `inline: true`
 its bytes come back in the result, base64, which not every host accepts yet.
 
-## Example prompts
+## Which hosts run it?
 
-Three prompts to try, each with the tools that answer it:
+protonctl is built for three hosts: Claude Code, Claude Desktop and
+Cowork. Each starts `protonctl serve` as a local MCP server over stdio and
+calls its tools. Claude Code ran it on 2026-10-06, in off mode; the same
+check in Claude Desktop and Cowork has not run yet
+([RFC section 9, M1.1](docs/rfc-0001/09-rollout.md#milestones),
+[#18](https://github.com/matt-w-horn/protonctl/issues/18)). Any other host
+that starts a local MCP server over stdio can start `protonctl serve` the
+same way; none has been tried.
 
-- "Which threads this week mention the invoice, and who sent them?"
-  Tools: `search_threads`, then `get_thread`.
-- "What is on my calendar next Tuesday, and does anything overlap?"
-  Tool: `list_events`.
-- "Find the lease PDF in my Drive and summarize its renewal terms."
-  Tools: `search_files`, then `read_file_content`. `search_files` needs the
-  Proton Drive app (see [Add Drive](#add-drive)).
+protonctl runs on a Mac with Apple silicon, and on Linux with the
+differences that [On Linux](#on-linux) lists.
 
 ## Install as a Claude Code plugin
 
@@ -102,7 +167,7 @@ If `~/.cargo/bin/protonctl` is missing, the server does not start, and the
 launcher's error message names `scripts/install.sh`.
 
 1. If you added the `proton` server by hand before (see
-   [Connect Claude](#connect-claude)), remove it first, so that its tools do
+   [Connect a host](#connect-a-host)), remove it first, so that its tools do
    not appear twice:
 
    ```sh
@@ -119,7 +184,7 @@ launcher's error message names `scripts/install.sh`.
    /plugin install protonctl@protonctl
    ```
 
-   For Cowork, add it in the Claude desktop app, under
+   For Cowork, add it in Claude Desktop, under
    **Customize > Plugins**: from **Discover** once the directory lists it,
    or from the marketplace `matt-w-horn/protonctl`.
 3. Install protonctl from a clone at a release tag. Replace `TAG` with the
@@ -141,7 +206,7 @@ launcher's error message names `scripts/install.sh`.
 5. Restart Claude Code and Claude Desktop.
 
 The plugin takes the place of the `claude mcp add` command in
-[Connect Claude](#connect-claude). The permission rules there have a form
+[Connect a host](#connect-a-host). The permission rules there have a form
 for the plugin.
 
 protonctl runs on a Mac with Apple silicon. There, the plugin runs in:
@@ -152,7 +217,7 @@ protonctl runs on a Mac with Apple silicon. There, the plugin runs in:
 
 Chat does not start a plugin's local server, on claude.ai or in the Claude
 apps. For Claude Desktop's chat, use the manual configuration in
-[Connect Claude](#connect-claude).
+[Connect a host](#connect-a-host).
 
 Updating the plugin changes only the launcher, not protonctl. To update
 protonctl itself, run `scripts/install.sh` again from a clone at the new
@@ -217,7 +282,7 @@ model. Choose one:
   free text, such as a body, a subject or a file name, can still pass as
   written until a model that finds such names is built (Phase 5, next in
   the [RFC](docs/rfc-0001/09-rollout.md)).
-- **Off** (`setup privacy --off`): results as they are, names included.
+- **Off mode** (`setup privacy --off`): results as they are, names included.
   It asks first, on a terminal.
 
 The setting is one Keychain item, `protonctl/privacy-mode`, for every host
@@ -281,7 +346,7 @@ every run must match it. After you update the CLI, run `setup drive`
 again to pin the new one; `setup drive --cli <path>` pins a CLI at
 another path. Each asks first.
 
-## Connect Claude
+## Connect a host
 
 Claude Code:
 
@@ -299,6 +364,10 @@ python3 -c 'import json, os, shutil; p = os.path.expanduser("~/Library/Applicati
 ```
 
 Then open the app again.
+
+Another host that starts a local MCP server over stdio takes the same
+command, `~/.cargo/bin/protonctl serve`, in its own configuration; see
+[Which hosts run it?](#which-hosts-run-it) for what has been checked.
 
 In Claude Code, these rules allow the tools that only read without a
 prompt, and leave the three that can save files in off mode
@@ -319,6 +388,81 @@ rules are: `mcp__plugin_protonctl_proton__get_status`,
 `mcp__plugin_protonctl_proton__search_*`,
 `mcp__plugin_protonctl_proton__count_*`,
 `mcp__plugin_protonctl_proton__read_*`.
+
+## Claude Code sandbox
+
+In Claude Code the model has a shell. Without a fence, a command it runs can
+list the Drive app's folder, run `proton-drive`, connect to Bridge's IMAP
+port, edit protonctl's config and search the Keychain, around protonctl's
+tools and its privacy setting. These settings in `~/.claude/settings.json`
+close those routes for the commands Claude runs. They were checked on
+Claude Code 2.1.293 on macOS: each probe below failed with them and passed
+without them (RFC Q17).
+
+```json
+{
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "denyRead": ["~/Library/CloudStorage/ProtonDrive-*", "~/bin/proton-drive"],
+      "denyWrite": ["~/.config/protonctl"]
+    },
+    "network": {
+      "allowedDomains": [],
+      "deniedDomains": ["proton.me", "*.proton.me"],
+      "strictAllowlist": true,
+      "allowLocalBinding": false
+    }
+  },
+  "permissions": {
+    "deny": [
+      "Read(~/Library/CloudStorage/ProtonDrive-*/**)",
+      "Edit(~/.config/protonctl/**)"
+    ]
+  }
+}
+```
+
+If `[drive] cli` in your config points elsewhere than `~/bin/proton-drive`,
+put that path in `denyRead`. Add the hosts your own work needs to
+`allowedDomains`; with the list empty, every host is refused.
+
+| Setting | What it closes | Seen |
+|---|---|---|
+| `denyRead` of the Drive folder | reading or listing the folder from any command, `ls` or a script alike | `Operation not permitted`. The folder's name and that it exists stay visible: `stat` succeeds |
+| `Read(...)` deny rule | the Read, Grep and Glob tools, which run outside the sandbox | `File is in a directory that is denied by your permission settings` |
+| `denyRead` of `proton-drive` | copying the binary | `cp: Operation not permitted`. It does not stop running it: `proton-drive --version` exits 0. No setting denies execution |
+| `deniedDomains` | the CLI's, and any command's, connections to Proton, even with `*.proton.me` in `allowedDomains` | `deny network-outbound proton.me:443 (host is on the deny list)` |
+| `allowLocalBinding: false`, the default | connections to 127.0.0.1:1143 | `nc` exits 1 and `curl` 7, where without the sandbox `nc` connects. Keep `localhost` and `127.0.0.1` out of `allowedDomains`: an entry there opens every local port to a command that goes through the proxy |
+| `denyWrite` of `~/.config/protonctl` | writes from any command; reads stay allowed | a Python `open(..., "w")` gets `Operation not permitted` |
+| `Edit(...)` deny rule | the Edit and Write tools, and the file commands Claude Code recognizes in Bash, such as `touch`, `sed -i`, `tee` and `>` | `touch` is refused before it runs |
+| `strictAllowlist` with `allowedDomains` | every other host, refused instead of prompted | `deny network-outbound example.com:443 (host is not on the allow list)`, `curl` exit 56; with `--noproxy '*'` no route at all, exit 6 |
+| `allowUnsandboxedCommands: false` | the retry outside the sandbox that Claude can otherwise ask for | |
+| `failIfUnavailable` | running without the sandbox when it cannot start | |
+
+The Keychain needs no setting, and none covers it: inside the sandbox
+`security find-generic-password -s protonctl` answers `The specified item
+could not be found in the keychain` (exit 44), and outside it finds the
+items. That is the sandbox's own default on macOS, not a line in this
+list, so check it again after a Claude Code upgrade with that command. An
+`excludedCommands` entry for `security`, `network.allowMachLookup: ["*"]`
+or `filesystem.disabled` would each reopen it.
+
+What the sandbox does not cover: commands you type at the `!` prompt,
+`excludedCommands`, hooks and MCP servers all run outside it, protonctl
+itself included, which is how it reaches the Keychain, Bridge and the
+CLI. Permission rules match the text of a command, not the program, so
+the `Read` and `Edit` rules above cover Claude's file tools and the
+file commands Claude Code recognizes, and the sandbox is what stops a
+script. The proxy decides by hostname without inspecting TLS, so keep
+`allowedDomains` short. `strictAllowlist` and `allowUnsandboxedCommands`
+count only from user settings, managed settings or `--settings`, not from
+a project's `.claude/settings.json`. On Linux the sandbox needs
+`bubblewrap` and `socat`, there is no Drive app folder, and a sandboxed
+command's loopback is private by design; the settings were not checked
+there.
 
 ## Check, and revoke
 
@@ -418,6 +562,47 @@ protonctl sends nothing to its developer, and the developer runs no server
 for it. [PRIVACY.md](PRIVACY.md) says what protonctl reads, where its
 results go, what it keeps on your Mac, and how to remove all of it.
 
+## FAQ
+
+**Is protonctl made by Proton?** No. protonctl is an independent
+open-source project under the Apache License 2.0. It is not affiliated
+with, endorsed or sponsored by Proton AG. It holds no Proton password or
+keys, and it reads through Proton's own apps and a calendar share link.
+
+**Does protonctl send my data anywhere?** Not to its developer: it has no
+telemetry, no crash reports and no update check, and the developer runs no
+server for it. Each result goes to the host that asked for it. The host
+sends it to its model provider under your account's terms, and keeps
+transcripts on your computer. [PRIVACY.md](PRIVACY.md) follows the data
+step by step.
+
+**Can it send, delete or move mail?** No. protonctl cannot send, reply,
+forward, draft, share, label, move, flag or delete, in mail, Drive or the
+calendar. These capabilities do not exist in it.
+
+**Does it need my Proton password?** No. Mail uses the password that
+Proton Mail Bridge shows for your account, which is not your Proton
+password. The calendar uses a share link. Drive uses the Proton Drive
+CLI's own sign-in, which protonctl never sees. Secrets go to the macOS
+Keychain, or on Linux to the Secret Service, never to a file.
+
+**Which AI apps can use it?** Claude Code, Claude Desktop and Cowork are
+the first supported hosts ([Which hosts run it?](#which-hosts-run-it)).
+Any host that starts a local MCP server over stdio can start it; no other
+host has been tried.
+
+**What does aliases mode hide, and what does it not?** It replaces names,
+email addresses, phone and account numbers, codes and passwords with
+aliases, turns IDs and Drive paths into opaque handles, and writes nothing
+to disk. It does not hide context that points to a person (a job, an
+event, a writing style), and a name that appears only in free text can
+still pass as written until the Phase 5 name model is built
+([The privacy setting](#the-privacy-setting)).
+
+**Does it run on Linux?** Yes, with poppler and pandoc for documents and
+the Secret Service for secrets ([On Linux](#on-linux)). Windows is not
+planned.
+
 ## Support
 
 Ask for help, or report a bug, in
@@ -425,6 +610,8 @@ Ask for help, or report a bug, in
 vulnerability privately, as [SECURITY.md](SECURITY.md) describes.
 
 ## Development
+
+Design and requirements: [docs/rfc-0001.md](docs/rfc-0001.md).
 
 ```sh
 scripts/check.sh
@@ -455,9 +642,9 @@ export CARGO_HOME="$TMPDIR/cargo-home"
 ```
 
 After an install, this runs every tool once against your real calendar,
-mail and Drive, as the Claude app does, and prints only outcomes and counts.
+mail and Drive, as a host does, and prints only outcomes and counts.
 Run it from a normal terminal; it uses the installed binary, so a Keychain
-approval given to the Claude app covers it too:
+approval given while a host ran it covers it too:
 
 ```sh
 python3 scripts/live-check.py
