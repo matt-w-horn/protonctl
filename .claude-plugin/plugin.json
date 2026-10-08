@@ -2,7 +2,7 @@
   "name": "protonctl",
   "displayName": "protonctl",
   "version": "0.1.0",
-  "description": "Gives Claude read-only access to Proton Mail, Calendar and Drive through Proton's own apps on a Mac. Unofficial; not affiliated with Proton AG.",
+  "description": "A local, read-only MCP server for Proton Mail, Proton Calendar and Proton Drive, reading through Proton's own apps on your Mac. Unofficial: not affiliated with, endorsed or sponsored by Proton AG.",
   "author": {
     "name": "Matt Horn",
     "url": "https://github.com/matt-w-horn"
@@ -10,13 +10,17 @@
   "repository": "https://github.com/matt-w-horn/protonctl",
   "license": "Apache-2.0",
   "keywords": [
-    "proton",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
     "proton-mail",
     "proton-calendar",
     "proton-drive",
     "email",
     "calendar",
+    "files",
     "read-only",
+    "privacy",
     "macos"
   ],
   "documentationUrl": "https://github.com/matt-w-horn/protonctl#readme",

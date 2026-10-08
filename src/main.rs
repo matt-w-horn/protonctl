@@ -1,5 +1,5 @@
-//! protonctl: a local MCP server and CLI that gives Claude scoped access to
-//! Proton through Proton's own clients. Design and requirements:
+//! protonctl: a local, read-only MCP server and CLI for Proton Mail, Drive
+//! and Calendar, through Proton's own clients. Design and requirements:
 //! docs/rfc-0001.md. Output is JSON on stdout; logs go to stderr.
 
 mod calendar;

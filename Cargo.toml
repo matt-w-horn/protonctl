@@ -3,7 +3,7 @@ name = "protonctl"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
-description = "Local MCP server and CLI giving Claude scoped access to Proton Mail, Drive and Calendar through Proton's own clients"
+description = "Local, read-only MCP server and CLI for Proton Mail, Proton Drive and Proton Calendar, through Proton's own clients. Unofficial; not affiliated with Proton AG."
 license = "Apache-2.0"
 publish = false
 
