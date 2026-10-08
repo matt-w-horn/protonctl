@@ -2,8 +2,10 @@
 
 # 7. Testing
 
-Built (on macOS on 2026-10-04, `cargo test` ran 247 tests: 238 unit, 9
-against the built binary, and 3 ignored. On Linux on 2026-10-07 it ran 268: 254 unit, 14
+Built (on macOS on 2026-10-07, `cargo test` ran 259 tests: 247 unit, 12
+against the built binary, and 6 ignored: one lists Drive through the
+real CLI, one is a timing, one reaches Dovecot, and three run as the
+child of another test. On Linux on 2026-10-07 it ran 268: 254 unit, 14
 against the built binary; 12 more are ignored by default: one lists Drive
 through the real CLI, one is a timing to run with `--release`, four reach
 a Secret Service and one reaches Dovecot, which `scripts/check.sh` runs
@@ -648,8 +650,8 @@ missing ones:
   T7 on `read_file_content`; before that read was added on macOS, T7
   passed with the plant. Neither watches the folders a reader finds
   through the system: on
-  Linux the readers can write only to `/dev/null` (Landlock), and on macOS they run
-  unconfined until Phase 4.
+  Linux the readers can write only to `/dev/null` (Landlock), and on
+  macOS nowhere (`sandbox-exec`, Q13).
 - No images or bytes, in aliases mode: no result carries image content, an
   embedded resource or base64 file data (R22). Built in part:
   `a_scan_in_aliases_mode_gives_a_reason_and_no_images` in
@@ -695,7 +697,32 @@ missing ones:
   runs `sandbox_probe` as a child, in `src/platform/linux.rs`, and
   `each_reader_runs_in_its_sandbox` and
   `a_damaged_pdf_fails_in_the_reader_not_the_sandbox` in
-  `tests/convert.rs`. macOS and Vision: not built (Phase 4).
+  `tests/convert.rs`. Built on macOS 2026-10-07 (M4.1, Q13):
+  `the_sandbox_confines_a_reader` in `src/platform/macos.rs` runs this
+  test binary again under `confine`, with only `sandbox_probe` selected,
+  which finds TCP to a port the parent listens on, UDP, a Unix socket the
+  parent listens on, a write to the temporary folder, to `/usr/bin` and to
+  `/System/Library`, a read of the temporary folder and of the home
+  folder, a chmod, a new process and a read of a program that is not the
+  reader each refused with `PermissionDenied`, and a read of a Keychain
+  item failed: an item the parent makes under the service
+  `protonctl-test-sandbox-probe`, reads back outside the sandbox, and
+  deletes after, never one of protonctl's. The two `tests/convert.rs`
+  tests above run on macOS too, with each reader's own output (PDFKit
+  puts no blank line before a form feed, `textutil` none between
+  paragraphs), and `a_reader_the_profile_cannot_run_is_the_sandbox_s_failure`
+  records `sandbox-exec`'s exits 71 and 65, which
+  `a_sandbox_failure_is_told_from_a_reader_s` in `src/convert.rs` reads as
+  the sandbox's. Each was shown to fail with the old behaviour planted:
+  the probe with writes allowed (with the path lookups a write needs and
+  no data reads, since without them the lookup fails first), with every
+  Mach service allowed (the Keychain read succeeded), with the network
+  allowed (TCP connected), and with fork, exec and `/usr/bin/true`
+  allowed (the process started); `each_reader_runs_in_its_sandbox` with
+  `/usr/bin` dropped from the profile, which keeps `osascript` from
+  starting; the damaged-PDF test with the script exiting 70; and the
+  exit-code test with `sandbox-exec`'s codes read as a reader's. Vision:
+  not built (M4.2).
   Memory and signals (built 2026-10-07, #71): a 200 KB Word file holding
   200 MiB of XML stops with pandoc's "Heap exhausted" in about a second,
   where without the heap limit pandoc was still reading at 15 s; each

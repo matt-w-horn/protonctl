@@ -64,7 +64,7 @@ records. After P1:
 | Drive folder discovery | `~/Library/CloudStorage/ProtonDrive-*` | `src/platform/macos.rs` | no place to look: the CLI-only mode |
 | Drive CLI check (R9) | `/usr/bin/codesign` and Apple Team ID `2SB5Z68H26`, before every run, on a copy in a new 0700 folder, which then runs (Q24, #72) | `src/drive/cli.rs` | the SHA-256 pinned at `setup drive` in the Secret Service item `drive-cli-pin`, before every run, on a sealed memfd copy, which then runs (Q33, built 2026-10-05; the copy and the store since 2026-10-07, #72) |
 | Bridge on demand (Q2) | `/usr/bin/open -g -j -b com.protonmail.bridge` | `src/mail/mod.rs` | never started; when Bridge is not running, the error says to run it as a systemd user unit, which the README shows (Q32) |
-| PDF text and page images; Word, RTF, OpenDocument | `/usr/bin/osascript` with PDFKit; `/usr/bin/textutil` | `src/extract.rs`, `src/convert.rs` | poppler (`pdftotext`, `pdftoppm`) and pandoc, each in `protonctl convert`'s sandbox (Q34, built 2026-10-05); text and images read as on macOS |
+| PDF text and page images; Word, RTF, OpenDocument | `/usr/bin/osascript` with PDFKit; `/usr/bin/textutil`; each in `protonctl convert` under a `sandbox-exec` profile (Q13, built 2026-10-07) | `src/extract.rs`, `src/convert.rs`, `src/platform/macos.rs` | poppler (`pdftotext`, `pdftoppm`) and pandoc, each in `protonctl convert`'s sandbox (Q34, built 2026-10-05); text and images read as on macOS |
 | Cache folder | `~/Library/Caches/protonctl` | `src/platform/macos.rs` | `$XDG_CACHE_HOME/protonctl`, else `~/.cache/protonctl` |
 | Content off disk (R10, Q14) | a RAM disk, made with `diskutil` and `newfs_hfs` (M2.8) | `src/platform/macos.rs`, `src/platform/linux.rs` | a 0700 folder under `$XDG_RUNTIME_DIR` (built 2026-10-05) |
 | Key ID (R20) | the Keychain item's comment | `src/platform/macos.rs`, `src/platform/linux.rs` | the item's `comment` attribute |
@@ -191,11 +191,14 @@ flowchart TB
 
 ## The document readers as built (P4)
 
-- `protonctl convert <job>` is a hidden command. The server starts it as
-  `/proc/self/exe`, so a binary replaced while the server runs still
-  converts, with an empty environment, the document on stdin and a 60 s
-  limit. It reads no config, secret or session: it enters the sandbox,
-  then `exec`s the reader, which inherits the sandbox.
+- `protonctl convert <job>` is a hidden command, the same on both
+  systems. The server starts it as `/proc/self/exe`, so a binary replaced
+  while the server runs still converts (on macOS as its own path), with an
+  empty environment, the document on stdin and a 60 s limit. It reads no
+  config, secret or session: it enters the sandbox, then `exec`s the
+  reader, which inherits the sandbox. On macOS it `exec`s `sandbox-exec`
+  with the readers' profile in front of `osascript` or `textutil` instead
+  (Q13), and the jobs below print the same shapes from PDFKit.
 - The jobs: `pdf-text` (`pdftotext -enc UTF-8 - -`, one form feed after
   each page, which also gives the page count: a glyph a document maps to
   a form feed comes out as a line break), `pdf-page` (`pdftoppm

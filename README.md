@@ -69,7 +69,10 @@ needed to read it. Text pages by `offset` and `maxChars` (20,000 characters
 unless asked otherwise), and each result says where the next page starts.
 PDF text comes from macOS's PDFKit and Word, RTF and OpenDocument text from
 `textutil`, both part of macOS, so there is nothing more to install (on
-Linux, see [On Linux](#on-linux)). A
+Linux, see [On Linux](#on-linux)). Each runs in a sandbox (`sandbox-exec`,
+deprecated and still enforcing) that lets it read only the system's own
+files, write nothing, and reach no network, no other program and no
+Keychain item; `protonctl doctor` reads a sample through each. A
 scanned PDF, which has no text, comes back as images of its pages, a few
 per call, and any PDF's pages can be asked for that way. Images come back
 as image content. A file saved by `download_file`, or an
