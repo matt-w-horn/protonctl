@@ -317,6 +317,81 @@ rules are: `mcp__plugin_protonctl_proton__get_status`,
 `mcp__plugin_protonctl_proton__count_*`,
 `mcp__plugin_protonctl_proton__read_*`.
 
+## Claude Code sandbox
+
+In Claude Code the model has a shell. Without a fence, a command it runs can
+list the Drive app's folder, run `proton-drive`, connect to Bridge's IMAP
+port, edit protonctl's config and search the Keychain, around protonctl's
+tools and its privacy setting. These settings in `~/.claude/settings.json`
+close those routes for the commands Claude runs. They were checked on
+Claude Code 2.1.293 on macOS: each probe below failed with them and passed
+without them (RFC Q17).
+
+```json
+{
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "denyRead": ["~/Library/CloudStorage/ProtonDrive-*", "~/bin/proton-drive"],
+      "denyWrite": ["~/.config/protonctl"]
+    },
+    "network": {
+      "allowedDomains": [],
+      "deniedDomains": ["proton.me", "*.proton.me"],
+      "strictAllowlist": true,
+      "allowLocalBinding": false
+    }
+  },
+  "permissions": {
+    "deny": [
+      "Read(~/Library/CloudStorage/ProtonDrive-*/**)",
+      "Edit(~/.config/protonctl/**)"
+    ]
+  }
+}
+```
+
+If `[drive] cli` in your config points elsewhere than `~/bin/proton-drive`,
+put that path in `denyRead`. Add the hosts your own work needs to
+`allowedDomains`; with the list empty, every host is refused.
+
+| Setting | What it closes | Seen |
+|---|---|---|
+| `denyRead` of the Drive folder | reading or listing the folder from any command, `ls` or a script alike | `Operation not permitted`. The folder's name and that it exists stay visible: `stat` succeeds |
+| `Read(...)` deny rule | the Read, Grep and Glob tools, which run outside the sandbox | `File is in a directory that is denied by your permission settings` |
+| `denyRead` of `proton-drive` | copying the binary | `cp: Operation not permitted`. It does not stop running it: `proton-drive --version` exits 0. No setting denies execution |
+| `deniedDomains` | the CLI's, and any command's, connections to Proton, even with `*.proton.me` in `allowedDomains` | `deny network-outbound proton.me:443 (host is on the deny list)` |
+| `allowLocalBinding: false`, the default | connections to 127.0.0.1:1143 | `nc` exits 1 and `curl` 7, where without the sandbox `nc` connects. Keep `localhost` and `127.0.0.1` out of `allowedDomains`: an entry there opens every local port to a command that goes through the proxy |
+| `denyWrite` of `~/.config/protonctl` | writes from any command; reads stay allowed | a Python `open(..., "w")` gets `Operation not permitted` |
+| `Edit(...)` deny rule | the Edit and Write tools, and the file commands Claude Code recognizes in Bash, such as `touch`, `sed -i`, `tee` and `>` | `touch` is refused before it runs |
+| `strictAllowlist` with `allowedDomains` | every other host, refused instead of prompted | `deny network-outbound example.com:443 (host is not on the allow list)`, `curl` exit 56; with `--noproxy '*'` no route at all, exit 6 |
+| `allowUnsandboxedCommands: false` | the retry outside the sandbox that Claude can otherwise ask for | |
+| `failIfUnavailable` | running without the sandbox when it cannot start | |
+
+The Keychain needs no setting, and none covers it: inside the sandbox
+`security find-generic-password -s protonctl` answers `The specified item
+could not be found in the keychain` (exit 44), and outside it finds the
+items. That is the sandbox's own default on macOS, not a line in this
+list, so check it again after a Claude Code upgrade with that command. An
+`excludedCommands` entry for `security`, `network.allowMachLookup: ["*"]`
+or `filesystem.disabled` would each reopen it.
+
+What the sandbox does not cover: commands you type at the `!` prompt,
+`excludedCommands`, hooks and MCP servers all run outside it, protonctl
+itself included, which is how it reaches the Keychain, Bridge and the
+CLI. Permission rules match the text of a command, not the program, so
+the `Read` and `Edit` rules above cover Claude's file tools and the
+file commands Claude Code recognizes, and the sandbox is what stops a
+script. The proxy decides by hostname without inspecting TLS, so keep
+`allowedDomains` short. `strictAllowlist` and `allowUnsandboxedCommands`
+count only from user settings, managed settings or `--settings`, not from
+a project's `.claude/settings.json`. On Linux the sandbox needs
+`bubblewrap` and `socat`, there is no Drive app folder, and a sandboxed
+command's loopback is private by design; the settings were not checked
+there.
+
 ## Check, and revoke
 
 ```sh
