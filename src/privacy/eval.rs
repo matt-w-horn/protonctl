@@ -24,9 +24,10 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
-use super::detect;
+use super::canon;
 use super::detect::dict::Names;
 use super::detect::model::{self, Model};
+use super::ident::EntityType;
 use super::key::Keys;
 use super::pipeline::{Context, run};
 use crate::tool::Tool;
@@ -156,120 +157,106 @@ fn message(item: &Item) -> Value {
     } })
 }
 
-/// The words of a text, in byte offsets: runs of letters and digits, each
-/// character of a script without spaces on its own, and each other
-/// character that is not whitespace, so that two names with only
-/// punctuation between them stay apart.
-fn words(s: &str) -> Vec<(usize, usize)> {
-    let mut out = Vec::new();
-    let mut run: Option<usize> = None;
-    for (i, c) in s.char_indices() {
-        if c.is_alphanumeric() && !detect::unspaced(c) {
-            run.get_or_insert(i);
-            continue;
-        }
-        if let Some(start) = run.take() {
-            out.push((start, i));
-        }
-        if !c.is_whitespace() {
-            out.push((i, i + c.len_utf8()));
-        }
-    }
-    if let Some(start) = run {
-        out.push((start, s.len()));
-    }
-    out
-}
-
-/// A replacement the pipeline made: the alias (or `link N`), the type its
-/// entity has, and the words of the input it stands for.
+/// A replacement the pipeline made: the alias (or `link N`, with its
+/// domain's alias in brackets), the type its entity has, and the bytes of
+/// the input it stands for.
 struct Replaced {
     label: String,
     kind: String,
-    /// Word indices of the input, `lo..hi`; empty when the alias stands
+    /// Byte offsets of the input, `start..end`; empty when the alias stands
     /// for nothing the alignment can see.
-    lo: usize,
-    hi: usize,
+    start: usize,
+    end: usize,
 }
 
-/// The replacements in `output`, found by aligning its words with the
-/// `input`'s: an alias is a key of `entities` or `link N`; the input words
-/// between the words matched on either side of it are what it replaced.
-fn replacements(input: &str, output: &str, entities: &Map<String, Value>) -> Vec<Replaced> {
-    static ALIAS: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"[a-z]+(?:-[a-z]+){2,}|\blink [0-9]+\b").expect("fixed"));
+/// The canonical value an entity of type `t` has for the text `s`, as the
+/// pipeline's registry keys it and a `ref` holds it.
+fn canonical(t: EntityType, s: &str) -> String {
+    match t {
+        EntityType::Person
+        | EntityType::Organization
+        | EntityType::Location
+        | EntityType::Project
+        | EntityType::Product => canon::name(s),
+        EntityType::Email => canon::email(s),
+        EntityType::Domain => canon::domain(s),
+        _ => canon::plain(s),
+    }
+}
+
+/// The replacements in `output`: an alias is a key of `entities`, or
+/// `link N` with its domain's alias. The text between two aliases is the
+/// input's, unchanged, so each alias starts where the text before it ends
+/// in the input. It ends where the input, read from there, has its `ref`'s
+/// canonical value and is followed by the text after it; when no span does
+/// (a short form stands under its full name's alias, a link has no `ref`),
+/// where the text after it is first found again.
+fn replacements(
+    input: &str,
+    output: &str,
+    entities: &Map<String, Value>,
+    keys: &Keys,
+) -> Vec<Replaced> {
+    static ALIAS: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\blink [0-9]+\b(?: \([a-z]+(?:-[a-z]+){2,}\))?|[a-z]+(?:-[a-z]+){2,}")
+            .expect("fixed")
+    });
     let aliases: Vec<(usize, usize)> = ALIAS
         .find_iter(output)
         .filter(|m| m.as_str().starts_with("link ") || entities.contains_key(m.as_str()))
         .map(|m| (m.start(), m.end()))
         .collect();
-    let plain: Vec<(usize, usize)> = words(output)
-        .into_iter()
-        .filter(|&(s, e)| !aliases.iter().any(|&(a, b)| a <= s && e <= b))
-        .collect();
-    let input_words = words(input);
-    // Longest common subsequence of the words, by text.
-    let (n, m) = (input_words.len(), plain.len());
-    let same = |i: usize, j: usize| {
-        input[input_words[i].0..input_words[i].1] == output[plain[j].0..plain[j].1]
-    };
-    let mut dp = vec![vec![0u32; m + 1]; n + 1];
-    for i in (0..n).rev() {
-        for j in (0..m).rev() {
-            dp[i][j] = if same(i, j) {
-                dp[i + 1][j + 1] + 1
-            } else {
-                dp[i + 1][j].max(dp[i][j + 1])
-            };
-        }
-    }
-    let mut matched = Vec::new();
-    let (mut i, mut j) = (0, 0);
-    while i < n && j < m {
-        if same(i, j) {
-            matched.push((i, j));
-            i += 1;
-            j += 1;
-        } else if dp[i + 1][j] >= dp[i][j + 1] {
-            i += 1;
-        } else {
-            j += 1;
-        }
-    }
     let mut out = Vec::new();
-    let mut taken_until = 0;
-    for &(a, b) in &aliases {
+    let mut at = 0;
+    let mut from = 0;
+    for (k, &(a, b)) in aliases.iter().enumerate() {
         let label = output[a..b].to_string();
-        let kind = if label.starts_with("link ") {
-            "link".to_string()
-        } else {
-            entities[&label]["type"]
-                .as_str()
-                .unwrap_or("?")
-                .to_string()
+        let before = &output[from..a];
+        if input[at..].starts_with(before) {
+            at += before.len();
+        } else if let Some(i) = input[at..].find(before) {
+            at += i + before.len();
+        }
+        from = b;
+        let after = aliases
+            .get(k + 1)
+            .map_or(&output[b..], |&(next, _)| &output[b..next]);
+        let last = k + 1 == aliases.len();
+        let follows = |end: usize| {
+            if last {
+                input[end..] == *after
+            } else {
+                input[end..].starts_with(after)
+            }
         };
-        // Plain output words before this alias.
-        let before = plain.iter().take_while(|&&(s, _)| s < a).count();
-        let lo = matched
-            .iter()
-            .filter(|&&(_, oj)| oj < before)
-            .map(|&(ii, _)| ii + 1)
-            .max()
-            .unwrap_or(0)
-            .max(taken_until);
-        let hi = matched
-            .iter()
-            .filter(|&&(_, oj)| oj >= before)
-            .map(|&(ii, _)| ii)
-            .min()
-            .unwrap_or(n)
-            .max(lo);
-        taken_until = hi;
+        let (kind, value) = if label.starts_with("link ") {
+            ("link".to_string(), None)
+        } else {
+            let e = &entities[&label];
+            (
+                e["type"].as_str().unwrap_or("?").to_string(),
+                e["ref"].as_str().and_then(|r| keys.open_ref(r).ok()),
+            )
+        };
+        let start = at;
+        let ends = || (start + 1..=input.len()).filter(|&e| input.is_char_boundary(e));
+        let end = value
+            .as_ref()
+            .and_then(|(t, v)| {
+                ends().find(|&e| follows(e) && canonical(*t, &input[start..e]) == *v)
+            })
+            .or_else(|| {
+                (last || !after.is_empty())
+                    .then(|| ends().find(|&e| follows(e)))
+                    .flatten()
+            });
+        let end = end.unwrap_or(start);
+        at = end;
         out.push(Replaced {
             label,
             kind,
-            lo,
-            hi,
+            start,
+            end,
         });
     }
     out
@@ -334,8 +321,7 @@ fn evaluate(model: Option<&Model>) -> Report {
         let text = out["message"][field(&item)].as_str().unwrap_or_default();
         let empty = Map::new();
         let entities = out["entities"].as_object().unwrap_or(&empty);
-        let input_words = words(&item.text);
-        let replaced = replacements(&item.text, text, entities);
+        let replaced = replacements(&item.text, text, entities, &keys);
         // The alias the From header's name has in this result.
         let from_alias = out["message"]["from"]
             .as_str()
@@ -343,29 +329,33 @@ fn evaluate(model: Option<&Model>) -> Report {
             .map(|(p, _)| p.to_string());
         let mut touched = vec![false; replaced.len()];
         for p in &item.planted {
-            let mine: Vec<usize> = (0..input_words.len())
-                .filter(|&i| p.start <= input_words[i].0 && input_words[i].1 <= p.end)
-                .collect();
-            let (Some(&first), Some(&last)) = (mine.first(), mine.last()) else {
-                continue;
-            };
             let covering: Vec<usize> = (0..replaced.len())
-                .filter(|&k| replaced[k].lo < replaced[k].hi && replaced[k].lo <= last && first < replaced[k].hi)
+                .filter(|&k| {
+                    let r = &replaced[k];
+                    r.start < r.end && r.start < p.end && p.start < r.end
+                })
                 .collect();
             for &k in &covering {
                 touched[k] = true;
             }
-            let covered = |i: usize| covering.iter().any(|&k| replaced[k].lo <= i && i < replaced[k].hi);
+            let covered = |i: usize| {
+                covering
+                    .iter()
+                    .any(|&k| replaced[k].start <= i && i < replaced[k].end)
+            };
             let came = if covering.is_empty() {
                 Came::Raw
-            } else if !mine.iter().all(|&i| covered(i)) {
+            } else if !(p.start..p.end).all(covered) {
                 Came::Part
             } else if covering.len() == 1 {
                 Came::Whole
             } else {
                 Came::Pieces
             };
-            let row = r.forms.entry((p.form.clone(), p.expect.clone())).or_default();
+            let row = r
+                .forms
+                .entry((p.form.clone(), p.expect.clone()))
+                .or_default();
             row.n += 1;
             let by_type = r.types.entry(p.expect.clone()).or_default();
             let by_lang = r.langs.entry(item.lang.clone()).or_default();
@@ -402,26 +392,35 @@ fn evaluate(model: Option<&Model>) -> Report {
                 }
             }
         }
-        for (k, rep) in replaced.iter().enumerate() {
-            let by_type = r.types.entry(rep.kind.clone()).or_default();
-            by_type.aliases += 1;
-            r.langs.entry(item.lang.clone()).or_default().aliases += 1;
-            if !touched[k] {
-                by_type.spurious += 1;
-                r.langs.entry(item.lang.clone()).or_default().spurious += 1;
-                let stood_for = if rep.lo < rep.hi {
-                    &item.text[input_words[rep.lo].0..input_words[rep.hi - 1].1]
-                } else {
-                    ""
-                };
-                r.spurious
-                    .push(format!("{}: {stood_for:?} as {}", item.id, rep.kind));
-            }
-        }
+        r.count_aliases(&item, &replaced, &touched);
     }
     r
 }
 
+impl Report {
+    /// Every alias in one item's result counts for its type and language;
+    /// one that touched no planted mention is spurious, listed with the
+    /// text it stood for.
+    fn count_aliases(&mut self, item: &Item, replaced: &[Replaced], touched: &[bool]) {
+        for (rep, &touched) in replaced.iter().zip(touched) {
+            let by_type = self.types.entry(rep.kind.clone()).or_default();
+            by_type.aliases += 1;
+            self.langs.entry(item.lang.clone()).or_default().aliases += 1;
+            if !touched {
+                by_type.spurious += 1;
+                self.langs.entry(item.lang.clone()).or_default().spurious += 1;
+                let stood_for = &item.text[rep.start..rep.end];
+                self.spurious
+                    .push(format!("{}: {stood_for:?} as {}", item.id, rep.kind));
+            }
+        }
+    }
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "counts of a few hundred mentions"
+)]
 fn ratio(a: usize, b: usize) -> String {
     if b == 0 {
         "-".into()
@@ -510,7 +509,7 @@ fn what_passes_raw_with_the_model() {
     let Some(model) = model::tests::shared() else {
         return;
     };
-    insta::assert_snapshot!(text(&evaluate(Some(model))));
+    insta::assert_snapshot!(text(&evaluate(Some(&model))));
 }
 
 /// Recall and precision at each threshold, to set `model::THRESHOLD`:
@@ -547,28 +546,53 @@ fn threshold_sweep() {
     }
 }
 
-/// The alignment sees what the pipeline replaced, by word, through
-/// repeated words, punctuation between names and names in pieces.
+/// The alignment sees what the pipeline replaced, to the byte, through
+/// repeated names, a short form under its full name's alias, two aliases
+/// with one letter between them, a name with a suffix joined to it, as
+/// Korean and Turkish write them, two names with one space between them,
+/// where only the `ref` says where the first ends, and a link with its
+/// domain's alias.
 #[test]
 fn the_alignment_finds_what_was_replaced() {
+    let keys = Keys::derive(&[4; 32]);
+    let entity = |t: EntityType, canonical: &str| json!({ "type": <&str>::from(t), "ref": keys.reference(t, canonical) });
     let entities: Map<String, Value> = [
-        ("amber-falcon-river", "person"),
-        ("copper-lantern-mist", "organization"),
+        (
+            "amber-falcon-river",
+            entity(EntityType::Person, "dana ruiz"),
+        ),
+        (
+            "copper-lantern-mist",
+            entity(EntityType::Organization, "acme"),
+        ),
+        ("velvet-otter-canyon", entity(EntityType::Person, "박 팀장")),
+        (
+            "quiet-maple-forge",
+            entity(EntityType::Project, "두루미 프로젝트"),
+        ),
+        ("tidy-harbor-lens", entity(EntityType::Person, "kaya")),
+        (
+            "bold-cinder-wharf",
+            entity(EntityType::Person, "murat demir"),
+        ),
+        (
+            "lunar-thistle-gate",
+            entity(EntityType::Organization, "anadolu lojistik"),
+        ),
+        ("sage-pebble-arch", entity(EntityType::Domain, "x.example")),
     ]
     .into_iter()
-    .map(|(a, t)| (a.to_string(), json!({ "type": t })))
+    .map(|(a, v)| (a.to_string(), v))
     .collect();
-    let input = "Dana Ruiz met Dana at Acme / Dana Ruiz again, see https://x.example/a";
-    let output =
-        "amber-falcon-river met amber-falcon-river at copper-lantern-mist / amber-falcon-river again, see link 1";
-    let got: Vec<(String, String, String)> = replacements(input, output, &entities)
+    let input = "Dana Ruiz met Dana at ACME / Dana Ruiz again. 두루미 프로젝트는 박 팀장이 Kaya Hanım'a; Murat Demir Anadolu Lojistik ile, see https://x.example/a";
+    let output = "amber-falcon-river met amber-falcon-river at copper-lantern-mist / amber-falcon-river again. quiet-maple-forge는 velvet-otter-canyon이 tidy-harbor-lens Hanım'a; bold-cinder-wharf lunar-thistle-gate ile, see link 1 (sage-pebble-arch)";
+    let got: Vec<(String, String, String)> = replacements(input, output, &entities, &keys)
         .iter()
         .map(|r| {
-            let w = words(input);
             (
                 r.label.clone(),
                 r.kind.clone(),
-                input[w[r.lo].0..w[r.hi - 1].1].to_string(),
+                input[r.start..r.end].to_string(),
             )
         })
         .collect();
@@ -577,11 +601,15 @@ fn the_alignment_finds_what_was_replaced() {
         [
             ("amber-falcon-river", "person", "Dana Ruiz"),
             ("amber-falcon-river", "person", "Dana"),
-            ("copper-lantern-mist", "organization", "Acme"),
+            ("copper-lantern-mist", "organization", "ACME"),
             ("amber-falcon-river", "person", "Dana Ruiz"),
-            ("link 1", "link", "https://x.example/a"),
+            ("quiet-maple-forge", "project", "두루미 프로젝트"),
+            ("velvet-otter-canyon", "person", "박 팀장"),
+            ("tidy-harbor-lens", "person", "Kaya"),
+            ("bold-cinder-wharf", "person", "Murat Demir"),
+            ("lunar-thistle-gate", "organization", "Anadolu Lojistik"),
+            ("link 1 (sage-pebble-arch)", "link", "https://x.example/a"),
         ]
         .map(|(a, b, c)| (a.to_string(), b.to_string(), c.to_string()))
     );
-    assert_eq!(words("与王小明开会 a-b"), vec![(0, 3), (3, 6), (6, 9), (9, 12), (12, 15), (15, 18), (19, 20), (20, 21), (21, 22)]);
 }

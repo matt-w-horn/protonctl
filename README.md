@@ -63,10 +63,14 @@ commands):
   host still answers; protonctl's instructions ask it to call people by
   their role. protonctl writes nothing to disk in this mode.
 
-Aliases mode does not find every name yet. A name that appears only in
-free text, such as a message body, a subject or a file name, can reach the
-host as written. A model that finds such names is the next step (Phase 5
-in the [RFC](docs/rfc-0001/09-rollout.md)); it is not built.
+Aliases mode does not find every name. Names in no header, in a message
+body, a subject or a file name, are found by a name model that runs on
+your Mac (Phase 5 in the [RFC](docs/rfc-0001/09-rollout.md)): on a
+synthetic corpus in 28 languages it found 93% of the people,
+organizations, projects, products and places, so about one name in
+fourteen can still reach the host as written, and a word it takes for a
+product's name becomes an alias too. Aliases mode refuses to run until
+the model is installed ([Install the name model](#install-the-name-model)).
 
 ![Illustration in three chapters: protonctl answering from synthetic mail and calendar data; where that data goes once a host reads it; and aliases mode, where the same answers come from results that hold aliases instead of names](docs/demo/protonctl-demo.gif)
 
@@ -275,10 +279,13 @@ model. Choose one:
   Nothing is saved to disk: a Drive file that is only in the cloud is
   fetched into a RAM disk that protonctl makes for itself and removes when
   it stops (on Linux, a private folder under `$XDG_RUNTIME_DIR`), and
-  images come back as a type and a reason. A name that appears only in
-  free text, such as a body, a subject or a file name, can still pass as
-  written until a model that finds such names is built (Phase 5, next in
-  the [RFC](docs/rfc-0001/09-rollout.md)).
+  images come back as a type and a reason. Names in free text, such as a
+  body, a subject or a file name, are found by the name model, which
+  misses some: about one name in fourteen on a synthetic corpus, more in
+  Hebrew, Czech, Finnish and Ukrainian, where the corpus is smallest
+  ([RFC section 7](docs/rfc-0001/07-testing.md)). Aliases mode needs the
+  model installed ([Install the name model](#install-the-name-model)) and
+  refuses every call without it.
 - **Off mode** (`setup privacy --off`): results as they are, names included.
   It asks first, on a terminal.
 
@@ -288,6 +295,35 @@ on the Mac. `setup privacy` also makes the privacy key,
 it, which changes every alias and stops old refs and handles from working.
 After a change, restart Claude Code and Claude Desktop: a server that is
 running refuses every call once the setting changes.
+
+## Install the name model
+
+Aliases mode finds names in free text with
+[Otter](https://huggingface.co/whoisjones/otter-cross-mmbert) (Apache-2.0),
+run on your Mac by a Rust ONNX runtime inside protonctl; nothing is
+fetched while it runs. The model is two files in
+`~/Library/Application Support/protonctl/model` (on Linux
+`$XDG_DATA_HOME/protonctl/model`, by default
+`~/.local/share/protonctl/model`): `otter.onnx`, 1.2 GB, and
+`tokenizer.json`. protonctl checks both against the SHA-256 values pinned
+in `src/privacy/detect/model.rs` when it loads them, then finds the names
+of a fixed sentence before it serves anything; if either check fails,
+every aliases-mode call is refused and `protonctl doctor` says why.
+
+The ONNX file is not in this repository. Make it once from the
+checkpoint, with Python, `torch`, `transformers` and `onnx` installed:
+
+```sh
+python3 scripts/otter-export.py CHECKPOINT_DIR ~/Library/Application\ Support/protonctl/model/otter.onnx
+cp CHECKPOINT_DIR/tokenizer.json ~/Library/Application\ Support/protonctl/model/
+~/.cargo/bin/protonctl doctor
+```
+
+`CHECKPOINT_DIR` is a local copy of the checkpoint at commit `8729188`;
+the script loads only that folder and runs the model's own code from it.
+The server loads the model once, in about four seconds on an M2 Pro, and
+holds about 1.4 GB of memory while it runs; a 20,000-character page takes
+about 7 s there.
 
 ## Add a calendar
 
@@ -592,8 +628,8 @@ host has been tried.
 email addresses, phone and account numbers, codes and passwords with
 aliases, turns IDs and Drive paths into opaque handles, and writes nothing
 to disk. It does not hide context that points to a person (a job, an
-event, a writing style), and a name that appears only in free text can
-still pass as written until the Phase 5 name model is built
+event, a writing style), and the name model that finds names in free
+text misses about one in fourteen
 ([The privacy setting](#the-privacy-setting)).
 
 **Does it run on Linux?** Yes, with poppler and pandoc for documents and
@@ -631,6 +667,9 @@ macOS build, so changes to macOS-only code are checked there too. With
 `dbus` and `gnome-keyring`), it also tests the Secret Service store against
 a throwaway keyring in a private D-Bus session. The tests of the Linux
 document readers need `poppler-utils` and `pandoc`, and fail without them.
+The tests of the name model run only where it is installed
+([Install the name model](#install-the-name-model)); elsewhere, in CI
+among others, they print a notice and check nothing.
 Inside Claude Code's Bash sandbox `~/.cargo` is not writable, so point Cargo
 elsewhere first:
 

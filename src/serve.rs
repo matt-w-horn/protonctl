@@ -1152,6 +1152,69 @@ mod tests {
         Arc::new(app)
     }
 
+    /// M5.2 end to end: through `call`, which hands the session's model to
+    /// the pipeline, a file whose text holds names in no header (a person,
+    /// an organization, a project, which the model may read as a product)
+    /// comes back with none of them, and every result names `model` in
+    /// `detectors`. Checks nothing where the model is not installed (CI).
+    #[tokio::test]
+    async fn names_in_free_text_are_aliased_through_the_server() {
+        if crate::privacy::detect::model::tests::shared().is_none() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("notes.txt"),
+            "Bartholomew Quist of Globex Corporation asked about the Falcon rewrite.",
+        )
+        .unwrap();
+        let cfg = crate::config::Config {
+            drive: Some(crate::config::DriveConfig {
+                folder: Some(dir.path().to_path_buf()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut app = App::from_config(cfg).unwrap();
+        app.privacy = crate::privacy::tests::privacy_with_model(Some(Mode::Aliases), Some([7; 32]));
+        let server = Server::new(Arc::new(app));
+        let top = server
+            .list_folder_aliases(Parameters(ListFolderAliases::default()))
+            .await
+            .unwrap();
+        let top = json_of(&top);
+        let all = serde_json::json!(["regex", "dictionary", "model"]);
+        assert_eq!(top["detectors"], all, "{top}");
+        let req = ReadAliases {
+            file_id: top["items"][0]["fileId"].as_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        let read = json_of(
+            &server
+                .read_file_content_aliases(Parameters(req))
+                .await
+                .unwrap(),
+        );
+        let text = read.to_string();
+        for leak in ["Bartholomew", "Quist", "Globex", "Falcon"] {
+            assert!(!text.contains(leak), "{leak} leaked: {text}");
+        }
+        assert_eq!(read["detectors"], all, "{read}");
+        let types: std::collections::BTreeSet<&str> = read["entities"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter_map(|e| e["type"].as_str())
+            .collect();
+        assert!(
+            types.len() == 3
+                && types.contains("person")
+                && types.contains("organization")
+                && (types.contains("project") || types.contains("product")),
+            "{types:?}: {read}"
+        );
+    }
+
     /// RFC R13 and R16 end to end: a Drive walk in aliases mode shows no
     /// address, link or local path, only aliases and handles, and a ref
     /// from one result finds the same file again.

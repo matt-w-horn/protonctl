@@ -97,11 +97,13 @@ const REVIEW_UID: &str = "Wn5Bt8Qc3Rj6Lz1D.review@proton.me";
 
 /// Planted values the Phase 2 detectors are documented not to catch, so
 /// the leak test leaves them out; a test checks that they still show, so
-/// a gap that closes moves its value into the corpus.
+/// a gap that closes moves its value into the corpus. These tests run
+/// without the name model (`Privacy::new` in test builds), since CI has
+/// none; `names_in_free_text_are_aliased_through_the_server` in
+/// `src/serve.rs` runs the installed model through the server.
 const GAPS: [(&str, &str); 2] = [
-    // A name only in free text, in no header or invitation: RFC section 6,
-    // Pipeline step 2, and security-privacy-review.md ("A name only free
-    // text carries stays plaintext until the name model", Phase 5).
+    // A name only in free text, in no header or invitation: found by the
+    // model (M5.2), which this test does not load.
     ("Bartholomew Quist", "a name only in free text"),
     // RFC section 6, Pipeline step 3: "Street addresses have no Phase 2
     // detector."

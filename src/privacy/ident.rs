@@ -90,11 +90,9 @@ impl EntityType {
     /// organization where the model types it a product.
     pub fn class(self) -> AliasClass {
         match self {
-            Self::Person
-            | Self::Organization
-            | Self::Location
-            | Self::Project
-            | Self::Product => AliasClass::Name,
+            Self::Person | Self::Organization | Self::Location | Self::Project | Self::Product => {
+                AliasClass::Name
+            }
             other => AliasClass::Of(other),
         }
     }

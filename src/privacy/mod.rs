@@ -295,6 +295,17 @@ pub mod tests {
         }
     }
 
+    /// The installed model, shared by every test, or none where it is not
+    /// installed (CI): a test that needs it checks `model::tests::shared()`
+    /// first and checks nothing without it.
+    pub struct SharedModel;
+
+    impl ModelSource for SharedModel {
+        fn load(&self) -> Result<Option<Arc<Model>>, LoadError> {
+            Ok(detect::model::tests::shared())
+        }
+    }
+
     /// A model folder with nothing in it.
     struct NotInstalled;
 
@@ -311,6 +322,14 @@ pub mod tests {
                 .unwrap()
                 .map_err(|()| anyhow::anyhow!("unreadable"))
         }
+    }
+
+    /// A `Privacy` on the installed model (`SharedModel`), for the tests
+    /// that run names in free text through the server.
+    pub fn privacy_with_model(mode: Option<Mode>, key: Option<[u8; 32]>) -> Privacy {
+        let m = Arc::new(FakeMode(Mutex::new(Ok(mode))));
+        let k = Arc::new(FakeKey(Mutex::new(key)));
+        Privacy::with_model(Box::new(m), Box::new(k), Box::new(SharedModel))
     }
 
     pub fn privacy(
@@ -369,7 +388,11 @@ pub mod tests {
         );
         // Off mode needs no model.
         let mode = Arc::new(FakeMode(Mutex::new(Ok(Some(Mode::Off)))));
-        let p = Privacy::with_model(Box::new(mode), Box::new(Arc::new(FakeKey::default())), Box::new(NotInstalled));
+        let p = Privacy::with_model(
+            Box::new(mode),
+            Box::new(Arc::new(FakeKey::default())),
+            Box::new(NotInstalled),
+        );
         assert_eq!(p.check().unwrap().mode, Mode::Off);
     }
 

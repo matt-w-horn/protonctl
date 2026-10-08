@@ -97,25 +97,26 @@ flowchart LR
   cuts `proton-drive` off from Proton; the binary still runs, and the
   Keychain is hidden by the sandbox's default rather than a setting
   (Q17). R19 closes only the path through protonctl's own CLI, and only
-  from Phase 3: until then, through Phase 5, which comes first (Q40), the
-  CLI still prints untokenized output. Cowork
+  from Phase 3: until then the CLI still prints untokenized output. Cowork
   has no host shell.
 - Identity can be inferred from context that no alias hides: a job, an
   event, a writing style. Hints add a little to it; summaries (Phase 6)
   reduce how much context leaves.
-- Until Phase 5, a name that appears only in free text, and in no header,
-  attendee list or query, stays plaintext: in a body, and also in a
+- A name that appears only in free text, and in no header, attendee list
+  or query, is found by the name model (Phase 5, M5.2, built 2026-10-08),
+  which misses some: on the synthetic corpus of
+  [section 7](07-testing.md) it found 0.930 of the mentions (people
+  0.935, organizations 0.954, projects 0.949, products 0.857, places
+  0.818), so about one name in fourteen still passes raw, in a body, a
   subject, a file or folder name, a label, or an event's title,
-  description or location. Drive is the widest gap: the app's folder names
-  no authors, so in Drive names and paths a name is found only by regex,
-  or by the process dictionary when a correspondent or attendee bears it
-  (Q22). Organizations, places and street addresses have no Phase 2
-  detector unless the dictionary holds them. `detectors` (R24) shows when
-  only `regex` and `dictionary` ran. Phase 5, built next (Q40), closes
-  most of this gap with one model (Q23), which still misses some names:
-  the proof of concept measured recall of 0.978 on synthetic texts and
-  0.924 on OCR text, on corpora small enough that these numbers are
-  optimistic.
+  description or location; the misses cluster in the languages the corpus
+  holds least of (Hebrew 0.5, Czech 0.667, Finnish and Ukrainian 0.75).
+  Street addresses have no detector. A word the model takes for a
+  product's name ("smoke detectors") becomes an alias, which hides it but
+  leaks nothing. `detectors` (R24) names `model` on every aliases-mode
+  result, since aliases mode refuses to run without a working model
+  (R13); the corpus numbers are the proof of concept's size twice over,
+  and still synthetic, so they remain optimistic.
 - Raw content that the user approves reaches the model provider in full, and
   the names in it stay in that transcript. Because aliases are stable, every
   pairing of a name with its alias, through a typed query or a reveal,

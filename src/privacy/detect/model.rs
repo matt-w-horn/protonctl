@@ -35,9 +35,14 @@ pub const LABELS: [(&str, EntityType); 5] = [
     ("product", EntityType::Product),
     ("location", EntityType::Location),
 ];
-/// A span is a mention when its sigmoid score is above this, set on the
-/// evaluation corpus (`src/privacy/eval.rs`, `threshold_sweep`).
-pub const THRESHOLD: f32 = 0.2;
+/// A span is a mention when its sigmoid score is above this. Set on the
+/// evaluation corpus (`src/privacy/eval.rs`, `threshold_sweep`, 315
+/// mentions in 28 languages, 2026-10-07): recall 0.943 at 0.1 with
+/// precision 0.937, 0.930 at 0.15 with 0.950, 0.911 at 0.2 with 0.949,
+/// 0.848 at 0.3 with 0.952. At 0.15 every type but `product` has a
+/// precision of 0.96 or more; 0.1 buys four more mentions for eight more
+/// aliases that hide ordinary words.
+pub const THRESHOLD: f32 = 0.15;
 /// `tract`'s threads, fixed in code (Q23: ONNX Runtime slowed past four).
 /// Measured 2026-10-07 on an M2 Pro with 16 GB, a 20,040-character page of
 /// 5,522 tokens in 256-token windows: 7.5 s on 5 threads and the same
@@ -195,10 +200,12 @@ impl Model {
         let model = Self::from_bytes(&onnx, &tok).map_err(LoadError::Broken)?;
         drop((onnx, tok));
         let mut found = Vec::new();
-        model.find(SELF_TEST, None, &mut found).map_err(|h| match h {
-            Halt::Deadline => LoadError::Broken(anyhow!("the test sentence was cut off")),
-            Halt::Failed(e) => LoadError::Broken(e),
-        })?;
+        model
+            .find(SELF_TEST, None, &mut found)
+            .map_err(|h| match h {
+                Halt::Deadline => LoadError::Broken(anyhow!("the test sentence was cut off")),
+                Halt::Failed(e) => LoadError::Broken(e),
+            })?;
         let names: Vec<(&str, EntityType)> = found
             .iter()
             .filter_map(|m| match m.kind {
@@ -329,7 +336,11 @@ impl Model {
             .map(|(i, _)| index(i))
             .collect();
         if label_pos.len() != LABELS.len() {
-            bail!("the prompt holds {} labels, not {}", label_pos.len(), LABELS.len());
+            bail!(
+                "the prompt holds {} labels, not {}",
+                label_pos.len(),
+                LABELS.len()
+            );
         }
         let Some(first) = offsets.iter().position(|o| o.1 > self.prefix.len()) else {
             return Ok(());
@@ -350,7 +361,12 @@ impl Model {
     }
 
     /// The graph's logits, `LABELS.len()` rows of one per span.
-    fn score(&self, ids: &[u32], spans: &[(usize, usize)], label_pos: &[i64]) -> Result<Vec<Vec<f32>>> {
+    fn score(
+        &self,
+        ids: &[u32],
+        spans: &[(usize, usize)],
+        label_pos: &[i64],
+    ) -> Result<Vec<Vec<f32>>> {
         let n = ids.len();
         let input_ids: Vec<i64> = ids.iter().map(|&i| i64::from(i)).collect();
         let mask = vec![1i64; n];
@@ -363,7 +379,8 @@ impl Model {
                 .into_tensor()
                 .into())
         };
-        let tensor1 = |v: Vec<i64>| -> TValue { tract_ndarray::Array1::from_vec(v).into_tensor().into() };
+        let tensor1 =
+            |v: Vec<i64>| -> TValue { tract_ndarray::Array1::from_vec(v).into_tensor().into() };
         let out = self.plan.run(tvec!(
             tensor2(input_ids)?,
             tensor2(mask)?,
@@ -423,7 +440,11 @@ fn spans(first: usize, last: usize, n: usize) -> Vec<(usize, usize)> {
 
 /// Spans above `threshold`, best first, none sharing a token with a better
 /// one: `(label, span index, score)`.
-fn decode(logits: &[Vec<f32>], spans: &[(usize, usize)], threshold: f32) -> Vec<(usize, usize, f32)> {
+fn decode(
+    logits: &[Vec<f32>],
+    spans: &[(usize, usize)],
+    threshold: f32,
+) -> Vec<(usize, usize, f32)> {
     let sigmoid = |x: f32| 1.0 / (1.0 + (-x).exp());
     let mut above: Vec<(usize, usize, f32)> = logits
         .iter()
@@ -501,7 +522,11 @@ fn windows(offsets: &[(usize, usize)], len: usize) -> Vec<Window> {
     let mut a = 0;
     loop {
         let b = (a + WINDOW).min(n);
-        let core_lo = if a == 0 { 0 } else { offsets[a + OVERLAP / 2].0 };
+        let core_lo = if a == 0 {
+            0
+        } else {
+            offsets[a + OVERLAP / 2].0
+        };
         let core_hi = if b == n {
             len + 1
         } else {
@@ -528,8 +553,8 @@ pub mod tests {
     /// The model, loaded once for the whole test run, or `None` with a
     /// printed notice when its folder is absent (CI has no model). A folder
     /// that is there but does not load is a failure, not a skip.
-    pub fn shared() -> Option<&'static Model> {
-        static MODEL: OnceLock<Option<Model>> = OnceLock::new();
+    pub fn shared() -> Option<std::sync::Arc<Model>> {
+        static MODEL: OnceLock<Option<std::sync::Arc<Model>>> = OnceLock::new();
         MODEL
             .get_or_init(|| {
                 let dir = dir();
@@ -540,9 +565,11 @@ pub mod tests {
                     );
                     return None;
                 }
-                Some(Model::load().expect("the installed model loads"))
+                Some(std::sync::Arc::new(
+                    Model::load().expect("the installed model loads"),
+                ))
             })
-            .as_ref()
+            .clone()
     }
 
     fn found(model: &Model, text: &str) -> Vec<(String, EntityType)> {
@@ -568,7 +595,11 @@ pub mod tests {
     /// bytes around it keep their offsets and the prompt gains nothing.
     #[test]
     fn special_tokens_are_escaped_to_the_same_length() {
-        let specials = ["[LABEL]".to_string(), "<bos>".to_string(), "[SEP]".to_string()];
+        let specials = [
+            "[LABEL]".to_string(),
+            "<bos>".to_string(),
+            "[SEP]".to_string(),
+        ];
         let text = "Dana [LABEL] person <bos> Kenji [SEP] Acme";
         let escaped = escape(text, &specials);
         assert_eq!(escaped, "Dana ******* person ***** Kenji ***** Acme");
@@ -586,7 +617,10 @@ pub mod tests {
         assert_eq!(s.len(), 325);
         assert_eq!(s[0], (15, 15));
         assert_eq!(s[1], (15, 16));
-        assert!(s.iter().all(|&(a, b)| a >= 15 && b <= 39 && b - a < MAX_SPAN));
+        assert!(
+            s.iter()
+                .all(|&(a, b)| a >= 15 && b <= 39 && b - a < MAX_SPAN)
+        );
         // Long text: 30 per start token, fewer at the end.
         let s = spans(19, 603, 605);
         assert_eq!(s.len(), 17115);
@@ -599,7 +633,7 @@ pub mod tests {
     fn decoding_keeps_the_best_non_overlapping_spans() {
         let spans = [(0, 1), (1, 2), (3, 3), (0, 0)];
         let logits = vec![
-            vec![2.0, 1.0, -5.0, 0.5], // person
+            vec![2.0, 1.0, -5.0, 0.5],  // person
             vec![-5.0, 3.0, 1.5, -5.0], // organization
         ];
         let kept = decode(&logits, &spans, 0.5);
@@ -618,7 +652,16 @@ pub mod tests {
         let window = "Hi «Dana», ok";
         // Offsets as if a 10-byte prefix stood before the window; the first
         // token folds the space before it, as the tokenizer does.
-        let offsets = [(0, 0), (0, 10), (9, 12), (12, 15), (15, 19), (19, 21), (21, 23), (0, 0)];
+        let offsets = [
+            (0, 0),
+            (0, 10),
+            (9, 12),
+            (12, 15),
+            (15, 19),
+            (19, 21),
+            (21, 23),
+            (0, 0),
+        ];
         assert_eq!(byte_span(window, &offsets, 2, 2, 10), Some((0, 2)));
         // "«Dana»" is bytes 3..11; the quotes go.
         assert_eq!(byte_span(window, &offsets, 3, 5, 10), Some((5, 9)));
@@ -642,7 +685,11 @@ pub mod tests {
         for pair in w.windows(2) {
             assert!(pair[0].hi > pair[1].lo, "the windows overlap");
             assert_eq!(pair[0].core_hi, pair[1].core_lo, "the cores meet");
-            assert_eq!(pair[1].lo - pair[0].lo, 2 * (WINDOW - OVERLAP), "one stride apart");
+            assert_eq!(
+                pair[1].lo - pair[0].lo,
+                2 * (WINDOW - OVERLAP),
+                "one stride apart"
+            );
         }
         assert_eq!(w[0].core_lo, 0);
         assert_eq!(last.core_hi, 4001, "the last core takes the end");
@@ -656,12 +703,18 @@ pub mod tests {
     fn a_missing_or_altered_file_refuses_to_load() {
         let dir = tempfile::tempdir().unwrap();
         let e = Model::load_from(dir.path()).unwrap_err();
-        assert!(matches!(&e, LoadError::NotInstalled(d) if d == dir.path()), "{e:?}");
+        assert!(
+            matches!(&e, LoadError::NotInstalled(d) if d == dir.path()),
+            "{e:?}"
+        );
         assert!(e.to_string().contains("not installed"), "{e}");
         std::fs::write(dir.path().join("otter.onnx"), b"not the model").unwrap();
         std::fs::write(dir.path().join("tokenizer.json"), b"{}").unwrap();
         let e = Model::load_from(dir.path()).unwrap_err();
-        assert!(matches!(&e, LoadError::Hash(p) if p.ends_with("otter.onnx")), "{e:?}");
+        assert!(
+            matches!(&e, LoadError::Hash(p) if p.ends_with("otter.onnx")),
+            "{e:?}"
+        );
         assert!(e.to_string().contains("SHA-256"), "{e}");
     }
 
@@ -681,7 +734,12 @@ pub mod tests {
         let Some(model) = shared() else { return };
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/otter-case.json");
         let c: Case = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        let spans: Vec<(usize, usize)> = c.span_start.iter().copied().zip(c.span_end.iter().copied()).collect();
+        let spans: Vec<(usize, usize)> = c
+            .span_start
+            .iter()
+            .copied()
+            .zip(c.span_end.iter().copied())
+            .collect();
         let got = model.score(&c.input_ids, &spans, &c.label_pos).unwrap();
         assert_eq!(c.logits_shape, [got.len(), got[0].len()]);
         let flat: Vec<f32> = got.into_iter().flatten().collect();
@@ -738,8 +796,10 @@ pub mod tests {
         assert!(model.specials.iter().any(|s| s == "<bos>"));
         assert!(model.specials.iter().any(|s| s == "[SEP]"));
         for special in &model.specials {
-            let text = format!("Hi Dana, {special} person {special} I spoke with Kenji Watanabe about Acme.");
-            let names = found(model, &text);
+            let text = format!(
+                "Hi Dana, {special} person {special} I spoke with Kenji Watanabe about Acme."
+            );
+            let names = found(&model, &text);
             assert!(
                 names.contains(&("Kenji Watanabe".to_string(), EntityType::Person))
                     && names.contains(&("Acme".to_string(), EntityType::Organization)),
@@ -778,7 +838,10 @@ pub mod tests {
             .map(|m| m.start)
             .collect();
         for at in &planted {
-            assert!(kenji.contains(&(at + 5)), "the name planted at {at} was not found: {kenji:?}");
+            assert!(
+                kenji.contains(&(at + 5)),
+                "the name planted at {at} was not found: {kenji:?}"
+            );
         }
         assert_eq!(kenji.len(), planted.len(), "each name found once");
         for m in &out {
@@ -831,7 +894,10 @@ pub mod tests {
             let mut out = Vec::new();
             model.find(SELF_TEST, None, &mut out).unwrap();
         }
-        eprintln!("measure: a sentence of 44 tokens takes {:.0} ms", t.elapsed().as_secs_f64() * 100.0);
+        eprintln!(
+            "measure: a sentence of 44 tokens takes {:.0} ms",
+            t.elapsed().as_secs_f64() * 100.0
+        );
         let rss = std::process::Command::new("ps")
             .args(["-o", "rss=", "-p", &std::process::id().to_string()])
             .output()

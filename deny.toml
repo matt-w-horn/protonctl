@@ -10,6 +10,12 @@ targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-
 yanked = "deny"
 # Unsound advisories anywhere in the tree, not only in direct dependencies.
 unsound = "all"
+ignore = [
+    # `paste` is a proc macro that `tokenizers` 0.22 uses at compile time
+    # (RFC Q23); it is unmaintained, not unsound, and runs nothing at run
+    # time. Revisit when tokenizers drops it.
+    { id = "RUSTSEC-2024-0436", reason = "paste: an unmaintained compile-time proc macro of tokenizers" },
+]
 
 [licenses]
 allow = ["Apache-2.0", "BSD-3-Clause", "ISC", "MIT", "Unicode-3.0", "Zlib"]

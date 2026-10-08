@@ -1208,7 +1208,10 @@ mod tests {
         assert_eq!(row["date"], "2026-09-29T16:42:00+00:00");
         assert_eq!(out["estimatedTotal"], 3);
         assert_eq!(out["dropped"], json!(["/aNewIdField"]));
-        assert_eq!(out["detectors"], json!(DETECTORS));
+        // Without a model (the test's context) `detectors` names the two
+        // that ran (R24); `names_in_no_header_are_found_by_the_model` has
+        // the three.
+        assert_eq!(out["detectors"], json!(["regex", "dictionary"]));
         let k = keys();
         assert_eq!(
             k.open_handle(ItemKind::Message, row["messageId"].as_str().unwrap())
@@ -1252,6 +1255,65 @@ mod tests {
             out["entities"][ops]["hints"],
             json!(["recipient", "your-organization", "organization"])
         );
+    }
+
+    /// M5.2 (D5, D7): names in no header, a person, an organization and a
+    /// project in a subject and a body, become aliases of their types, found
+    /// by the model and named in `detectors`. The one model pass over every
+    /// text of the result gives each text its own mentions at its own
+    /// offsets, so the organization named in both has one alias in both.
+    /// The project is a limit on record: the model reads "Falcon rewrite"
+    /// as one span in the subject and "Falcon" alone in the body, a product
+    /// there, so the two spans get two aliases (Q19). Checks nothing where
+    /// the model is not installed (CI).
+    #[test]
+    fn names_in_no_header_are_found_by_the_model() {
+        let Some(model) = crate::privacy::detect::model::tests::shared() else {
+            return;
+        };
+        let ctx = Context {
+            tool: Tool::GetMessage,
+            query: None,
+            you: Some("sam@okafor.example"),
+            names: &Names::default(),
+            incomplete: &[],
+            model: Some(&model),
+            deadline: None,
+        };
+        let v = json!({ "message": {
+            "from": "Sam Okafor <sam@okafor.example>",
+            "subject": "The Falcon rewrite at Globex Corporation",
+            "body": "Bartholomew Quist asked whether the Falcon rewrite can wait for the Globex Corporation audit.",
+        } });
+        let out = run(v, &keys(), &ctx).unwrap();
+        let text = out.to_string();
+        for leak in ["Bartholomew", "Quist", "Globex", "Falcon"] {
+            assert!(!text.contains(leak), "{leak} leaked: {text}");
+        }
+        assert_eq!(out["detectors"], json!(DETECTORS));
+        let typed = |t: &str| {
+            out["entities"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter(|(_, e)| e["type"] == t)
+                .map(|(alias, _)| alias.clone())
+                .collect::<Vec<String>>()
+        };
+        assert_eq!(typed("person").len(), 2, "{out}");
+        let orgs = typed("organization");
+        let mut things = typed("project");
+        things.extend(typed("product"));
+        assert_eq!(orgs.len(), 1, "{out}");
+        assert!(!things.is_empty(), "{out}");
+        let subject = out["message"]["subject"].as_str().unwrap();
+        let body = out["message"]["body"].as_str().unwrap();
+        for alias in &orgs {
+            assert!(
+                subject.contains(alias) && body.contains(alias),
+                "{alias}: {subject} / {body}"
+            );
+        }
     }
 
     #[test]

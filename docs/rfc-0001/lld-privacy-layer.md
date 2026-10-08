@@ -804,9 +804,16 @@ sequenceDiagram
   share its first letter; measured on 2026-10-04 in a release build on
   a Mac, the same pages took a median 54 ms and 89 ms with it, against
   23 ms and 33 ms on that Mac without it.
-- The model (Phase 5) is the one stage with a real cost: about 0.4 s per
-  window of 600 tokens with `tract` on five threads, so about 3.6 s for a
-  20,000-character page of nine windows (Q23, an estimate from one window).
+- The model (Phase 5) is the one stage with a real cost. Measured
+  2026-10-07 in a release build on an M2 Pro with 16 GB, with `tract` on
+  four threads and windows of 256 tokens overlapping by 64: a
+  20,040-character page of 5,522 tokens took 7.2 s (Q23 estimated 3.6 s
+  from one window of 600 tokens; smaller windows are faster per token,
+  since attention grows with the square of the window), and a 44-token
+  sentence 41 ms. The process holds about 1.4 GB with the model loaded.
+  The pipeline runs the model once per result, over every text the Names
+  stage saw, joined, so a result of many short fields costs a few windows
+  rather than a call per field.
 
 ## Testing hooks
 
