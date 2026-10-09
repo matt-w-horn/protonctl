@@ -48,3 +48,10 @@ cp target/release/protonctl "$HOME/.cargo/bin/.protonctl.new"
 mv -f "$HOME/.cargo/bin/.protonctl.new" "$HOME/.cargo/bin/protonctl"
 codesign -d -r- "$HOME/.cargo/bin/protonctl" 2>&1 | grep designated
 echo "install.sh: installed; restart Claude Code and Claude Desktop to run it"
+# The name model (RFC Q23) is not downloaded here. This only reports whether
+# its two files are in place and match their pinned hashes.
+if scripts/install-model.sh --check; then
+    echo "install.sh: the name model is installed"
+else
+    echo "install.sh: the name model is not installed; run scripts/install-model.sh --from DIR, or --url BASE (see README, Install the name model)"
+fi

@@ -262,6 +262,10 @@ replaced by something else. On Linux, install with
 The commands below use the full path, in case `~/.cargo/bin` is not on your
 PATH.
 
+`scripts/install.sh` does not download the name model. Its last line says
+whether the model is installed; if it is not, see
+[Install the name model](#install-the-name-model).
+
 ## Choose the privacy setting
 
 protonctl answers no call until you choose how its results reach the
@@ -313,8 +317,24 @@ in `src/privacy/detect/model.rs` when it loads them, then finds the names
 of a fixed sentence before it serves anything; if either check fails,
 every aliases-mode call is refused and `protonctl doctor` says why.
 
-The ONNX file is not in this repository. Make it once from the
-checkpoint, with Python, `torch`, `transformers` and `onnx` installed:
+The files are not in this repository. Install them from the hosted copy with
+`scripts/install-model.sh`, which checks each file's SHA-256 before it moves
+the file into place, so a wrong download is refused and the folder is left
+as it was. Replace `MODEL_URL` with the folder the maintainer publishes both
+files in:
+
+```sh
+scripts/install-model.sh --url MODEL_URL
+```
+
+`--url` fetches `MODEL_URL/otter.onnx` and `MODEL_URL/tokenizer.json`. To
+install from a folder you already have instead, pass `--from FOLDER`, the
+folder holding both files. The script creates the model folder readable only
+by you (mode 0700), and its files 0600. A second run skips the files already
+in place, and `scripts/install-model.sh --check` says whether both are there.
+
+Or make the ONNX file yourself from the checkpoint, with Python, `torch`,
+`transformers` and `onnx` installed:
 
 ```sh
 python3 scripts/otter-export.py CHECKPOINT_DIR ~/Library/Application\ Support/protonctl/model/otter.onnx
