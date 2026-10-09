@@ -6,9 +6,23 @@ cd "$(dirname "$0")/.."
 
 cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
-cargo test --locked
 cargo deny check
 scripts/plugin-check.sh
+
+# The tests run once, instrumented, and the coverage report at the end reads
+# their profiles: one full build of the tree, not a plain one and an
+# instrumented one, since the second build was what filled CI's disk once
+# the name model's crates joined (2026-10-08). Each `--no-report` run below
+# adds to the same profiles. On a Mac, Homebrew's llvm matches its rustc;
+# elsewhere cargo-llvm-cov uses rustup's llvm-tools-preview component.
+brew_llvm=/opt/homebrew/opt/llvm/bin
+# Each one set by hand is kept; only an unset one falls back to Homebrew's.
+if [ -x "$brew_llvm/llvm-cov" ]; then
+    export LLVM_COV="${LLVM_COV:-$brew_llvm/llvm-cov}" \
+        LLVM_PROFDATA="${LLVM_PROFDATA:-$brew_llvm/llvm-profdata}"
+fi
+cargo llvm-cov clean --workspace
+cargo llvm-cov --no-report --locked
 
 # On Linux, also lint the macOS build (RFC section 11), so the macOS platform
 # file cannot drift unseen. Nothing built here is linked or run: ring's C code
@@ -30,10 +44,10 @@ if [ "$(uname -s)" = Linux ]; then
         keyring=$(mktemp -d)
         trap 'rm -rf "$keyring"' EXIT
         XDG_DATA_HOME="$keyring" XDG_RUNTIME_DIR="$keyring" dbus-run-session -- \
-            scripts/with-keyring.sh cargo test --locked --bin protonctl platform::linux -- --ignored
+            scripts/with-keyring.sh cargo llvm-cov --no-report --locked --bin protonctl platform::linux -- --ignored
         # A Drive read through the readers, with the CLI's pin in the store (Q33).
         XDG_DATA_HOME="$keyring" XDG_RUNTIME_DIR="$keyring" dbus-run-session -- \
-            scripts/with-keyring.sh cargo test --locked --test convert -- --ignored
+            scripts/with-keyring.sh cargo llvm-cov --no-report --locked --test convert -- --ignored
     else
         echo "check.sh: skipped the Secret Service tests (needs dbus-run-session and gnome-keyring-daemon)" >&2
     fi
@@ -47,16 +61,9 @@ if [ "$(uname -s)" = Linux ]; then
 fi
 
 # Line coverage may not fall below the floor: the 2026-10-03 figure, 62.99%,
-# rounded down. Raise it as tests grow. On a Mac, Homebrew's llvm matches its
-# rustc; elsewhere cargo-llvm-cov uses rustup's llvm-tools-preview component.
+# rounded down. Raise it as tests grow. The report merges every run above.
 floor=62
-brew_llvm=/opt/homebrew/opt/llvm/bin
-# Each one set by hand is kept; only an unset one falls back to Homebrew's.
-if [ -x "$brew_llvm/llvm-cov" ]; then
-    export LLVM_COV="${LLVM_COV:-$brew_llvm/llvm-cov}" \
-        LLVM_PROFDATA="${LLVM_PROFDATA:-$brew_llvm/llvm-profdata}"
-fi
-if ! cargo llvm-cov --locked --summary-only --fail-under-lines "$floor"; then
+if ! cargo llvm-cov report --summary-only --fail-under-lines "$floor"; then
     echo "check.sh: line coverage is below $floor% (or cargo-llvm-cov is missing)" >&2
     exit 1
 fi
