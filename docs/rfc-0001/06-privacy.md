@@ -84,11 +84,12 @@ any step returns an error that names no content (R13).
    [Appendix A](appendix-a-phase-0.md)) and every calendar attendee, built
    on the first aliases-mode call and held in memory only, so that a
    correspondent's name is found in Drive names, subjects and titles too.
-   Until Phase 5, which comes next (Q40), the server knows a query term
-   is a name only when an operator holds it (`from:`, `to:`, `cc:`, `bcc:`), a regex finds it, or
-   the dictionary already has it; a bare name among topic words ("Alice
-   Chen contract") is not recognized, so `queryEntities` and R23's
-   guidance miss it, unless the process dictionary holds the name.
+   The server knows a query term is a name only when an operator holds
+   it (`from:`, `to:`, `cc:`, `bcc:`), a regex finds it, or the
+   dictionary already has it; the model (Phase 5) runs over results, not
+   queries, so a bare name among topic words ("Alice Chen contract") is
+   not recognized, and `queryEntities` and R23's guidance miss it, unless
+   the process dictionary holds the name.
 3. Detect: regex with validators (an email address; a phone number checked
    as assigned with `phonenumber`; a card number by the Luhn check; an IBAN
    by mod-97; a URL; a domain name; an IP address; a US Social Security
@@ -97,13 +98,14 @@ any step returns an error that names no content (R13).
    account name in a path; a SHA-1 or SHA-256 digest in hex and a
    Proton message ID, which become a keyed digest and a handle, as the
    same values in fields do), the dictionary over all text with
-   `aho-corasick`, and from Phase 5 one model, Otter (Q23), for people,
-   organizations, projects, products and locations. The model is
-   configuration, not code: a pinned file with its labels and threshold,
-   replaced by another only when recall per entity type and language does
-   not fall. Street addresses have
-   no Phase 2 detector, and the model finds them only if Phase 5 adds a
-   label for them.
+   `aho-corasick`, and one model, Otter (Q23; Phase 5, built
+   2026-10-08), for people, organizations, projects, products and
+   locations, run after the dictionary over every text of the result in
+   one pass, adding only the names neither of the others claimed. The
+   model is configuration, not code: a pinned file with its labels and
+   threshold, replaced by another only when recall per entity type and
+   language does not fall. Street addresses have no detector: the model
+   has no label for them.
 4. Resolve each mention to an entity (below).
 5. Replace each mention with its alias and build the `entities` table;
    replace IDs with handles, digests with keyed digests, and page tokens
@@ -143,9 +145,15 @@ parentheses, numbered within the result, with no word alias and no
   person's name, by typing (a swap, a letter added or lost) or by OCR (0
   for o, 1 for i, rn for m), is never joined: it gets its own alias,
   linked by `maybeSameAs`. Names that appear in no header are found only
-  by Phase 5's model. These rules stay beside the model; one is removed
-  only when the evaluation shows that nothing it finds passes raw
-  without it (Q23).
+  by the model. These rules stay beside the model; one is removed only
+  when the evaluation shows that nothing it finds passes raw without it
+  (Q23); the 2026-10-08 evaluation ran the whole pipeline, never a
+  pipeline with one rule removed, so none has been shown redundant and
+  all stay. The dictionary's short forms, initials and misspellings also
+  carry the link to the full name (`maybeSameAs`), which a mention the
+  model finds does not ([section 7](07-testing.md)).
+  A name the model reads in two spans ("Falcon rewrite" in a subject,
+  "Falcon" in the body) gets two aliases, one per span (Q19).
 - Known limits: inflected names (a German genitive, Slavic case endings) and
   names written in another script get their own aliases unless an email
   address links them.
@@ -163,9 +171,10 @@ parentheses, numbered within the result, with no word alias and no
   Case folding is Unicode's, without Turkish rules.
 - Names (person, organization, location) share one tag in the alias
   HMAC (Q19, [low-level design](lld-privacy-layer.md#constructions)), so
-  a display name typed `person` in Phase 2 and `organization` by the model
-  in Phase 5 keeps its alias, at the cost that a person and an
-  organization with the same canonical name share one. Changes to the
+  a display name typed `person` by the dictionary and `organization` by
+  the model keeps its alias, and so does a project the model reads as a
+  product, at the cost that a person and an organization with the same
+  canonical name share one. Changes to the
   canonical rules or the word list change aliases; the `v1` in the key
   labels versions them, and `get_status` reports it.
 

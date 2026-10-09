@@ -1,25 +1,78 @@
 ---
 source: src/privacy/eval.rs
-expression: report()
+expression: text(&evaluate(None))
 ---
-form | type | n | raw | part | split | linked | mistyped
-address in ASCII, body only | email | 1 | 0 | 0 | 0 | 0 | 0
-address in non-ASCII, body only | email | 2 | 0 | 0 | 0 | 0 | 0
-link with http scheme | link | 1 | 0 | 0 | 0 | 0 | 0
-link without http scheme | link | 3 | 0 | 0 | 0 | 0 | 0
-organization never in mail | organization | 2 | 2 | 0 | 0 | 0 | 0
-organization short name | organization | 1 | 0 | 0 | 0 | 0 | 0
-organization that sends mail | organization | 2 | 0 | 0 | 0 | 0 | 0
-person full, in headers | person | 2 | 0 | 0 | 0 | 0 | 0
-person full, process only | person | 1 | 0 | 0 | 0 | 0 | 0
-person given name | person | 2 | 0 | 0 | 0 | 0 | 0
-person in run-in CJK text | person | 1 | 0 | 0 | 0 | 0 | 0
-person initials | person | 2 | 0 | 0 | 0 | 0 | 0
-person initials, dotted | person | 1 | 0 | 0 | 0 | 0 | 0
-person middle initial | person | 1 | 0 | 0 | 0 | 0 | 0
-person misspelled, OCR | person | 3 | 0 | 0 | 2 | 2 | 0
-person misspelled, typing | person | 2 | 0 | 0 | 2 | 2 | 0
-person surname | person | 3 | 0 | 0 | 0 | 0 | 0
-person surname, honorific | person | 1 | 0 | 0 | 0 | 0 | 0
-person surname, shared | person | 1 | 0 | 0 | 1 | 1 | 0
-project in text | project | 2 | 2 | 0 | 0 | 0 | 0
+form | type | n | raw | part | pieces | split | linked | mistyped
+ascii | email | 1 | 0 | 0 | 0 | 0 | 0 | 0
+caps | person | 1 | 1 | 0 | 0 | 0 | 0 | 0
+cjk | person | 2 | 0 | 0 | 0 | 0 | 0 | 0
+full | location | 22 | 22 | 0 | 0 | 0 | 0 | 0
+full | organization | 59 | 57 | 0 | 0 | 0 | 0 | 0
+full | person | 62 | 57 | 0 | 0 | 0 | 0 | 0
+full | product | 14 | 13 | 1 | 0 | 0 | 0 | 1
+full | project | 37 | 37 | 0 | 0 | 0 | 0 | 0
+full-in-headers | person | 2 | 0 | 0 | 0 | 0 | 0 | 0
+full-process-only | person | 1 | 0 | 0 | 0 | 0 | 0 | 0
+genitive | person | 1 | 1 | 0 | 0 | 0 | 0 | 0
+given | person | 42 | 37 | 0 | 0 | 0 | 0 | 0
+honorific | person | 6 | 5 | 1 | 0 | 0 | 0 | 0
+http | link | 1 | 0 | 0 | 0 | 0 | 0 | 0
+in-text | project | 2 | 2 | 0 | 0 | 0 | 0 | 0
+initials | person | 7 | 5 | 0 | 0 | 0 | 0 | 0
+initials-dotted | person | 1 | 0 | 0 | 0 | 0 | 0 | 0
+lower | person | 1 | 1 | 0 | 0 | 0 | 0 | 0
+middle-initial | person | 1 | 0 | 1 | 0 | 0 | 0 | 0
+never-in-mail | organization | 2 | 2 | 0 | 0 | 0 | 0 | 0
+no-http | link | 3 | 0 | 0 | 0 | 0 | 0 | 0
+non-ascii | email | 2 | 0 | 0 | 0 | 0 | 0 | 0
+ocr | person | 9 | 3 | 1 | 0 | 2 | 2 | 0
+possessive | person | 1 | 1 | 0 | 0 | 0 | 0 | 0
+sends-mail | organization | 2 | 0 | 0 | 0 | 0 | 0 | 0
+short | organization | 2 | 1 | 0 | 0 | 0 | 0 | 0
+surname | person | 26 | 22 | 0 | 0 | 0 | 0 | 0
+surname-honorific | person | 1 | 0 | 1 | 0 | 0 | 0 | 0
+surname-shared | person | 1 | 0 | 0 | 0 | 1 | 1 | 0
+typing | person | 3 | 0 | 0 | 0 | 2 | 2 | 0
+
+type | mentions | found | recall | aliases | spurious | precision
+email | 3 | 3 | 1.000 | 3 | 0 | 1.000
+link | 4 | 4 | 1.000 | 4 | 0 | 1.000
+location | 22 | 0 | 0.000 | 0 | 0 | -
+organization | 65 | 5 | 0.077 | 6 | 0 | 1.000
+person | 168 | 31 | 0.185 | 36 | 0 | 1.000
+product | 14 | 0 | 0.000 | 0 | 0 | -
+project | 39 | 0 | 0.000 | 0 | 0 | -
+all | 315 | 43 | 0.137 | 49 | 0 | 1.000
+
+language | mentions | found | recall | aliases | spurious | precision
+ar | 8 | 0 | 0.000 | 0 | 0 | -
+cs | 3 | 0 | 0.000 | 0 | 0 | -
+de | 19 | 1 | 0.053 | 1 | 0 | 1.000
+el | 3 | 0 | 0.000 | 0 | 0 | -
+en | 138 | 39 | 0.283 | 45 | 0 | 1.000
+es | 12 | 0 | 0.000 | 0 | 0 | -
+fa | 4 | 0 | 0.000 | 0 | 0 | -
+fi | 4 | 0 | 0.000 | 0 | 0 | -
+fr | 14 | 0 | 0.000 | 0 | 0 | -
+he | 4 | 0 | 0.000 | 0 | 0 | -
+hi | 8 | 0 | 0.000 | 0 | 0 | -
+hu | 4 | 0 | 0.000 | 0 | 0 | -
+id | 4 | 0 | 0.000 | 0 | 0 | -
+it | 8 | 0 | 0.000 | 0 | 0 | -
+ja | 10 | 0 | 0.000 | 0 | 0 | -
+ko | 5 | 0 | 0.000 | 0 | 0 | -
+nl | 8 | 0 | 0.000 | 0 | 0 | -
+pl | 6 | 0 | 0.000 | 0 | 0 | -
+pt | 8 | 0 | 0.000 | 0 | 0 | -
+ro | 3 | 0 | 0.000 | 0 | 0 | -
+ru | 5 | 0 | 0.000 | 0 | 0 | -
+sv | 3 | 0 | 0.000 | 0 | 0 | -
+sw | 4 | 0 | 0.000 | 0 | 0 | -
+th | 4 | 0 | 0.000 | 0 | 0 | -
+tr | 5 | 0 | 0.000 | 0 | 0 | -
+uk | 4 | 0 | 0.000 | 0 | 0 | -
+vi | 4 | 0 | 0.000 | 0 | 0 | -
+zh | 13 | 3 | 0.231 | 3 | 0 | 1.000
+all | 315 | 43 | 0.137 | 49 | 0 | 1.000
+
+spurious

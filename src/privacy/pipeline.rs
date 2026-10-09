@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::LazyLock;
+use std::time::Instant;
 
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -15,6 +16,7 @@ use serde::Serialize;
 
 use super::canon;
 use super::detect::dict::{Dictionary, Names, display_name_type};
+use super::detect::model::{Halt, Model};
 use super::detect::{self, Detector, Form, Kind, Mention, pattern};
 use super::fields::{Policy, policy};
 use super::ident::{AliasClass, EntityType, ItemKind};
@@ -25,8 +27,20 @@ use crate::tool::Tool;
 /// 25,000 tokens with room to spare (RFC section 6, Size).
 pub const CAP: usize = 90_000;
 
-/// What the pipeline reports to `detectors`.
-pub const DETECTORS: [Detector; 2] = [Detector::Regex, Detector::Dictionary];
+/// Every detector, as `detectors` names them when the model ran, and as
+/// an error names them.
+pub const DETECTORS: [Detector; 3] = [Detector::Regex, Detector::Dictionary, Detector::Model];
+
+/// What `detectors` reports: every detector, or without the model the two
+/// that ran (R24), which only happens in tests, since aliases mode refuses
+/// calls without a working model.
+fn detectors(with_model: bool) -> &'static [Detector] {
+    if with_model {
+        &DETECTORS
+    } else {
+        &DETECTORS[..2]
+    }
+}
 
 /// In tests only, text that makes the rewrite stage panic, for the
 /// fail-closed test (RFC section 7; low-level design, "Testing hooks").
@@ -144,6 +158,12 @@ pub struct Context<'a> {
     pub names: &'a Names,
     /// The sources of `names` that could not be read whole.
     pub incomplete: &'a [NameSource],
+    /// The name model (RFC Q23). `None` only in tests: the patterns and the
+    /// dictionary run alone, and `detectors` says so (R24).
+    pub model: Option<&'a Model>,
+    /// The call's deadline (R8): the model stops between windows once it
+    /// has passed, and the call fails as timed out.
+    pub deadline: Option<Instant>,
 }
 
 /// A source of the process dictionary (RFC Q22).
@@ -158,6 +178,8 @@ pub enum NameSource {
 pub enum PipelineError {
     TooLarge,
     Failed,
+    /// The call's deadline passed while the model ran.
+    Timeout,
 }
 
 /// An entity's role in this result; the first is the one shown.
@@ -239,9 +261,11 @@ struct Registry {
 impl Registry {
     fn key(t: EntityType, raw: &str) -> Option<EntityKey> {
         let canonical = match t {
-            EntityType::Person | EntityType::Organization | EntityType::Location => {
-                canon::name(raw)
-            }
+            EntityType::Person
+            | EntityType::Organization
+            | EntityType::Location
+            | EntityType::Project
+            | EntityType::Product => canon::name(raw),
             EntityType::Email => canon::email(raw),
             EntityType::Phone => raw.to_string(),
             EntityType::Card | EntityType::Iban => canon::compact(raw),
@@ -393,6 +417,14 @@ struct State<'a> {
     /// The same, canonical, once the Names stage is over.
     local_canon: BTreeSet<String>,
     dict: Option<Dictionary>,
+    model: Option<&'a Model>,
+    deadline: Option<Instant>,
+    /// The texts the Names stage saw, run through the model in one pass
+    /// between the stages, so a result of many short fields costs a few
+    /// windows rather than a call per field.
+    pending: Vec<String>,
+    /// The model's mentions by text (hidden characters removed).
+    model_found: HashMap<String, Vec<Mention>>,
     reg: Registry,
     dropped: Vec<String>,
 }
@@ -401,6 +433,17 @@ struct State<'a> {
 enum After {
     Keep,
     Remove,
+}
+
+/// The model gave up: at the deadline the call timed out; otherwise it
+/// failed, since a name the model could not look at would pass raw (R13).
+impl From<Halt> for PipelineError {
+    fn from(h: Halt) -> Self {
+        match h {
+            Halt::Deadline => Self::Timeout,
+            Halt::Failed(_) => Self::Failed,
+        }
+    }
 }
 
 /// Hidden characters and their `\u{...}` escapes (R6) removed, with a map
@@ -436,14 +479,26 @@ fn without_hidden(text: &str) -> (String, Vec<usize>) {
 }
 
 impl State<'_> {
-    fn mentions(&self, text: &str) -> Vec<Mention> {
+    fn mentions(&mut self, text: &str) -> Result<Vec<Mention>, PipelineError> {
         let (copy, map) = without_hidden(text);
         let mut found = Vec::new();
         pattern::find(&copy, &mut found);
         if let Some(d) = &self.dict {
             d.find(&copy, &mut found);
         }
-        detect::settle(found)
+        if let Some(model) = self.model {
+            let from_model = if let Some(m) = self.model_found.get(&copy) {
+                m.clone()
+            } else {
+                // A text the Names stage did not see: run it alone.
+                let mut m = Vec::new();
+                model.find(&copy, self.deadline, &mut m)?;
+                self.model_found.insert(copy.clone(), m.clone());
+                m
+            };
+            detect::add_model(&mut found, from_model);
+        }
+        Ok(detect::settle(found)
             .into_iter()
             .map(|mut m| {
                 m.start = map[m.start];
@@ -455,7 +510,50 @@ impl State<'_> {
                         .map_or(1, char::len_utf8);
                 m
             })
-            .collect()
+            .collect())
+    }
+
+    /// One model pass over every text the Names stage saw: the texts
+    /// joined by blank lines, windowed once, and each mention given back
+    /// to the text it lies in; a span across two texts is no mention.
+    fn model_pass(&mut self) -> Result<(), PipelineError> {
+        let Some(model) = self.model else {
+            return Ok(());
+        };
+        let texts: BTreeSet<String> = std::mem::take(&mut self.pending)
+            .into_iter()
+            .filter(|t| !t.trim().is_empty())
+            .collect();
+        if texts.is_empty() {
+            return Ok(());
+        }
+        let mut joined = String::new();
+        let mut ranges = Vec::with_capacity(texts.len());
+        for t in &texts {
+            if !joined.is_empty() {
+                joined.push_str("\n\n");
+            }
+            ranges.push((joined.len(), joined.len() + t.len()));
+            joined.push_str(t);
+        }
+        let mut found = Vec::new();
+        model.find(&joined, self.deadline, &mut found)?;
+        let mut by_text: Vec<Vec<Mention>> = vec![Vec::new(); ranges.len()];
+        for mut m in found {
+            let Some(i) = ranges
+                .iter()
+                .position(|&(lo, hi)| lo <= m.start && m.end <= hi)
+            else {
+                continue;
+            };
+            m.start -= ranges[i].0;
+            m.end -= ranges[i].0;
+            by_text[i].push(m);
+        }
+        for (t, mentions) in texts.into_iter().zip(by_text) {
+            self.model_found.insert(t, mentions);
+        }
+        Ok(())
     }
 
     /// The value a mention's alias comes from (RFC section 6, Canonical
@@ -471,10 +569,17 @@ impl State<'_> {
         }
     }
 
-    /// Free text: register in the Register stage; rewritten in Rewrite.
-    fn text(&mut self, text: &str, role: Role) -> Option<String> {
-        let mentions = self.mentions(text);
-        match self.stage {
+    /// Free text: seen in the Names stage, for the model's one pass;
+    /// registered in the Register stage; rewritten in Rewrite.
+    fn text(&mut self, text: &str, role: Role) -> Result<Option<String>, PipelineError> {
+        if self.stage == Stage::Names {
+            if self.model.is_some() {
+                self.pending.push(without_hidden(text).0);
+            }
+            return Ok(None);
+        }
+        let mentions = self.mentions(text)?;
+        Ok(match self.stage {
             Stage::Names => None,
             Stage::Register => {
                 for m in &mentions {
@@ -518,13 +623,16 @@ impl State<'_> {
                             .map(|id| self.keys.handle(ItemKind::Message, id)),
                     };
                     // A mention with no alias would leak; fail the call (R13).
-                    out.push_str(&replaced?);
+                    let Some(replaced) = replaced else {
+                        return Ok(None);
+                    };
+                    out.push_str(&replaced);
                     at = m.end;
                 }
                 out.push_str(&text[at..]);
                 Some(out)
             }
-        }
+        })
     }
 
     /// "Name <email>" or "email".
@@ -606,13 +714,13 @@ impl State<'_> {
         }
     }
 
-    fn drive_path(&mut self, path: &str) -> Option<String> {
+    fn drive_path(&mut self, path: &str) -> Result<Option<String>, PipelineError> {
         let mut parts = Vec::new();
         for part in path.split('/') {
-            let rewritten = self.text(part, Role::Mentioned);
+            let rewritten = self.text(part, Role::Mentioned)?;
             parts.push(rewritten.unwrap_or_default());
         }
-        (self.stage == Stage::Rewrite).then(|| parts.join("/"))
+        Ok((self.stage == Stage::Rewrite).then(|| parts.join("/")))
     }
 
     /// A string's new value in the Rewrite stage; `None` keeps it. Text that
@@ -621,11 +729,11 @@ impl State<'_> {
         let rewrite = self.stage == Stage::Rewrite;
         let keys = self.keys;
         let rewritten = match p {
-            Policy::Text => self.text(s, Role::Mentioned),
+            Policy::Text => self.text(s, Role::Mentioned)?,
             Policy::Address => self.address(s, Role::of(key)),
             Policy::AddressOrDomain if s.contains('@') => self.address(s, Role::Mentioned),
             Policy::AddressOrDomain => self.domain(s),
-            Policy::DrivePath => self.drive_path(s),
+            Policy::DrivePath => self.drive_path(s)?,
             _ if !rewrite => return Ok(None),
             Policy::LocalPath => return Ok(Some(json!(LOCAL_PATH))),
             Policy::MimeType => return Ok(Some(json!(known_mime(s)))),
@@ -917,6 +1025,10 @@ pub fn run(mut value: Value, keys: &Keys, ctx: &Context) -> Result<Value, Pipeli
         local: Names::default(),
         local_canon: BTreeSet::new(),
         dict: None,
+        model: ctx.model,
+        deadline: ctx.deadline,
+        pending: Vec::new(),
+        model_found: HashMap::new(),
         reg: Registry::default(),
         dropped: Vec::new(),
     };
@@ -926,6 +1038,7 @@ pub fn run(mut value: Value, keys: &Keys, ctx: &Context) -> Result<Value, Pipeli
         st.local.add(name, typed_type(name));
     }
     walk(&mut value, Policy::Within, "", "", &mut st)?;
+    st.model_pass()?;
     #[expect(
         clippy::map_err_ignore,
         reason = "R13: the error can quote a name; the call fails with a fixed fault"
@@ -947,7 +1060,7 @@ pub fn run(mut value: Value, keys: &Keys, ctx: &Context) -> Result<Value, Pipeli
     if !entities.is_empty() {
         out.insert("entities".into(), Value::Object(entities));
     }
-    out.insert("detectors".into(), json!(DETECTORS));
+    out.insert("detectors".into(), json!(detectors(ctx.model.is_some())));
     // R24: the dictionary ran, but names from these sources can be missed.
     if !ctx.incomplete.is_empty() {
         out.insert("dictionaryIncomplete".into(), json!(ctx.incomplete));
@@ -1048,6 +1161,8 @@ mod tests {
             you: Some("sam@okafor.example"),
             names,
             incomplete: &[],
+            model: None,
+            deadline: None,
         };
         run(v, &keys(), &ctx).unwrap()
     }
@@ -1093,7 +1208,10 @@ mod tests {
         assert_eq!(row["date"], "2026-09-29T16:42:00+00:00");
         assert_eq!(out["estimatedTotal"], 3);
         assert_eq!(out["dropped"], json!(["/aNewIdField"]));
-        assert_eq!(out["detectors"], json!(DETECTORS));
+        // Without a model (the test's context) `detectors` names the two
+        // that ran (R24); `names_in_no_header_are_found_by_the_model` has
+        // the three.
+        assert_eq!(out["detectors"], json!(["regex", "dictionary"]));
         let k = keys();
         assert_eq!(
             k.open_handle(ItemKind::Message, row["messageId"].as_str().unwrap())
@@ -1137,6 +1255,65 @@ mod tests {
             out["entities"][ops]["hints"],
             json!(["recipient", "your-organization", "organization"])
         );
+    }
+
+    /// M5.2 (D5, D7): names in no header, a person, an organization and a
+    /// project in a subject and a body, become aliases of their types, found
+    /// by the model and named in `detectors`. The one model pass over every
+    /// text of the result gives each text its own mentions at its own
+    /// offsets, so the organization named in both has one alias in both.
+    /// The project is a limit on record: the model reads "Falcon rewrite"
+    /// as one span in the subject and "Falcon" alone in the body, a product
+    /// there, so the two spans get two aliases (Q19). Checks nothing where
+    /// the model is not installed (CI).
+    #[test]
+    fn names_in_no_header_are_found_by_the_model() {
+        let Some(model) = crate::privacy::detect::model::tests::shared() else {
+            return;
+        };
+        let ctx = Context {
+            tool: Tool::GetMessage,
+            query: None,
+            you: Some("sam@okafor.example"),
+            names: &Names::default(),
+            incomplete: &[],
+            model: Some(&model),
+            deadline: None,
+        };
+        let v = json!({ "message": {
+            "from": "Sam Okafor <sam@okafor.example>",
+            "subject": "The Falcon rewrite at Globex Corporation",
+            "body": "Bartholomew Quist asked whether the Falcon rewrite can wait for the Globex Corporation audit.",
+        } });
+        let out = run(v, &keys(), &ctx).unwrap();
+        let text = out.to_string();
+        for leak in ["Bartholomew", "Quist", "Globex", "Falcon"] {
+            assert!(!text.contains(leak), "{leak} leaked: {text}");
+        }
+        assert_eq!(out["detectors"], json!(DETECTORS));
+        let typed = |t: &str| {
+            out["entities"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter(|(_, e)| e["type"] == t)
+                .map(|(alias, _)| alias.clone())
+                .collect::<Vec<String>>()
+        };
+        assert_eq!(typed("person").len(), 2, "{out}");
+        let orgs = typed("organization");
+        let mut things = typed("project");
+        things.extend(typed("product"));
+        assert_eq!(orgs.len(), 1, "{out}");
+        assert!(!things.is_empty(), "{out}");
+        let subject = out["message"]["subject"].as_str().unwrap();
+        let body = out["message"]["body"].as_str().unwrap();
+        for alias in &orgs {
+            assert!(
+                subject.contains(alias) && body.contains(alias),
+                "{alias}: {subject} / {body}"
+            );
+        }
     }
 
     #[test]
@@ -1197,6 +1374,8 @@ mod tests {
                     you: Some("sam@okafor.example"),
                     names: &Names::default(),
                     incomplete: &[],
+                    model: None,
+                    deadline: None,
                 };
                 run(v, &keys, &ctx).unwrap()
             })
@@ -1822,6 +2001,8 @@ mod tests {
             you: None,
             names: &names,
             incomplete: &[],
+            model: None,
+            deadline: None,
         };
         let keys = keys();
         let mut said = String::new();
@@ -1994,6 +2175,8 @@ mod tests {
             you: None,
             names: &Names::default(),
             incomplete: &[],
+            model: None,
+            deadline: None,
         };
         assert_eq!(
             run(big, &keys(), &ctx).unwrap_err(),

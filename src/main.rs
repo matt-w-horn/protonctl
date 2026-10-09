@@ -560,6 +560,9 @@ async fn doctor(app: &App) -> bool {
     };
     check("config", Ok(config::path().display().to_string()));
     check("privacy", app.privacy.diagnose().map(str::to_string));
+    if app.privacy.started() == Some(privacy::Mode::Aliases) {
+        check("name model", app.privacy.model_check());
+    }
     check("document readers", convert::check().await);
     if matches!(&app.drive, Err(e) if e == DRIVE_NOT_SET_UP) {
         println!("skip  drive: not set up (protonctl setup drive)");

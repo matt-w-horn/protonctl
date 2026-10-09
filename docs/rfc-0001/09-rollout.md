@@ -37,8 +37,8 @@ flowchart TB
     classDef gone fill:#F1F5F9,stroke:#94A3B8,color:#64748B,stroke-dasharray:4 3
     classDef q fill:#FFEDD5,stroke:#EA580C,color:#7C2D12
     class P0,PP1,D2,Q23,L1 done
-    class P1a,P2,PP2,L2 part
-    class P3,P4,P5,P6,P7,PP5,L3 todo
+    class P1a,P2,P5,PP2,L2 part
+    class P3,P4,P6,P7,PP5,L3 todo
     class P1b,L4 gone
     class Q13,Q15,Q38 q
 ```
@@ -51,7 +51,7 @@ flowchart TB
 | 2 | The privacy setting (R26) and `setup drive`; then aliases mode: the privacy pipeline for all three services at once, at `reply()`, over results, errors and page tokens, failing closed: privacy key, aliases, references, handles, sealed page tokens, keyed digests, the `entities` table, `detectors` and `guidance`; regex with validators and the name dictionary; `download_file`, `export_drive_manifest`, the CLI's `drive manifest`, the `export` and `inline` options, the export and download folders, page images, image content and inline bytes absent in aliases mode and kept in off mode; a panic hook in both modes (R25); the leak test and the `live-check.py` checks. The CLI may be tokenized here too, ahead of Phase 3, since in Phase 2 it is the easy way around the pipeline in Claude Code | built and tested on Linux 2026-10-04; on a Mac the same day, M2.8 (cloud-only reads), the setup commands, signing (Q12) and the aliases-mode live run passed, and the off-mode live run passed (M1.2); the role-play on real results and the other Mac checks have not run ([#16](https://github.com/matt-w-horn/protonctl/issues/16), [#17](https://github.com/matt-w-horn/protonctl/issues/17), [#18](https://github.com/matt-w-horn/protonctl/issues/18), [#19](https://github.com/matt-w-horn/protonctl/issues/19) and [#20](https://github.com/matt-w-horn/protonctl/issues/20)); the defects below are open; the CLI is not tokenized |
 | 3 | In aliases mode, the `reveal_*` tools, and the CLI tokenized with `--raw` and `--out` behind user presence; Claude Code sandbox settings documented (Q17) | to do; answer Q15 first. The sandbox settings are documented (M3.4, 2026-10-07) |
 | 4 | PDFKit and `textutil` under a sandbox profile, directly or behind `protonctl convert`, in both modes; Vision OCR for images and scans in aliases mode; on Linux, poppler and pandoc in `protonctl convert` (MP4) and Tesseract for OCR | M4.1 built 2026-10-07 (Q13): PDFKit and `textutil` behind `protonctl convert` under `sandbox-exec`, in both modes. On Linux the readers were built 2026-10-05, ahead of this phase (MP4). OCR (M4.2) is to do on both systems |
-| 5 | One model finds names in free text: Otter (multilingual, Q23) through `tract`, as configuration (files pinned by SHA-256, labels, threshold); recall measured per entity type and language on a labeled synthetic corpus; the dictionary's name rules stay until that evaluation shows one redundant | to do, next, before Phases 3 and 4 (Q40); Q23 decided 2026-10-05, after a proof of concept |
+| 5 | One model finds names in free text: Otter (multilingual, Q23) through `tract`, as configuration (files pinned by SHA-256, labels, threshold); recall measured per entity type and language on a labeled synthetic corpus; the dictionary's name rules stay until that evaluation shows one redundant | built 2026-10-08 (M5.2; [#60](https://github.com/matt-w-horn/protonctl/issues/60)), before Phases 3 and 4 (Q40): recall 0.930 and precision 0.950 on 315 mentions in 28 languages, at a threshold of 0.15; the weights are not yet shipped by `scripts/install.sh`, and the README says how to make them |
 | 6 | Summary and question views from a local model, written with aliases; finer domain types and titles from signatures as hints | to do; Q38, open, names the runtime |
 | 7 | A Linux VM helper for the riskiest formats; an optional allowlist of names kept in plaintext. Privacy Filter as a second check was dropped on 2026-10-05 (Q39) | to do |
 | P0 to P5 | Linux ([section 11](11-platforms.md)): P1 builds and tests on Linux before Phase 2; P2 Mail and Calendar; P3 Drive; P4 converters with Phase 4; P5 presence with Phase 3 | P0 and P1 done 2026-10-04, with Q30 to Q35 decided; P2 to P4 built 2026-10-05, without OCR, and the live checks of P2 and P3 have not run ([#27](https://github.com/matt-w-horn/protonctl/issues/27) and [#28](https://github.com/matt-w-horn/protonctl/issues/28)); P5 to do |
@@ -288,7 +288,12 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
   no source of names.
   Moved to Phase 5 on 2026-10-04: a project's name is in no header, so
   finding it needs the model Q23 chose on 2026-10-05
-  ([#4](https://github.com/matt-w-horn/protonctl/issues/4)).
+  ([#4](https://github.com/matt-w-horn/protonctl/issues/4)). Fixed
+  2026-10-08 by M5.2's model: 37 of 39 project mentions found (0.949),
+  7 of them typed `product` or `organization`, which keeps the alias
+  since names share one class (Q19); one of the two `in-text` cases
+  still passes raw. Drive paths and names go through the model as every
+  text does.
 - D6 One entity gets several aliases: a person's full name and another
   form of it in one result each got their own alias. Fixed 2026-10-04 for
   known names: a form joins its full name or is linked to it by
@@ -305,7 +310,12 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
   acme.example); no list of words is kept
   ([#6](https://github.com/matt-w-horn/protonctl/issues/6)). The second
   half, names in no header, moved to Phase 5's model
-  ([#43](https://github.com/matt-w-horn/protonctl/issues/43)).
+  ([#43](https://github.com/matt-w-horn/protonctl/issues/43)), and was
+  fixed 2026-10-08 by M5.2: 62 of 65 organization mentions found
+  (0.954), both organizations that never sent mail among them, and 12
+  of 14 products (0.857). The cost is the product label's precision,
+  0.444: words such as "smoke detectors" and "caulk clear" become
+  aliases, which hides them but leaks nothing.
 - D8 A folder made online-only in the Drive app lists as empty, with no
   note, in both modes: its listing is not on the Mac, and `entries_in` in
   `src/drive/mod.rs` returns nothing when `read_dir` gives nothing
@@ -353,7 +363,14 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
 
 - M5.1 Q23 answered 2026-10-05: Otter through `tract`, weights shipped
   and pinned by SHA-256, Apache-2.0. Exit: a build with no network
-  fetch.
+  fetch. Done in part 2026-10-08 with M5.2: the two files are read from
+  `~/Library/Application Support/protonctl/model` (on Linux
+  `$XDG_DATA_HOME/protonctl/model`), pinned by SHA-256 in
+  `src/privacy/detect/model.rs`, and nothing is fetched at run time
+  (`deny.toml` bans HTTP clients; `tokenizers` is built without its HTTP
+  features). Not done: `scripts/install.sh` does not ship the weights;
+  the README's "Install the name model" says how to make them with
+  `scripts/otter-export.py`.
 - M5.2 The model detector, for names in no header: people,
   organizations, projects, products and locations, the labels Q23
   measured, and street addresses only if Phase 5 adds a label for them
@@ -361,7 +378,31 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
   [#43](https://github.com/matt-w-horn/protonctl/issues/43)); short forms,
   initials, misspellings and `maybeSameAs` of known names were built in
   Phase 2 (D2 to D4, D6). Exit: recall recorded per entity type and
-  language. Requirements:
+  language. Built 2026-10-08 ([#60](https://github.com/matt-w-horn/protonctl/issues/60)):
+  `src/privacy/detect/model.rs` runs `otter.onnx` with `tract` 0.23.8 on
+  four threads, in windows of 256 tokens overlapping by 64, after the
+  dictionary, adding only the names neither the patterns nor the
+  dictionary claimed (`detect::add_model`), once per result over every
+  text of it (`pipeline::State::model_pass`). The exit is the snapshot
+  `what_passes_raw_with_the_model` in `src/privacy/eval.rs`, whose
+  numbers [section 7](07-testing.md) records: recall 0.930 over 315
+  mentions (people 0.935, organizations 0.954, projects 0.949, products
+  0.857, locations 0.818), precision 0.950 (1.000 for people,
+  organizations and projects, 0.962 for locations, 0.444 for products),
+  28 languages. Street addresses have no label, so none is found. Each
+  requirement below, where it is met: the configuration is the constants
+  at the top of `model.rs` (`ONNX_SHA256`, `TOKENIZER_SHA256`, `LABELS`,
+  `THRESHOLD` 0.15, set by `eval::threshold_sweep`); the dictionary's
+  rules stay, none shown redundant; `model::escape` replaces each special
+  token by as many `*`; `pinned_bytes` checks each file's SHA-256 and
+  `Model::load_from` runs `SELF_TEST` before serving, and
+  `Privacy::check` refuses every aliases-mode call with
+  `name_model_unavailable` when either fails, until a restart (R13);
+  `Model::find` checks the deadline before each window and
+  `pipeline::run` fails the call as timed out when it has passed.
+  `detectors` names `model` on every aliases-mode result, and `doctor`
+  prints where the model loaded from or why it did not, with the folder.
+  Requirements:
   - The model is configuration: its ONNX file and tokenizer, pinned by
     SHA-256, its labels and its threshold, set on a corpus larger than
     the proof of concept's. A new model replaces it only when recall per

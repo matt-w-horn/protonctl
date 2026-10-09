@@ -2,10 +2,11 @@
 
 # 7. Testing
 
-Built (on macOS on 2026-10-07, `cargo test` ran 259 tests: 247 unit, 12
-against the built binary, and 6 ignored: one lists Drive through the
-real CLI, one is a timing, one reaches Dovecot, and three run as the
-child of another test. On Linux on 2026-10-07 it ran 268: 254 unit, 14
+Built (on macOS on 2026-10-08, `cargo test` ran 276 tests: 264 unit, 12
+against the built binary, and 8 ignored by default: one lists Drive
+through the real CLI, one is a timing, one reaches Dovecot, three run as
+the child of another test, and two are the name model's measurements
+(`measure`, `threshold_sweep`), run by hand in a release build. On Linux on 2026-10-07 it ran 268: 254 unit, 14
 against the built binary; 12 more are ignored by default: one lists Drive
 through the real CLI, one is a timing to run with `--release`, four reach
 a Secret Service and one reaches Dovecot, which `scripts/check.sh` runs
@@ -812,19 +813,132 @@ missing ones:
   came back raw). On the patterns of 2026-10-06 the links without an
   `http` scheme came back 3 of 3 with a word left and typed wrong, and
   the non-ASCII addresses 2 of 2 whole; with #70 fixed, every link and
-  address row reads 0.
+  address row reads 0. Since 2026-10-08 (M5.2) the corpus is
+  `tests/fixtures/names.jsonl`, 146 texts and 315 marked mentions in 28
+  languages, with the 28 inline cases moved there, and the report has
+  two snapshots: `what_passes_raw_per_form` without the model (recall
+  0.137: people 0.185, organizations 0.077, nothing else), and
+  `what_passes_raw_with_the_model`, M5.2's exit, where the model is
+  installed. The measure finds what each alias replaced to the byte: the
+  text between two aliases is the input's unchanged, so an alias starts
+  where that text ends, and ends where the input from there has its
+  `ref`'s canonical value and is followed by the next text (`eval::replacements`).
+  The word alignment it replaced counted a name with a suffix joined to
+  it, as Korean and Turkish write them ("김민준님"), as a spurious alias
+  and not as a mention, and a link's domain alias as spurious. Built:
+  `the_alignment_finds_what_was_replaced`, shown to fail with the `ref`
+  ignored (two names with one space between them, "Murat Demir Anadolu
+  Lojistik", came back as "Murat" and the rest).
 - Recall (Phase 5): per entity type and language, on a labeled synthetic
   corpus in English, German, French and one non-Latin script at least.
   Results are recorded, with no pass mark until there is a measured
   baseline. The same measure decides whether another model may replace
   the one configured (its recall must not fall) and, with the evaluation
-  above, whether a dictionary name rule may go (Q23). Not built
-  (Phase 5). The proof of concept for Q23 measured a first baseline in
-  Python, outside `cargo test`: `scripts/otter-poc.py` over
-  `tests/fixtures/names.jsonl` (57 texts, 14 languages) and
-  `scripts/otter-ocr-poc.py` over `tests/fixtures/ocr-docs.jsonl`
-  (16 documents read back by OCR). Its numbers are in
-  [section 10](10-open-questions.md), Q23.
+  above, whether a dictionary name rule may go (Q23). Built 2026-10-08
+  as the snapshot `what_passes_raw_with_the_model` (M5.2's exit), at a
+  threshold of 0.15, chosen by `threshold_sweep` (ignored; run by hand
+  in a release build): recall 0.943 at 0.1 with precision 0.937, 0.930
+  at 0.15 with 0.950, 0.911 at 0.2 with 0.949, 0.848 at 0.3 with 0.952.
+  At 0.15, per type (mentions, recall, precision): person 168, 0.935,
+  1.000; organization 65, 0.954, 1.000; project 39, 0.949, 1.000;
+  product 14, 0.857, 0.444; location 22, 0.818, 0.962; email 3 and link
+  4, both 1.000; all 315, 0.930, 0.950. Per language, recall: Arabic,
+  Greek, Spanish, Persian, Hindi, Hungarian, Indonesian, Italian, Korean,
+  Dutch, Polish, Portuguese, Romanian, Swedish, Swahili, Thai, Turkish,
+  Vietnamese and Chinese 1.000 (2 to 13 mentions each); German 0.947
+  (19); French 0.929 (14); English 0.906 (138); Japanese 0.900 (10);
+  Russian 0.800 (5); Finnish and Ukrainian 0.750 (4 each); Czech 0.667
+  (3); Hebrew 0.500 (4). Precision per language is 1.000 except German
+  0.905, English 0.913 and French 0.929, where the product label's
+  false positives fall. The 16 spurious aliases are 15 products ("smoke
+  detectors", "caulk clear", "drill", "Garden Furniture", "Rauchmelder")
+  and one location ("marché du samedi"). Per form: both organizations
+  that never sent mail are found (D7), 37 of 39 projects (D5), with 1
+  of 2 `in-text` projects raw and 6 of 37 full ones typed product or
+  organization; the 2 given names, 1 surname, 1 lower-case name, 1
+  possessive and 1 honorific form still raw are names the dictionary does
+  not know and the model did not take. The dictionary's `split` and `linked` columns are
+  unchanged by the model, which links no form to a full name. The proof
+  of concept's Python scripts (`scripts/otter-poc.py`,
+  `scripts/otter-ocr-poc.py`) were retired with this; the OCR corpus
+  `tests/fixtures/ocr-docs.jsonl` stays for Phase 4.
+- Names in free text (Phase 5, M5.2; built 2026-10-08,
+  [#60](https://github.com/matt-w-horn/protonctl/issues/60)), in
+  `src/privacy/detect/model.rs` unless said otherwise. The tests that
+  need the model load it once from
+  `~/Library/Application Support/protonctl/model` (`model::tests::shared`),
+  and where that folder is absent, as in CI on `ubuntu-latest`, each
+  prints a notice and checks nothing, so they pass there by design; a
+  folder that is there but does not load is a failure. The fixtures
+  `tests/fixtures/otter-case.json` (one input with PyTorch's logits) and
+  `otter-tokens.json` (Python's token IDs and offsets for 57 texts) were
+  written by `scripts/otter-export.py --cases`. Each test was shown to
+  fail with the old behavior planted, and the file restored exactly:
+  - `special_tokens_are_escaped_to_the_same_length` and
+    `names_around_each_special_token_are_found`: each special token of the
+    tokenizer, and `[SEP]`, is replaced in text by as many `*`, so
+    offsets hold and the prompt gains nothing; names beside each one are
+    still found. Shown to fail with the tokens removed instead of
+    replaced (the offsets moved), and the second with no escaping at all
+    (the window then held more `[LABEL]` tokens than labels, and the
+    call failed).
+  - `a_missing_or_altered_file_refuses_to_load`: a missing file names the
+    folder, and a file with other bytes names the file and its pinned
+    SHA-256 (shown to fail with the hash check skipped).
+  - `the_runtime_gives_pytorch_s_logits`: `tract` gives the exported
+    case's logits within 1e-3 and the same decisions at the threshold.
+    `the_tokenizer_gives_python_s_ids_and_offsets`: the `tokenizers`
+    crate gives Python's IDs and offsets for every text. With the span
+    lengths planted off by one, the self-check refused the model at load
+    (`SelfTest`: "Acme" was not found), so every model test failed at
+    `shared()`; the logits test cannot be shown failing on its own,
+    since any plant in `score` fails the self-check first. The tokenizer
+    test compares against the Python fixture and was not planted.
+  - `spans_are_listed_as_otter_lists_them`,
+    `decoding_keeps_the_best_non_overlapping_spans`,
+    `token_spans_map_to_trimmed_bytes` and `the_prompt_is_otter_s`: the
+    candidate spans, the decoding and the byte mapping as Otter's
+    `predict()` does them (shown to fail with spans ending before the
+    last token, with the overlap check dropped, with no trimming, and
+    with the prompt's trailing space dropped). The no-trimming plant
+    also made the self-check refuse the model, since " Kenji Watanabe"
+    with its space is not the name.
+  - `windows_overlap_and_their_cores_tile_the_text` and
+    `a_name_on_a_window_cut_is_found_once_with_its_offsets`: a text over
+    256 tokens is cut into windows overlapping by 64, each reporting the
+    core the next does not, so a name on a cut is found once, at the
+    text's own offsets (shown to fail with each core starting at its
+    window's start: the names in the overlap came back twice).
+  - `inference_stops_at_the_deadline`: a deadline already passed stops
+    the model before its first window with `Halt::Deadline`, and a
+    deadline in the future lets it finish (shown to fail with the
+    deadline ignored).
+  - `aliases_mode_refuses_without_a_working_model` in
+    `src/privacy/mod.rs` (R13): with its key but a model that does not
+    load, aliases mode refuses every call with `name_model_unavailable`,
+    keeps refusing, and `doctor` names the folder; off mode needs no
+    model (shown to fail with a failed load ignored, and with `doctor`'s
+    line missing the folder).
+  - `names_in_no_header_are_found_by_the_model` in
+    `src/privacy/pipeline.rs` (D5, D7): a person, an organization and a
+    project in a subject and a body, none in a header, come back as
+    aliases, `detectors` names all three detectors, and the organization
+    in both texts has one alias in both; the project, read as "Falcon
+    rewrite" in one and "Falcon" in the other, gets two, a limit on
+    record (Q19). `names_in_free_text_are_aliased_through_the_server` in
+    `src/serve.rs`: the same through `Server::call`, which hands the
+    session's model to the pipeline. Shown to fail with the model's
+    mentions dropped in `detect::add_model`, and the second also with
+    the session's model not handed on. `a_search_result_keeps_no_name_id_or_number`
+    now expects `regex` and `dictionary` alone, since the pipeline tests
+    run without a model (shown to fail with `detectors` always naming
+    the model). The leak test over every tool (`src/serve_every_tool.rs`)
+    runs without the model too, so its two known gaps stand as before.
+  - `measure` (ignored; release build): time per page and the process's
+    RSS with the model loaded. On 2026-10-07 on an M2 Pro with 16 GB, a
+    20,040-character page of 5,522 tokens took 7.23 s on four threads in
+    windows of 256 (10.3 s in windows of 896, 9.0 s in 512), a 44-token
+    sentence 41 ms, and the test process held 1,426,464 KB.
 - `scripts/live-check.py` (Phase 2; real data, counts only): every result
   with aliases carries `entities`, and every entry a `ref`; no text field
   outside `entities` matches an email-address, phone-number or 40- or

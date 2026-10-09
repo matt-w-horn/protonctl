@@ -247,9 +247,9 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
 - R23. In aliases mode, from Phase 2, a result MUST carry a short
   `guidance` line when its query named a person or an organization in
   plaintext, and when the result was cut short or paged; otherwise it
-  carries none. Until Phase 5 a name
-  is known in a query only as [section 6](06-privacy.md) describes, so the line can be
-  missing for a bare name. The `reveal_*` tool descriptions say to try the
+  carries none. A name is known in a query only as
+  [section 6](06-privacy.md) describes (the model runs over results, not
+  queries), so the line can be missing for a bare name. The `reveal_*` tool descriptions say to try the
   tokenized reads first.
 - R24. From Phase 2, every tokenized result MUST name the detectors that ran
   in a `detectors` member (`regex` and `dictionary` from Phase 2, `model`

@@ -64,6 +64,13 @@ pub fn cache_dir() -> PathBuf {
     imp::cache_dir()
 }
 
+/// protonctl's data folder, which holds the name model (RFC Q23):
+/// `~/Library/Application Support/protonctl` on macOS,
+/// `$XDG_DATA_HOME/protonctl` on Linux.
+pub fn data_dir() -> PathBuf {
+    imp::data_dir()
+}
+
 /// Where the Proton Drive app keeps its folder, if this system has such a place.
 pub fn cloud_storage() -> Option<PathBuf> {
     imp::cloud_storage()

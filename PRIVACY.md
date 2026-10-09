@@ -1,6 +1,6 @@
 # Privacy policy
 
-Last changed: 2026-10-07.
+Last changed: 2026-10-08.
 
 This policy covers protonctl: the program, its command line, and its
 Claude Code plugin. protonctl runs on your Mac and lets a host app (Claude
@@ -153,10 +153,10 @@ protonctl answers no call until you choose one of two settings
   paths become opaque handles. The server writes no content to disk, and
   returns images as a type and a reason.
 
-Aliases mode does not find every name yet. A name that appears only in
-free text, such as a message body, a subject or a file name, can reach
-Claude as written. A model that finds such names, planned as the next
-step, narrows this gap but will not close it.
+Aliases mode does not find every name. Names in free text, such as a
+message body, a subject or a file name, are found by a name model that
+runs on your Mac and misses some: about one name in fourteen on a
+synthetic corpus. Those reach the host as written.
 [RFC-0001, section 5](docs/rfc-0001/05-security.md#residual-risks) lists
 what aliases mode does not hide.
 

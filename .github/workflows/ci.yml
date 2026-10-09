@@ -31,4 +31,6 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny,cargo-llvm-cov
+      # Free space, so a full disk shows in the log and not as a linker crash.
+      - run: df -h /
       - run: scripts/check.sh

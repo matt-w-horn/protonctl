@@ -27,7 +27,7 @@
 | Q20 | Drive handles: path or node UID | decided 2026-10-04 |  |
 | Q21 | Pairing names with aliases | decided 2026-10-04 |  |
 | Q22 | Further entity types; dictionary scope | decided 2026-10-04 |  |
-| Q23 | One model finds names (Otter), run by `tract` | decided 2026-10-05; runtime proposed |  |
+| Q23 | One model finds names (Otter), run by `tract` | decided 2026-10-05; built 2026-10-08 |  |
 | Q24 | Check the CLI's signature before every run | decided 2026-10-04 |  |
 | Q25 | `/security-review` for Phases 2 and 3 | decided 2026-10-04 |  |
 | Q27 | Mode of a new install | decided 2026-10-04 |  |
@@ -305,8 +305,10 @@
   than 100 languages; the entity types are plain words given at run time).
   The runtime, `tract`, a pure-Rust ONNX runtime in the server process,
   is proposed with this decision from the measurements below. A proof of
-  concept measured both on 2026-10-05 on an M2 Pro with 16 GB
-  (`scripts/otter-poc.py`, `scripts/otter-ocr-poc.py`):
+  concept measured both on 2026-10-05 on an M2 Pro with 16 GB, with two
+  Python scripts retired on 2026-10-08 when M5.2 was built
+  (`src/privacy/eval.rs` replaces the first; the OCR corpus
+  `tests/fixtures/ocr-docs.jsonl` stays for Phase 4's OCR):
   - Names corpus (`tests/fixtures/names.jsonl`: 57 synthetic texts,
     136 mentions, 14 languages), labels person, organization, project,
     product and location: recall 0.978 and precision 0.985 at a
@@ -354,6 +356,28 @@
     and products share Q19's name tag, and whether int8 or float16
     weights cut the size and the 3.6 s a 20,000-character page is
     estimated to take.
+  - Built 2026-10-08 (M5.2, [#60](https://github.com/matt-w-horn/protonctl/issues/60)):
+    `tract-onnx` 0.23.8 with `tract-linalg`'s multithreaded matrix
+    multiply on four threads, fixed in code, and `tokenizers` 0.22
+    without its HTTP features, in `src/privacy/detect/model.rs`. The
+    corpus grew to 146 texts, 315 mentions, 28 languages. The threshold
+    is 0.15: recall 0.930 and precision 0.950, against 0.943 and 0.937
+    at 0.1 and 0.911 and 0.949 at 0.2; at 0.15 every type but `product`
+    has a precision of 0.96 or more, and `product` stays at 0.444, the
+    false positives Q23 predicted. Projects and products share Q19's
+    name tag, since the model types the same name either way by context
+    ("Falcon rewrite" a project in a subject, "Falcon" a product in the
+    body; those two spans get two aliases). Windows of 256 tokens
+    overlapping by 64 were fastest: a 20,040-character page of 5,522
+    tokens takes 7.2 s in a release build (10.3 s in windows of 896,
+    9.0 s in 512), not the 3.6 s estimated, and the process holds about
+    1.4 GB with the model loaded. int8 and float16 weights were not
+    tried. The weights are not shipped by `scripts/install.sh` yet: the
+    README says how to make them with `scripts/otter-export.py`, and the
+    model folder is `~/Library/Application Support/protonctl/model`
+    (Linux: `$XDG_DATA_HOME/protonctl/model`). The model runs over
+    results, not queries, so a bare name in a query is still known only
+    as [section 6](06-privacy.md) describes.
 
 - Q39, decided 2026-10-05 by the maintainer: Phase 7 has no second
   detector; OpenAI's Privacy Filter is dropped. A study across 32

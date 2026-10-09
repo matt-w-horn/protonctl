@@ -430,6 +430,7 @@ impl Server {
         let Some(keys) = session.keys.clone() else {
             return Ok(fault(&Fault::PrivacyKeyMissing, self.mode));
         };
+        let model = session.model.clone();
         let result = tokio::time::timeout_at(
             deadline,
             answered(async {
@@ -459,12 +460,15 @@ impl Server {
             you: self.app.you(),
             names: &names,
             incomplete: &incomplete,
+            model: model.as_deref(),
+            deadline: Some(deadline.into_std()),
         };
         // A panic in a stage fails the call like any other error (R13).
         let out = std::panic::catch_unwind(AssertUnwindSafe(|| pipeline::run(value, &keys, &ctx)));
         Ok(match out {
             Ok(Ok(v)) => CallToolResult::success(vec![ContentBlock::text(v.to_string())]),
             Ok(Err(PipelineError::TooLarge)) => fault(&Fault::TooLarge, self.mode),
+            Ok(Err(PipelineError::Timeout)) => fault(&Fault::Timeout, self.mode),
             _ => fault(&Fault::PipelineFailed, self.mode),
         })
     }
@@ -1056,6 +1060,15 @@ impl ServerHandler for Server {
 }
 
 pub async fn run(app: Arc<App>) -> Result<()> {
+    // The name model loads once per process (RFC Q23): started here in
+    // aliases mode, so the first call waits for the rest of it at most.
+    if app.privacy.started() == Some(Mode::Aliases) {
+        let app = Arc::clone(&app);
+        std::thread::spawn(move || {
+            // A failure is reported by the first call, and by `doctor`.
+            app.privacy.model().ok();
+        });
+    }
     // Expired downloads also go when no tool is called. The interval counts
     // only awake time, so after the Mac wakes they go within a minute.
     tokio::spawn(async {
@@ -1137,6 +1150,69 @@ mod tests {
         let mut app = App::from_config(cfg).unwrap();
         app.privacy = privacy(Some(Mode::Aliases), Some([7; 32])).0;
         Arc::new(app)
+    }
+
+    /// M5.2 end to end: through `call`, which hands the session's model to
+    /// the pipeline, a file whose text holds names in no header (a person,
+    /// an organization, a project, which the model may read as a product)
+    /// comes back with none of them, and every result names `model` in
+    /// `detectors`. Checks nothing where the model is not installed (CI).
+    #[tokio::test]
+    async fn names_in_free_text_are_aliased_through_the_server() {
+        if crate::privacy::detect::model::tests::shared().is_none() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("notes.txt"),
+            "Bartholomew Quist of Globex Corporation asked about the Falcon rewrite.",
+        )
+        .unwrap();
+        let cfg = crate::config::Config {
+            drive: Some(crate::config::DriveConfig {
+                folder: Some(dir.path().to_path_buf()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut app = App::from_config(cfg).unwrap();
+        app.privacy = crate::privacy::tests::privacy_with_model(Some(Mode::Aliases), Some([7; 32]));
+        let server = Server::new(Arc::new(app));
+        let top = server
+            .list_folder_aliases(Parameters(ListFolderAliases::default()))
+            .await
+            .unwrap();
+        let top = json_of(&top);
+        let all = serde_json::json!(["regex", "dictionary", "model"]);
+        assert_eq!(top["detectors"], all, "{top}");
+        let req = ReadAliases {
+            file_id: top["items"][0]["fileId"].as_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        let read = json_of(
+            &server
+                .read_file_content_aliases(Parameters(req))
+                .await
+                .unwrap(),
+        );
+        let text = read.to_string();
+        for leak in ["Bartholomew", "Quist", "Globex", "Falcon"] {
+            assert!(!text.contains(leak), "{leak} leaked: {text}");
+        }
+        assert_eq!(read["detectors"], all, "{read}");
+        let types: std::collections::BTreeSet<&str> = read["entities"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter_map(|e| e["type"].as_str())
+            .collect();
+        assert!(
+            types.len() == 3
+                && types.contains("person")
+                && types.contains("organization")
+                && (types.contains("project") || types.contains("product")),
+            "{types:?}: {read}"
+        );
     }
 
     /// RFC R13 and R16 end to end: a Drive walk in aliases mode shows no
