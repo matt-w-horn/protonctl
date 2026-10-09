@@ -44,10 +44,10 @@ if [ "$(uname -s)" = Linux ]; then
         keyring=$(mktemp -d)
         trap 'rm -rf "$keyring"' EXIT
         XDG_DATA_HOME="$keyring" XDG_RUNTIME_DIR="$keyring" dbus-run-session -- \
-            scripts/with-keyring.sh cargo llvm-cov --no-report --locked --bin protonctl platform::linux -- --ignored
+            scripts/with-keyring.sh cargo llvm-cov test --no-report --locked --bin protonctl platform::linux -- --ignored
         # A Drive read through the readers, with the CLI's pin in the store (Q33).
         XDG_DATA_HOME="$keyring" XDG_RUNTIME_DIR="$keyring" dbus-run-session -- \
-            scripts/with-keyring.sh cargo llvm-cov --no-report --locked --test convert -- --ignored
+            scripts/with-keyring.sh cargo llvm-cov test --no-report --locked --test convert -- --ignored
     else
         echo "check.sh: skipped the Secret Service tests (needs dbus-run-session and gnome-keyring-daemon)" >&2
     fi

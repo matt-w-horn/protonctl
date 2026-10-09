@@ -18,5 +18,5 @@ podman run --detach --rm --name "$name" --publish 127.0.0.1::993 \
     "$image" >/dev/null
 port=$(podman port "$name" 993/tcp | sed 's/.*://')
 
-PROTONCTL_DOVECOT_PORT="$port" cargo llvm-cov --no-report --locked --bin protonctl \
+PROTONCTL_DOVECOT_PORT="$port" cargo llvm-cov test --no-report --locked --bin protonctl \
     mail::read::tests::every_operation_against_dovecot -- --ignored --exact
