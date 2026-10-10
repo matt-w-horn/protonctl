@@ -376,8 +376,8 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
   fetches nothing; it reports whether the files are in place. Open, for the
   maintainer: where the weights are hosted, which fills in the README's
   `MODEL_URL`; and whether int8 or float16 weights keep the evaluation's
-  recall, not measured. Also open: `doctor` names the model folder but not
-  the install command, because that message is `LoadError` in `model.rs`.
+  recall, not measured. Since 2026-10-10 `doctor` names the install
+  command beside the model folder, through `LoadError` in `model.rs`.
 - M5.2 The model detector, for names in no header: people,
   organizations, projects, products and locations, the labels Q23
   measured, and street addresses only if Phase 5 adds a label for them
