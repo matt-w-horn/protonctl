@@ -296,7 +296,7 @@ so; #75 changes none. Open work is in the issues.
 | The Drive CLI is checked, then run again by path (Q24, I5); on Linux its path and pin live in the config, which the model can edit | medium; medium | [#72](https://github.com/matt-w-horn/protonctl/issues/72) |
 | The CLI writes to disk in aliases mode: `drive manifest`, `--export`, a cloud-only `drive cat` (R10, M2.7) | low to medium | [#73](https://github.com/matt-w-horn/protonctl/issues/73), fixed 2026-10-07 |
 | The name canon removes `Pan`, `Sri` and `M.` as honorifics, so two people can share an alias | low | [#74](https://github.com/matt-w-horn/protonctl/issues/74), fixed 2026-10-07 |
-| `live-check.py` prints a failed call's error text; Dependabot's auto-merge is not bound to the reviewed commit | low; low | [#75](https://github.com/matt-w-horn/protonctl/issues/75) |
+| `live-check.py` prints a failed call's error text; Dependabot's auto-merge is not bound to the reviewed commit | low; low | [#75](https://github.com/matt-w-horn/protonctl/issues/75); the auto-merge was removed 2026-10-10, so the owner merges every Dependabot pull request |
 
 Found sound: HKDF labels and output lengths, domain separation between
 refs, handles and page tokens, AES-SIV authentication of every input,
