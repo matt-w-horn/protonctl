@@ -209,7 +209,7 @@ flowchart TB
   only: an image, or a scan's first 10 pages, each rendered by
   `pdf-page`. Its environment holds only `OMP_THREAD_LIMIT=1`; with
   OpenMP's thread per core, eight runs at once took 147 s on 4 cores. It
-  reads English unless more of Tesseract's language data is installed. `pdfinfo` is not used: it prints a document's own
+  reads English only: no other language is named with `-l`. `pdfinfo` is not used: it prints a document's own
   metadata before the page count, unescaped, so a Title could set it.
 - The sandbox: Landlock lets the reader read and run what is under `/usr`,
   `/lib`, `/lib64` and `/bin`, read `/etc/ld.so.cache`, `/etc/fonts` and

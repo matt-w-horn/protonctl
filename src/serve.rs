@@ -942,7 +942,7 @@ impl Server {
         .await
     }
 
-    /// Read a Proton Drive file's text into the conversation, a page at a time; takes a fileId. Reads text files, the text of PDFs, and Word, RTF and OpenDocument documents, up to 64 MiB; names, addresses, numbers and links in the text come back as aliases. Each call returns up to maxChars characters (default 20,000) from offset (default 0), with `totalChars` and `nextOffset`; while `nextOffset` is not null, call again with offset set to it to read on. Images, and PDFs with no text layer, return a `reason` instead of their content. A file that is only in the cloud is fetched through the official Proton Drive CLI into memory, never to disk.
+    /// Read a Proton Drive file's text into the conversation, a page at a time; takes a fileId. Reads text files, the text of PDFs, and Word, RTF and OpenDocument documents, up to 64 MiB; names, addresses, numbers and links in the text come back as aliases. Each call returns up to maxChars characters (default 20,000) from offset (default 0), with `totalChars` and `nextOffset`; while `nextOffset` is not null, call again with offset set to it to read on. Images, and PDFs with no text layer (scans), come back on Linux as the text OCR finds in them, with `textFrom` `tesseract (OCR)` (a scan's first 10 pages), and elsewhere as a `reason` instead of their content. A file that is only in the cloud is fetched through the official Proton Drive CLI into memory, never to disk.
     #[tool(
         name = "read_file_content",
         annotations(
@@ -1001,7 +1001,7 @@ impl Server {
         .await
     }
 
-    /// Read one email attachment's text into the conversation; takes a messageId and an attachment index from `get_message`. Text, PDF, Word, RTF and OpenDocument attachments return their text a page at a time: up to maxChars characters (default 20,000) from offset (default 0), with `totalChars` and `nextOffset`; while `nextOffset` is not null, call again with offset set to it to read on. Names, addresses, numbers and links in the text come back as aliases. Other attachments, images included, return a `reason` instead of their content, and nothing is saved. The result carries the attachment's keyed `sha256` and `sha1`.
+    /// Read one email attachment's text into the conversation; takes a messageId and an attachment index from `get_message`. Text, PDF, Word, RTF and OpenDocument attachments return their text a page at a time: up to maxChars characters (default 20,000) from offset (default 0), with `totalChars` and `nextOffset`; while `nextOffset` is not null, call again with offset set to it to read on. Names, addresses, numbers and links in the text come back as aliases. Images, and PDFs with no text layer (scans), come back on Linux as the text OCR finds in them, with `textFrom` `tesseract (OCR)` (a scan's first 10 pages). Other attachments, and images and scans elsewhere, return a `reason` instead of their content, and nothing is saved. The result carries the attachment's keyed `sha256` and `sha1`.
     #[tool(
         name = "get_attachment",
         annotations(

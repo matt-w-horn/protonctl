@@ -210,9 +210,8 @@ impl Job {
                 ];
                 (PANDOC, strings(&a))
             }
-            // Its own language data, English only unless more is
-            // installed and named; `stdin` and `stdout` are its words for
-            // them.
+            // Its own language data, English only, since no other is
+            // named with `-l`; `stdin` and `stdout` are its words for them.
             Self::Ocr => (TESSERACT, strings(&["stdin", "stdout"])),
         })
     }

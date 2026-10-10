@@ -286,7 +286,8 @@ model. Choose one:
   Nothing is saved to disk: a Drive file that is only in the cloud is
   fetched into a RAM disk that protonctl makes for itself and removes when
   it stops (on Linux, a private folder under `$XDG_RUNTIME_DIR`), and
-  images come back as a type and a reason. Names in free text, such as a
+  images and scans come back on Linux as the text OCR finds in them,
+  elsewhere as a type and a reason. Names in free text, such as a
   body, a subject or a file name, are found by the name model, which
   misses some: about one name in fourteen on a synthetic corpus, more in
   Hebrew, Czech, Finnish and Ukrainian, where the corpus is smallest
@@ -581,9 +582,9 @@ The steps above apply, with these differences:
   checks this.
 - **Documents** are read by poppler (`pdftotext`, `pdftoppm`)
   and pandoc, and in aliases mode the text in images and scans by
-  Tesseract: install `poppler-utils`, `pandoc` and `tesseract-ocr`, with a
-  `tesseract-ocr-LANG` package for each language besides English that
-  Tesseract should read (it reads English only as built). Each runs in a sandbox
+  Tesseract: install `poppler-utils`, `pandoc` and `tesseract-ocr`. OCR
+  reads English only: protonctl names no other language to Tesseract, so
+  a `tesseract-ocr-LANG` package adds nothing. Each runs in a sandbox
   (Landlock and seccomp) that lets it read only the system's programs and
   libraries, write nothing, and reach no network; the kernel must enforce
   Landlock, and `doctor` checks that it does. pandoc cannot read the old

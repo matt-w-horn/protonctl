@@ -48,9 +48,13 @@ const PAGE_EDGE: u32 = 2000;
 /// rendered and then read, two sandboxed runs, so a long scan stays within
 /// the call's 150 s (R8). A dense page (55 lines of 10 pt text) took 1.8 s
 /// to read and 0.05 s to render on one thread (2026-10-10), so 10 pages
-/// take about 18 s.
+/// take about 18 s one after another; `scan_text` reads `OCR_AT_ONCE` at
+/// a time.
 #[cfg(target_os = "linux")]
 const OCR_PAGES: usize = 10;
+/// A scan's pages rendered and read at once, each by one-thread runs.
+#[cfg(target_os = "linux")]
+const OCR_AT_ONCE: usize = 4;
 
 /// What a file's bytes hold, as far as the tools can return it inline.
 pub enum Content {
@@ -360,15 +364,20 @@ async fn ocr(image: &[u8]) -> Result<Result<String, &'static str>> {
 /// (R22): its first `OCR_PAGES` pages, each rendered and read by OCR.
 #[cfg(target_os = "linux")]
 async fn scan_text(pdf: Pdf) -> Result<Content> {
+    use futures::{StreamExt as _, TryStreamExt as _};
     let read = pdf.pages.min(OCR_PAGES);
-    let mut pages = Vec::with_capacity(read);
-    for page in 1..=read {
-        let jpeg = page_jpeg(&pdf, page).await?;
-        match ocr(&jpeg).await? {
-            Ok(text) => pages.push(text),
-            Err(why) => return Ok(Content::Other(why)),
-        }
-    }
+    let texts: Vec<Result<String, &'static str>> = futures::stream::iter(1..=read)
+        .map(|page| {
+            let pdf = &pdf;
+            async move { ocr(&page_jpeg(pdf, page).await?).await }
+        })
+        .buffered(OCR_AT_ONCE)
+        .try_collect()
+        .await?;
+    let pages = match texts.into_iter().collect::<Result<Vec<String>, _>>() {
+        Ok(pages) => pages,
+        Err(why) => return Ok(Content::Other(why)),
+    };
     let mut doc = Document::new(&pages, TextFrom::Tesseract);
     doc.notice = Some(if read < pdf.pages {
         format!(
