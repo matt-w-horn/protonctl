@@ -120,7 +120,7 @@ pub fn shown(account: &Account) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     #[test]
@@ -147,5 +147,50 @@ mod tests {
         let secret = Secret::from("hunter2-not-a-real-secret");
         let shown = format!("{secret:?}");
         assert!(!shown.contains("hunter2"), "{shown}");
+    }
+
+    /// The bytes of each range `at` names in `value` once `value` is dropped, read
+    /// through `/proc/self/mem`, so no unsafe code reads freed memory. The
+    /// file and the buffer exist before the drop, so nothing allocated
+    /// after it can take the freed block. The allocator's own list writes
+    /// the block's first 16 bytes (glibc's tcache); the rest stays as the
+    /// drop left it.
+    #[cfg(target_os = "linux")]
+    pub fn after_drop<T, const N: usize>(
+        value: T,
+        at: impl Fn(&T) -> [(usize, usize); N],
+    ) -> [Vec<u8>; N] {
+        use std::os::unix::fs::FileExt as _;
+        let ranges = at(&value);
+        let mem = std::fs::File::open("/proc/self/mem").unwrap();
+        let mut left = ranges.map(|(_, len)| vec![0; len]);
+        drop(value);
+        for ((addr, _), bytes) in ranges.iter().zip(&mut left) {
+            mem.read_exact_at(bytes, *addr as u64).unwrap();
+        }
+        left
+    }
+
+    /// The control for `after_drop`: a plain `String` still holds its text
+    /// once freed. Without it, an allocator that returned the block to the
+    /// system, which reads back as zeros, would pass every wipe test.
+    #[cfg(target_os = "linux")]
+    pub fn after_drop_sees_freed_memory() {
+        let [left] = after_drop("k".repeat(512), |s| [(s.as_ptr().addr(), s.len())]);
+        assert!(
+            left[16..].iter().all(|&b| b == b'k'),
+            "a dropped String's text is gone, so after_drop cannot tell a wipe"
+        );
+    }
+
+    /// R2, T14 (#12): a secret's text is zeroed when it is dropped.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn secrets_are_wiped_on_drop() {
+        after_drop_sees_freed_memory();
+        let [left] = after_drop(Secret::from("k".repeat(512)), |s| {
+            [(s.expose_secret().as_ptr().addr(), s.expose_secret().len())]
+        });
+        assert!(left[16..].iter().all(|&b| b == 0), "{left:?}");
     }
 }

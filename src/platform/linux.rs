@@ -1230,6 +1230,86 @@ exit $bad;
         panic!("cannot run perl: {err}");
     }
 
+    /// Set in the child that `the_sandbox_refuses_x32_calls` starts.
+    #[cfg(target_arch = "x86_64")]
+    const X32_PROBE: &str = "PROTONCTL_X32_PROBE";
+
+    /// Calls `refused_calls` names, made by their x32 numbers. seccomp
+    /// reads the number before the kernel looks for an x32 table, so the
+    /// filter's `EACCES` comes back on any kernel; one built without x32
+    /// would answer `ENOSYS` to a call the filter let through. Arguments
+    /// are `name=number`.
+    #[cfg(target_arch = "x86_64")]
+    const X32_SCRIPT: &str = r#"
+use strict;
+use Errno qw(EACCES);
+$| = 1;
+my %nr = map { my ($k, $v) = split /=/; ($k, 0 + $v) } @ARGV;
+my ($other, $bad) = (getppid(), 0);
+my $limit = pack("QQ", 0, 0);
+my $params = "\0" x 120;
+pipe(my $r, my $w) or die "pipe: $!";
+sub refused {
+    my ($what, $got) = @_;
+    if ($got == -1 && $! == EACCES) { print "refused: $what\n" }
+    else { print "NOT REFUSED: $what ($got, $!)\n"; $bad = 1 }
+}
+refused("socket", syscall($nr{socket}, 2, 1, 0));
+refused("io_uring_setup", syscall($nr{io_uring_setup}, 1, $params));
+refused("kill", syscall($nr{kill}, $other, 0));
+refused("setrlimit", syscall($nr{setrlimit}, 4, $limit));
+refused("ioctl(FIOSETOWN)", syscall($nr{ioctl}, fileno($r), $nr{FIOSETOWN}, pack("i", $other)));
+exit $bad;
+"#;
+
+    /// T14 (#12): a kernel with the x32 ABI takes each call by a second
+    /// number, so the filter must refuse that number too. Checked on any
+    /// kernel, as `X32_SCRIPT` says.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn the_sandbox_refuses_x32_calls() {
+        let out = std::process::Command::new("/proc/self/exe")
+            .args(["platform::linux::tests::x32_probe", "--exact"])
+            .args(["--include-ignored", "--nocapture", "--test-threads=1"])
+            .env(X32_PROBE, "1")
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{said}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(said.matches("refused: ").count(), 5, "{said}");
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    #[ignore = "runs only as the child of the_sandbox_refuses_x32_calls"]
+    fn x32_probe() {
+        use std::os::unix::process::CommandExt as _;
+        if std::env::var_os(X32_PROBE).is_none() {
+            return;
+        }
+        let nr = [
+            ("socket", x32(libc::SYS_socket)),
+            ("io_uring_setup", x32(libc::SYS_io_uring_setup)),
+            ("kill", x32(libc::SYS_kill)),
+            ("setrlimit", x32(libc::SYS_setrlimit)),
+            ("ioctl", x32(libc::SYS_ioctl)),
+        ]
+        .map(|(name, nr)| format!("{name}={nr}"))
+        .into_iter()
+        .chain([format!("FIOSETOWN={FIOSETOWN}")]);
+        sandbox().unwrap();
+        let err = std::process::Command::new("/usr/bin/perl")
+            .args(["-e", X32_SCRIPT])
+            .args(nr)
+            .env_clear()
+            .exec();
+        panic!("cannot run perl: {err}");
+    }
+
     #[test]
     fn unit_tests_never_reach_the_user_s_items() {
         let err = secret_get("protonctl", "privacy-mode").unwrap_err();

@@ -183,6 +183,28 @@ pub mod tests {
     use super::*;
     use std::sync::Mutex;
 
+    /// R20, T14 (#12): every subkey is zeroed when the shared keys are
+    /// dropped. The `Arc`'s counts come first in its block, so the
+    /// allocator's list does not overwrite a subkey.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn subkeys_are_wiped_on_drop() {
+        use crate::secret::tests::{after_drop, after_drop_sees_freed_memory};
+        after_drop_sees_freed_memory();
+        let keys = Arc::new(Keys::derive(&[7; 32]));
+        let left = after_drop(keys, |k| {
+            [
+                (k.alias.as_ptr().addr(), k.alias.len()),
+                (k.reference.as_ptr().addr(), k.reference.len()),
+                (k.handle.as_ptr().addr(), k.handle.len()),
+                (k.digest.as_ptr().addr(), k.digest.len()),
+            ]
+        });
+        for bytes in left {
+            assert!(bytes.iter().all(|&b| b == 0), "{bytes:?}");
+        }
+    }
+
     /// A key source a test can change.
     #[derive(Default)]
     pub struct FakeKey(pub Mutex<Option<[u8; 32]>>);

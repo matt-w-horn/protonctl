@@ -31,8 +31,8 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   Keychain or, on Linux, the Secret Service (Q31), and never logged or
   returned. In memory each is a `secrecy`
   secret type (`SecretString` for the password and the links): its `Debug`
-  output is redacted (a test holds this), and its README says it is wiped
-  on drop (not tested; [#12](https://github.com/matt-w-horn/protonctl/issues/12)). Copies
+  output is redacted (a test holds this), and it is wiped on drop (on
+  Linux a test reads the freed memory; [#12](https://github.com/matt-w-horn/protonctl/issues/12)). Copies
   made inside the Security framework, the `secret-service` crate and its
   D-Bus session, async-imap, rustls and curl's stdin pipe are beyond its
   reach.

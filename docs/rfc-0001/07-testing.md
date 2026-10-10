@@ -745,6 +745,23 @@ missing ones:
   through `posix_spawn`. Run on Linux 6.18, where Landlock also scopes
   signals, so the kernels before 6.12 were tested only through the
   seccomp rules, which these tests check on any kernel.
+  The x32 numbers (built 2026-10-10, #12): `the_sandbox_refuses_x32_calls`
+  runs `x32_probe`, whose perl makes five refused calls (`socket`,
+  `io_uring_setup`, `kill`, `setrlimit`, `ioctl(FIOSETOWN)`) by their
+  x32 numbers and expects the filter's `EACCES`. seccomp reads the number
+  before the kernel looks for an x32 table, so this holds on a kernel
+  built without x32 too, where a call the filter let through gets
+  `ENOSYS`; without the x32 rules, each call got `ENOSYS` and the test
+  failed.
+- Secrets wiped on drop (R2, R20; built 2026-10-10, #12): on Linux,
+  `secrets_are_wiped_on_drop` in `src/secret.rs` and
+  `subkeys_are_wiped_on_drop` in `src/privacy/key.rs` drop a secret and
+  the shared subkeys, then read the freed block through `/proc/self/mem`,
+  so no unsafe code reads it, and expect zeros past the allocator's own
+  16 bytes. Each first checks that a dropped plain `String` still shows
+  its text, so an allocator that returns the block to the system cannot
+  pass the test. With a plain `Box<str>` in place of the secret, and with
+  the keys never dropped, each failed.
 - Names in text (Phase 2): a known name is found wherever it stands
   alone, in any case and any script. B25 (built 2026-10-04): a Chinese or
   Japanese name inside running text in its own script, which has no
