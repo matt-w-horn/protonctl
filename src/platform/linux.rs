@@ -393,7 +393,6 @@ fn sandbox() -> Result<()> {
         RulesetStatus, Scope, path_beneath_rules,
     };
     use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
-    use seccompiler::{BpfProgram, SeccompAction, SeccompFilter};
 
     for (resource, most) in [
         (Resource::As, READER_ADDRESS_SPACE),
@@ -426,6 +425,18 @@ fn sandbox() -> Result<()> {
         status.ruleset != RulesetStatus::NotEnforced,
         "this kernel does not enforce Landlock, which the document readers need (RFC-0001 R21)"
     );
+    for filter in filters()? {
+        seccompiler::apply_filter(&filter)?;
+    }
+    Ok(())
+}
+
+/// The two seccomp filters `sandbox` applies, in order: the calls
+/// `refused_calls` names, answered `EACCES`, and `clone3`, answered
+/// `ENOSYS`. Each ends the process for a call from another architecture,
+/// such as a 32-bit call.
+fn filters() -> Result<Vec<seccompiler::BpfProgram>> {
+    use seccompiler::{SeccompAction, SeccompFilter};
     let mut refused = refused_calls()?;
     let mut absent = vec![(libc::SYS_clone3, Vec::new())];
     // The filter matches call numbers exactly, and on x86_64 a kernel that
@@ -438,17 +449,18 @@ fn sandbox() -> Result<()> {
         }
     }
     let arch = std::env::consts::ARCH.try_into()?;
-    for (calls, errno) in [(refused, libc::EACCES), (absent, libc::ENOSYS)] {
-        let filter: BpfProgram = SeccompFilter::new(
-            calls.into_iter().collect(),
-            SeccompAction::Allow,
-            SeccompAction::Errno(errno.unsigned_abs()),
-            arch,
-        )?
-        .try_into()?;
-        seccompiler::apply_filter(&filter)?;
-    }
-    Ok(())
+    [(refused, libc::EACCES), (absent, libc::ENOSYS)]
+        .into_iter()
+        .map(|(calls, errno)| {
+            Ok(SeccompFilter::new(
+                calls.into_iter().collect(),
+                SeccompAction::Allow,
+                SeccompAction::Errno(errno.unsigned_abs()),
+                arch,
+            )?
+            .try_into()?)
+        })
+        .collect()
 }
 
 /// Enter the sandbox here, in the process that will become `reader`.
@@ -1230,84 +1242,158 @@ exit $bad;
         panic!("cannot run perl: {err}");
     }
 
-    /// Set in the child that `the_sandbox_refuses_x32_calls` starts.
-    #[cfg(target_arch = "x86_64")]
-    const X32_PROBE: &str = "PROTONCTL_X32_PROBE";
-
-    /// Calls `refused_calls` names, made by their x32 numbers. seccomp
-    /// reads the number before the kernel looks for an x32 table, so the
-    /// filter's `EACCES` comes back on any kernel; one built without x32
-    /// would answer `ENOSYS` to a call the filter let through. Arguments
-    /// are `name=number`.
-    #[cfg(target_arch = "x86_64")]
-    const X32_SCRIPT: &str = r#"
-use strict;
-use Errno qw(EACCES);
-$| = 1;
-my %nr = map { my ($k, $v) = split /=/; ($k, 0 + $v) } @ARGV;
-my ($other, $bad) = (getppid(), 0);
-my $limit = pack("QQ", 0, 0);
-my $params = "\0" x 120;
-pipe(my $r, my $w) or die "pipe: $!";
-sub refused {
-    my ($what, $got) = @_;
-    if ($got == -1 && $! == EACCES) { print "refused: $what\n" }
-    else { print "NOT REFUSED: $what ($got, $!)\n"; $bad = 1 }
-}
-refused("socket", syscall($nr{socket}, 2, 1, 0));
-refused("io_uring_setup", syscall($nr{io_uring_setup}, 1, $params));
-refused("kill", syscall($nr{kill}, $other, 0));
-refused("setrlimit", syscall($nr{setrlimit}, 4, $limit));
-refused("ioctl(FIOSETOWN)", syscall($nr{ioctl}, fileno($r), $nr{FIOSETOWN}, pack("i", $other)));
-exit $bad;
-"#;
-
-    /// T14 (#12): a kernel with the x32 ABI takes each call by a second
-    /// number, so the filter must refuse that number too. Checked on any
-    /// kernel, as `X32_SCRIPT` says.
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn the_sandbox_refuses_x32_calls() {
-        let out = std::process::Command::new("/proc/self/exe")
-            .args(["platform::linux::tests::x32_probe", "--exact"])
-            .args(["--include-ignored", "--nocapture", "--test-threads=1"])
-            .env(X32_PROBE, "1")
-            .output()
-            .unwrap();
-        let said = String::from_utf8_lossy(&out.stdout);
-        assert!(
-            out.status.success(),
-            "{said}{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        assert_eq!(said.matches("refused: ").count(), 5, "{said}");
+    /// What seccomp does with one call: each filter run over the call's
+    /// `struct seccomp_data` (`linux/seccomp.h`: the number, the
+    /// architecture, the instruction pointer, six arguments), newest filter
+    /// first, and the result whose action comes first in the kernel's order
+    /// kept (`seccomp_run_filters`). Only the instructions seccompiler
+    /// emits are run; any other fails the test.
+    fn seccomp(filters: &[seccompiler::BpfProgram], arch: u32, nr: i64, args: [u64; 6]) -> u32 {
+        let mut data = [0u8; 64];
+        data[..4].copy_from_slice(&i32::try_from(nr).unwrap().to_ne_bytes());
+        data[4..8].copy_from_slice(&arch.to_ne_bytes());
+        for (i, arg) in args.iter().enumerate() {
+            data[16 + 8 * i..24 + 8 * i].copy_from_slice(&arg.to_ne_bytes());
+        }
+        let run = |filter: &seccompiler::BpfProgram| {
+            let (mut a, mut pc) = (0u32, 0usize);
+            loop {
+                let op = &filter[pc];
+                let (code, k) = (u32::from(op.code), op.k);
+                let jump = |taken: bool| usize::from(if taken { op.jt } else { op.jf });
+                pc += 1;
+                match code {
+                    c if c == libc::BPF_LD | libc::BPF_W | libc::BPF_ABS => {
+                        let at = usize::try_from(k).unwrap();
+                        a = u32::from_ne_bytes(data[at..at + 4].try_into().unwrap());
+                    }
+                    c if c == libc::BPF_ALU | libc::BPF_AND | libc::BPF_K => a &= k,
+                    c if c == libc::BPF_JMP | libc::BPF_JA => pc += usize::try_from(k).unwrap(),
+                    c if c == libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K => pc += jump(a == k),
+                    c if c == libc::BPF_JMP | libc::BPF_JGT | libc::BPF_K => pc += jump(a > k),
+                    c if c == libc::BPF_JMP | libc::BPF_JGE | libc::BPF_K => pc += jump(a >= k),
+                    c if c == libc::BPF_RET | libc::BPF_K => return k,
+                    other => panic!("an instruction seccompiler does not emit: {other:#x}"),
+                }
+            }
+        };
+        // The kernel compares actions as signed numbers, so killing the
+        // process comes first and allowing last.
+        let action = |ret: u32| (ret & libc::SECCOMP_RET_ACTION_FULL).cast_signed();
+        filters
+            .iter()
+            .rev()
+            .map(run)
+            .fold(libc::SECCOMP_RET_ALLOW, |kept, ret| {
+                if action(ret) < action(kept) {
+                    ret
+                } else {
+                    kept
+                }
+            })
     }
 
+    /// T14 (#12): the filters `sandbox` applies, run as seccomp runs them,
+    /// refuse each call by its `x86_64` number and by its x32 number, allow
+    /// what a reader needs, and end the process for a 32-bit call. The
+    /// numbers are written out from the kernel's
+    /// `arch/x86/entry/syscalls/syscall_64.tbl` (v6.18), not taken from
+    /// `x32` or `refused_calls`, so a wrong mapping or a dropped rule there
+    /// fails here. That seccomp sees the x32 number before the kernel
+    /// looks for an x32 table is the kernel's ABI (`seccomp(2)`, "the
+    /// x32 ABI").
     #[cfg(target_arch = "x86_64")]
     #[test]
-    #[ignore = "runs only as the child of the_sandbox_refuses_x32_calls"]
-    fn x32_probe() {
-        use std::os::unix::process::CommandExt as _;
-        if std::env::var_os(X32_PROBE).is_none() {
-            return;
+    fn the_filters_refuse_each_call_by_both_its_numbers() {
+        /// `linux/audit.h`.
+        const AUDIT_ARCH_X86_64: u32 = 0xC000_003E;
+        const AUDIT_ARCH_I386: u32 = 0x4000_0003;
+        /// The x32 mark, added to the table's x32 number.
+        const X32: i64 = 0x4000_0000;
+        let errno = |e: i32| libc::SECCOMP_RET_ERRNO | e.unsigned_abs();
+        let (refused, absent) = (errno(libc::EACCES), errno(libc::ENOSYS));
+        let allowed = libc::SECCOMP_RET_ALLOW;
+        let filters = filters().unwrap();
+        let own = u64::from(rustix::process::getpid().as_raw_pid().cast_unsigned());
+        let other = own + 1;
+        let check = |numbers: [i64; 2], args: [u64; 6], want: u32| {
+            for nr in numbers {
+                let got = seccomp(&filters, AUDIT_ARCH_X86_64, nr, args);
+                assert_eq!(got, want, "call {nr:#x} with {args:?}");
+            }
+        };
+        // Refused whatever their arguments: the x86_64 number, then the
+        // x32 one.
+        for numbers in [
+            [41, X32 + 41],   // socket
+            [425, X32 + 425], // io_uring_setup
+            [91, X32 + 91],   // fchmod
+            [268, X32 + 268], // fchmodat
+            [452, X32 + 452], // fchmodat2
+            [93, X32 + 93],   // fchown
+            [260, X32 + 260], // fchownat
+            [280, X32 + 280], // utimensat
+            [188, X32 + 188], // setxattr
+            [189, X32 + 189], // lsetxattr
+            [190, X32 + 190], // fsetxattr
+            [463, X32 + 463], // setxattrat
+            [197, X32 + 197], // removexattr
+            [198, X32 + 198], // lremovexattr
+            [199, X32 + 199], // fremovexattr
+            [466, X32 + 466], // removexattrat
+            [76, X32 + 76],   // truncate
+            [424, X32 + 424], // pidfd_send_signal
+            [160, X32 + 160], // setrlimit
+            [90, X32 + 90],   // chmod
+            [92, X32 + 92],   // chown
+            [94, X32 + 94],   // lchown
+            [132, X32 + 132], // utime
+            [235, X32 + 235], // utimes
+            [261, X32 + 261], // futimesat
+            [57, X32 + 57],   // fork
+            [58, X32 + 58],   // vfork
+        ] {
+            check(numbers, [0; 6], refused);
         }
-        let nr = [
-            ("socket", x32(libc::SYS_socket)),
-            ("io_uring_setup", x32(libc::SYS_io_uring_setup)),
-            ("kill", x32(libc::SYS_kill)),
-            ("setrlimit", x32(libc::SYS_setrlimit)),
-            ("ioctl", x32(libc::SYS_ioctl)),
-        ]
-        .map(|(name, nr)| format!("{name}={nr}"))
-        .into_iter()
-        .chain([format!("FIOSETOWN={FIOSETOWN}")]);
-        sandbox().unwrap();
-        let err = std::process::Command::new("/usr/bin/perl")
-            .args(["-e", X32_SCRIPT])
-            .args(nr)
-            .env_clear()
-            .exec();
-        panic!("cannot run perl: {err}");
+        // A signal or a pidfd for another process; the same for its own.
+        for numbers in [
+            [62, X32 + 62],   // kill
+            [200, X32 + 200], // tkill
+            [234, X32 + 234], // tgkill
+            [129, X32 + 524], // rt_sigqueueinfo
+            [297, X32 + 536], // rt_tgsigqueueinfo
+            [434, X32 + 434], // pidfd_open
+        ] {
+            check(numbers, [other, 0, 0, 0, 0, 0], refused);
+            check(numbers, [own, 0, 0, 0, 0, 0], allowed);
+        }
+        // A new process, not a thread.
+        let thread = u64::from(libc::CLONE_THREAD.cast_unsigned());
+        check([56, X32 + 56], [0; 6], refused); // clone
+        check([56, X32 + 56], [thread, 0, 0, 0, 0, 0], allowed);
+        // A new limit, not a read of one.
+        check([302, X32 + 302], [0, 4, 1, 0, 0, 0], refused); // prlimit64
+        check([302, X32 + 302], [0, 4, 0, 1, 0, 0], allowed);
+        // A file owner, which would carry SIGIO to another process.
+        let set_own = u64::from(libc::F_SETOWN.cast_unsigned());
+        let get_fl = u64::from(libc::F_GETFL.cast_unsigned());
+        for cmd in [set_own, F_SETOWN_EX] {
+            check([72, X32 + 72], [3, cmd, 0, 0, 0, 0], refused); // fcntl
+        }
+        check([72, X32 + 72], [3, get_fl, 0, 0, 0, 0], allowed);
+        for request in [FIOSETOWN, SIOCSPGRP] {
+            check([16, X32 + 514], [3, request, 0, 0, 0, 0], refused); // ioctl
+        }
+        check([16, X32 + 514], [3, libc::FIONREAD, 0, 0, 0, 0], allowed);
+        // clone3 answered as a kernel without it; getpid, which a reader
+        // needs, allowed.
+        check([435, X32 + 435], [0; 6], absent);
+        check([39, X32 + 39], [0; 6], allowed);
+        // A 32-bit call ends the process, whatever its number.
+        for nr in [1, 37, 41] {
+            let got = seccomp(&filters, AUDIT_ARCH_I386, nr, [0; 6]);
+            assert_eq!(got, libc::SECCOMP_RET_KILL_PROCESS, "i386 call {nr}");
+        }
     }
 
     #[test]
