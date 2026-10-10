@@ -756,14 +756,23 @@ missing ones:
   through `posix_spawn`. Run on Linux 6.18, where Landlock also scopes
   signals, so the kernels before 6.12 were tested only through the
   seccomp rules, which these tests check on any kernel.
-  The x32 numbers (built 2026-10-10, #12): `the_sandbox_refuses_x32_calls`
-  runs `x32_probe`, whose perl makes five refused calls (`socket`,
-  `io_uring_setup`, `kill`, `setrlimit`, `ioctl(FIOSETOWN)`) by their
-  x32 numbers and expects the filter's `EACCES`. seccomp reads the number
-  before the kernel looks for an x32 table, so this holds on a kernel
-  built without x32 too, where a call the filter let through gets
-  `ENOSYS`; without the x32 rules, each call got `ENOSYS` and the test
-  failed.
+  The x32 numbers (built 2026-10-10, #12):
+  `the_filters_refuse_each_call_by_both_its_numbers` runs the two filters
+  `sandbox` applies in the test process, through a small interpreter of
+  the BPF instructions seccompiler emits, as seccomp runs them: over each
+  call's `struct seccomp_data`, newest filter first, the first action in
+  the kernel's order kept. Every refused call is checked by its x86_64
+  number and its x32 number, with the arguments that refuse it and, for
+  the calls refused only for some arguments, ones that are allowed;
+  `clone3` gets `ENOSYS`, `getpid` is allowed, and a 32-bit call ends the
+  process. The numbers are written out from the kernel's
+  `syscall_64.tbl` (v6.18), not taken from `x32` or `refused_calls`; the
+  test failed with the x32 rules removed, with `ioctl`'s x32 number
+  mapped to its x86_64 one, with `truncate`'s rule dropped, and with
+  `prlimit64`'s rule inverted. It checks the filter, not the kernel:
+  that seccomp sees the x32 number before the kernel looks for an x32
+  table is the kernel's ABI, seen once on Linux 6.18 without x32, where
+  a perl probe got `EACCES` with the rules and `ENOSYS` without them.
 - Secrets wiped on drop (R2, R20; built 2026-10-10, #12): on Linux,
   `secrets_are_wiped_on_drop` in `src/secret.rs` and
   `subkeys_are_wiped_on_drop` in `src/privacy/key.rs` drop a secret and
