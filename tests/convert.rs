@@ -1,13 +1,16 @@
 //! The document readers (RFC R21, Q13, Q34), against the built binary:
 //! `protonctl convert` runs each reader in its sandbox, and on Linux `drive
 //! cat` reads documents through it as the server does. On Linux they need
-//! poppler-utils and pandoc; on macOS they are PDFKit and `textutil`. The
+//! poppler-utils, pandoc and tesseract-ocr; on macOS they are PDFKit and
+//! `textutil`. The
 //! fixtures: `two-pages.pdf` was written by hand, one Helvetica line per
 //! page; the Word, OpenDocument and RTF files were made by pandoc 3.1.3
 //! from "Word text, Café." and "Second paragraph.". `fills-memory.docx` was
 //! made by Python's `zipfile`, deflated: a `[Content_Types].xml` and
 //! `_rels/.rels` naming `word/document.xml`, which is one paragraph holding
-//! one run of 200 MiB of "x".
+//! one run of 200 MiB of "x". `ocr.png` is a page of two Helvetica 24 pt
+//! lines, "Scanned invoice 4471" and "Paid in full, thank you.", written
+//! by hand as a PDF and rendered by `pdftoppm -gray -r 100 -png`.
 #![expect(
     clippy::unwrap_used,
     reason = "integration tests: a panic is a failed test"
@@ -35,6 +38,7 @@ fn protonctl() -> Command {
         for (tool, package) in [
             ("/usr/bin/pdftotext", "poppler-utils"),
             ("/usr/bin/pandoc", "pandoc"),
+            ("/usr/bin/tesseract", "tesseract-ocr"),
         ] {
             assert!(
                 Path::new(tool).exists(),
@@ -101,6 +105,14 @@ fn each_reader_runs_in_its_sandbox() {
             "{format}"
         );
     }
+    if cfg!(target_os = "linux") {
+        let image = std::fs::read(fixture("ocr.png")).unwrap();
+        let out = convert(&["ocr"], &image);
+        assert_eq!(
+            String::from_utf8(out.stdout).unwrap(),
+            "Scanned invoice 4471\nPaid in full, thank you.\n"
+        );
+    }
     assert!(convert(&["check"], b"").status.success());
 }
 
@@ -111,6 +123,7 @@ struct Running {
     status: String,
     limits: String,
     cmdline: String,
+    environ: String,
 }
 
 #[cfg(target_os = "linux")]
@@ -137,6 +150,7 @@ fn running(args: &[&str], reader: &str) -> Running {
         status: read("status"),
         limits: read("limits"),
         cmdline: read("cmdline").replace('\0', " "),
+        environ: read("environ").replace('\0', " "),
     };
     drop(child.stdin.take());
     child.wait().unwrap();
@@ -148,12 +162,14 @@ fn running(args: &[&str], reader: &str) -> Running {
 /// second answers `clone3`), no new privileges, and the readers' limits
 /// (R21, #71): 2 GiB of address space and a core size of 1, which keeps a
 /// crashed reader's core from a core handler; pandoc also has a 1 GiB heap.
+/// Tesseract's environment holds only its one-thread limit.
 #[cfg(target_os = "linux")]
 #[test]
 fn the_reader_holds_the_sandbox() {
     for (args, reader) in [
         (&["pdf-text"][..], "/usr/bin/pdftotext"),
         (&["document", "--format", "docx"][..], "/usr/bin/pandoc"),
+        (&["ocr"][..], "/usr/bin/tesseract"),
     ] {
         let seen = running(args, reader);
         for mark in ["Seccomp:\t2", "Seccomp_filters:\t2", "NoNewPrivs:\t1"] {
@@ -175,6 +191,12 @@ fn the_reader_holds_the_sandbox() {
                 seen.limits
             );
         }
+        let environ = if reader.ends_with("tesseract") {
+            "OMP_THREAD_LIMIT=1 "
+        } else {
+            ""
+        };
+        assert_eq!(seen.environ, environ, "{reader}");
         if reader.ends_with("pandoc") {
             assert!(
                 seen.cmdline.contains(" +RTS -M1g -RTS "),

@@ -64,7 +64,7 @@ records. After P1:
 | Drive folder discovery | `~/Library/CloudStorage/ProtonDrive-*` | `src/platform/macos.rs` | no place to look: the CLI-only mode |
 | Drive CLI check (R9) | `/usr/bin/codesign` and Apple Team ID `2SB5Z68H26`, before every run, on a copy in a new 0700 folder, which then runs (Q24, #72) | `src/drive/cli.rs` | the SHA-256 pinned at `setup drive` in the Secret Service item `drive-cli-pin`, before every run, on a sealed memfd copy, which then runs (Q33, built 2026-10-05; the copy and the store since 2026-10-07, #72) |
 | Bridge on demand (Q2) | `/usr/bin/open -g -j -b com.protonmail.bridge` | `src/mail/mod.rs` | never started; when Bridge is not running, the error says to run it as a systemd user unit, which the README shows (Q32) |
-| PDF text and page images; Word, RTF, OpenDocument | `/usr/bin/osascript` with PDFKit; `/usr/bin/textutil`; each in `protonctl convert` under a `sandbox-exec` profile (Q13, built 2026-10-07) | `src/extract.rs`, `src/convert.rs`, `src/platform/macos.rs` | poppler (`pdftotext`, `pdftoppm`) and pandoc, each in `protonctl convert`'s sandbox (Q34, built 2026-10-05); text and images read as on macOS |
+| PDF text and page images; Word, RTF, OpenDocument | `/usr/bin/osascript` with PDFKit; `/usr/bin/textutil`; each in `protonctl convert` under a `sandbox-exec` profile (Q13, built 2026-10-07) | `src/extract.rs`, `src/convert.rs`, `src/platform/macos.rs` | poppler (`pdftotext`, `pdftoppm`) and pandoc, each in `protonctl convert`'s sandbox (Q34, built 2026-10-05); text and images read as on macOS; in aliases mode, Tesseract reads the text in images and scans in the same sandbox (M4.2, built 2026-10-10) |
 | Cache folder | `~/Library/Caches/protonctl` | `src/platform/macos.rs` | `$XDG_CACHE_HOME/protonctl`, else `~/.cache/protonctl` |
 | Content off disk (R10, Q14) | a RAM disk, made with `diskutil` and `newfs_hfs` (M2.8) | `src/platform/macos.rs`, `src/platform/linux.rs` | a 0700 folder under `$XDG_RUNTIME_DIR` (built 2026-10-05) |
 | Key ID (R20) | the Keychain item's comment | `src/platform/macos.rs`, `src/platform/linux.rs` | the item's `comment` attribute |
@@ -154,7 +154,7 @@ flowchart TB
 | Bridge on demand | Q2 | `open` the Bridge app hidden | start Bridge's core with `--noninteractive`; a systemd user unit the user enables; or require Bridge running | require it running, and print how to enable the unit | Q32 |
 | Drive CLI check | R9 | `codesign`, Team ID, version | the CLI ships for Linux (MP0); no release signature or checksum found: a SHA-256 pinned at `setup drive`, as Bridge's certificate is pinned; Proton's signature if one is published; a path the user cannot write | pin at setup, checked before every run | Q33 |
 | Drive folder | the namespace, cloud-only files | the Drive app's folder, `SF_DATALESS` | no Proton Drive app for Linux yet (MP0): the CLI-only mode built for Macs without the app, with search off | CLI only | Q33 |
-| Converters | R21 | `osascript` (PDFKit), `textutil`, Vision | poppler-utils (`pdftotext`, `pdftoppm`); pandoc or LibreOffice for documents; Tesseract for OCR; or Rust crates (`pdf-extract`, `lopdf`) inside the sandboxed helper | external tools when installed; otherwise the result names the package to install. Built 2026-10-05 with poppler and pandoc; OCR waits for Phase 4 | Q34 |
+| Converters | R21 | `osascript` (PDFKit), `textutil`, Vision | poppler-utils (`pdftotext`, `pdftoppm`); pandoc or LibreOffice for documents; Tesseract for OCR; or Rust crates (`pdf-extract`, `lopdf`) inside the sandboxed helper | external tools when installed; otherwise the result names the package to install. Built 2026-10-05 with poppler and pandoc, and Tesseract on 2026-10-10 (M4.2) | Q34 |
 | Sandbox | R21 | a `sandbox-exec` profile (Q13) | Landlock (files from Linux 5.13, network from 6.7) through the `landlock` crate, with a seccomp filter; or bubblewrap | Landlock and seccomp in `protonctl convert` (built 2026-10-05) | Q34 |
 | User presence | R18 | LocalAuthentication: Touch ID or the login password | polkit (`pkcheck --allow-user-interaction`, needs an authentication agent, so a desktop session); fprintd; a FIDO2 security key's touch (works on both systems); none | polkit where an agent runs; otherwise no `reveal_*` tools | Q35 |
 | Content off disk | R10, Q14 | a RAM disk | `memfd_create`, which never touches a filesystem; `/dev/shm`; `$XDG_RUNTIME_DIR`, a per-user memory file system | `$XDG_RUNTIME_DIR`, since the CLI writes into a folder, which a `memfd_create` file is not (Q14); used only when it is tmpfs, the user's own with mode 0700, and every swap is zram or dm-crypt (built 2026-10-05) | Q14 |
@@ -204,7 +204,12 @@ flowchart TB
   a form feed comes out as a line break), `pdf-page` (`pdftoppm
   -singlefile -jpeg -scale-to 2000`, one page per run) and `document`
   (`pandoc --sandbox -t plain`, for `.docx`, `.odt` and `.rtf`). pandoc
-  cannot read `.doc`. `pdfinfo` is not used: it prints a document's own
+  cannot read `.doc`. `ocr` (`tesseract stdin stdout`, built 2026-10-10,
+  M4.2) reads the text in a PNG, JPEG, GIF or WebP image, in aliases mode
+  only: an image, or a scan's first 10 pages, each rendered by
+  `pdf-page`. Its environment holds only `OMP_THREAD_LIMIT=1`; with
+  OpenMP's thread per core, eight runs at once took 147 s on 4 cores. It
+  reads English unless more of Tesseract's language data is installed. `pdfinfo` is not used: it prints a document's own
   metadata before the page count, unescaped, so a Title could set it.
 - The sandbox: Landlock lets the reader read and run what is under `/usr`,
   `/lib`, `/lib64` and `/bin`, read `/etc/ld.so.cache`, `/etc/fonts` and
@@ -294,7 +299,7 @@ README (Q17, checked on macOS only) matter more.
 | P1 | Builds and tests on Linux: `src/platform/`; target-specific dependencies; Linux implementations that report "not available on Linux"; the macOS-only tests behind `cfg`; download expiry by the time in the folder name; `deny.toml` targets; `scripts/check.sh` on Linux, with the macOS build checked from there. Done 2026-10-04 | Phase 2, so the privacy layer is built and tested in Linux containers |
 | P2 | Mail and Calendar on Linux: the secret store (Q31), Bridge started by the user (Q32), `setup`, `doctor` and `status`. Built 2026-10-05; the live check, on a Linux desktop, has not run ([#27](https://github.com/matt-w-horn/protonctl/issues/27)) | alongside Phase 2 |
 | P3 | Drive on Linux, as Q33 decides. Built 2026-10-05; the live check, on a Linux machine signed in to Proton, has not run ([#28](https://github.com/matt-w-horn/protonctl/issues/28)) | after P2 |
-| P4 | Converters and their sandbox on Linux (Q34). Built 2026-10-05, before Phase 4; OCR waits for it | with Phase 4 |
+| P4 | Converters and their sandbox on Linux (Q34). Built 2026-10-05, before Phase 4; OCR with Tesseract 2026-10-10 (M4.2) | with Phase 4 |
 | P5 | User presence on Linux (Q35), or no `reveal_*` there | with Phase 3 |
 
 Milestones MP0 to MP5 in [section 9](09-rollout.md#phase-p-platforms)

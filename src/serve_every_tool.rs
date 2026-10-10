@@ -122,7 +122,8 @@ const PHOTO: &str = "/Photos/Ingrid Haugland site.png";
 const CLOUD: &str = "/Ingrid Haugland – site plan.txt";
 const CLOUD_CONTRACT: &str = "/Clients/z.kwiatkowski@kwiatkowski-legal.example contract.txt";
 
-/// A 1x1 PNG.
+/// A 1x1 PNG: an image with no text, where aliases mode has no OCR.
+#[cfg(not(target_os = "linux"))]
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\nIDATx\x9cc\0\x01\0\0\x05\0\x01\r\n-\xb4\0\0\0\0IEND\xaeB`\x82";
 /// Bytes that are neither text nor a document nor an image.
 const BINARY: &[u8] = b"\0\x01\x02\x03LEDGER\0\xff\xfe\x00\x10\x20\x30\x40\x50";
@@ -170,6 +171,64 @@ fn pdf(lines: &[&str]) -> Vec<u8> {
         .as_bytes(),
     );
     out
+}
+
+/// `lines` as an image holds them: rendered by poppler from `pdf`, 1700 by
+/// 2200 pixels, as PNG (`-png`) or JPEG (`-jpeg`), for OCR to read.
+#[cfg(target_os = "linux")]
+fn rendered(lines: &[&str], format: &str) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut child = std::process::Command::new("/usr/bin/pdftoppm")
+        .args([
+            "-singlefile",
+            format,
+            "-scale-to-x",
+            "1700",
+            "-scale-to-y",
+            "2200",
+            "-",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(&pdf(lines)).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    out.stdout
+}
+
+/// An image: on Linux, where aliases mode reads it by OCR (M4.2), one that
+/// holds planted values as text does; elsewhere `PNG`.
+fn photo() -> Vec<u8> {
+    #[cfg(target_os = "linux")]
+    return rendered(
+        &[
+            &format!("Site visit with {INGRID}"),
+            &format!("Card {}", CARDS[0]),
+        ],
+        "-png",
+    );
+    #[cfg(not(target_os = "linux"))]
+    PNG.to_vec()
+}
+
+/// A PDF with no text layer: on Linux a page that is one JPEG of planted
+/// values, as a scanner makes it, elsewhere an empty page.
+fn scan() -> Vec<u8> {
+    #[cfg(target_os = "linux")]
+    {
+        let jpeg = rendered(
+            &[
+                &format!("Signed by {ZOLTAN}"),
+                &format!("Phone {}", PHONES[1]),
+            ],
+            "-jpeg",
+        );
+        crate::extract::tests::scan_of(&[jpeg])
+    }
+    #[cfg(not(target_os = "linux"))]
+    pdf(&[])
 }
 
 fn lease_text() -> String {
@@ -314,7 +373,7 @@ fn messages() -> Vec<Stored> {
         PHONES[3],
         attachment_text(),
         b64(&plan_pdf()),
-        b64(PNG),
+        b64(&photo()),
         b64(BINARY),
     );
     vec![
@@ -480,9 +539,9 @@ fn drive_fixtures(base: &Path) -> (tempfile::TempDir, PathBuf, PathBuf, Vec<Vec<
         (LEASE, lease_text().into_bytes()),
         (NOTES, notes_text().into_bytes()),
         (PLAN_PDF, plan_pdf()),
-        (SCAN, pdf(&[])),
+        (SCAN, scan()),
         (INVOICE, invoice_text().into_bytes()),
-        (PHOTO, PNG.to_vec()),
+        (PHOTO, photo()),
     ];
     for (path, bytes) in &files {
         let f = root.join(&path[1..]);
@@ -1550,8 +1609,9 @@ async fn no_planted_value_leaves_any_tool() {
 }
 
 /// RFC R22 (T8): in aliases mode no result carries image content, an
-/// embedded resource or a file's bytes in base64; the image, the scan and
-/// the file that is not text each come back as a reason.
+/// embedded resource or a file's bytes in base64; the file that is not
+/// text comes back as a reason, and so do the image and the scan where
+/// aliases mode has no OCR.
 #[tokio::test]
 async fn no_tool_returns_images_or_file_bytes_in_aliases_mode() {
     const SIGNATURES: [&[u8]; 5] = [
@@ -1583,12 +1643,28 @@ async fn no_tool_returns_images_or_file_bytes_in_aliases_mode() {
             }
         }
     }
-    for what in [
-        "read an image",
-        "read a scan",
-        "get an image attachment",
-        "get a binary attachment",
-    ] {
+    // On Linux an image and a scan come back as the text OCR finds in
+    // them (M4.2), which `no_planted_value_leaves_any_tool` checks for
+    // names and numbers; elsewhere as a reason, as a file that is not text
+    // does everywhere.
+    let ocr = [
+        ("read an image", "Site visit with"),
+        ("read a scan", "Signed by"),
+        ("get an image attachment", "Site visit with"),
+    ];
+    if cfg!(target_os = "linux") {
+        for (what, words) in ocr {
+            let v = run.call(what).json();
+            assert_eq!(v["textFrom"], "tesseract (OCR)", "{what}: {v}");
+            let content = v["content"].as_str().unwrap_or_default();
+            assert!(content.contains(words), "{what}: {v}");
+        }
+    }
+    let unread = ocr.iter().filter(|_| !cfg!(target_os = "linux"));
+    for what in unread
+        .map(|(what, _)| *what)
+        .chain(["get a binary attachment"])
+    {
         let v = run.call(what).json();
         let reason = v["reason"].as_str().or(v["image"]["reason"].as_str());
         assert!(reason.is_some(), "{what}: {v}");

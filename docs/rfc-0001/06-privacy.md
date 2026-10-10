@@ -298,7 +298,9 @@ sequenceDiagram
 From Phase 2 until Phase 4, a scan or an image has no text to give, and
 `reveal_*` returns no images, so neither is readable through protonctl.
 A reveal never returns page images, even after Touch ID (Q42); from
-Phase 4 it returns the text Vision finds in a scan or an image, as written.
+Phase 4 it returns the text OCR finds in a scan or an image, as written:
+Vision on macOS, Tesseract on Linux. On Linux the tokenized reads already
+return that text, with aliases (M4.2, built 2026-10-10).
 
 ### Guidance
 
@@ -317,7 +319,7 @@ Each line is under 200 characters:
 | Mail and attachments | Bridge's IMAP into memory |
 | Drive files the app has synced | read from the app's folder, which adds no copy |
 | Drive files not on this Mac | a per-process RAM disk, since `proton-drive` writes downloads only into a folder (Q14); on Linux, `$XDG_RUNTIME_DIR` |
-| Conversion | bytes on stdin to `protonctl convert`, text back on stdout (R21): on macOS `osascript` (PDFKit) or `textutil` under a `sandbox-exec` profile (Q13); on Linux poppler or pandoc under Landlock and seccomp (Q34) |
+| Conversion | bytes on stdin to `protonctl convert`, text back on stdout (R21): on macOS `osascript` (PDFKit) or `textutil` under a `sandbox-exec` profile (Q13); on Linux poppler, pandoc or Tesseract under Landlock and seccomp (Q34) |
 
 The helpers run with an empty environment, so they find the real home and
 per-user temporary folders through the system rather than `HOME` or

@@ -661,8 +661,12 @@ missing ones:
   tool: `no_tool_returns_images_or_file_bytes_in_aliases_mode` in
   `src/serve_every_tool.rs` checks that every block is text, that no
   result has structured content, and that no string decodes to a file
-  signature or a planted file's bytes; an image file, a scan and an image
-  or binary attachment each come back as a `reason`.
+  signature or a planted file's bytes; a binary attachment comes back as
+  a `reason`. An image file, a scan and an image attachment come back as
+  a `reason` on macOS; on Linux (M4.2, 2026-10-10) each holds planted
+  names and numbers as rendered text, comes back as the text Tesseract
+  finds, and `no_planted_value_leaves_any_tool` finds those values only
+  as aliases.
 - Logs: with `RUST_LOG=debug`, stderr holds none of the planted values
   (R25), and a panic planted on a slice of planted text prints none of it.
   Built in another form: `results_stay_out_of_stderr_even_with_rust_log_set`
@@ -694,6 +698,13 @@ missing ones:
 - Converter sandbox (Phase 4): a test build of the helper that tries to
   open a socket, write a file and read a Keychain item fails at each;
   Vision returns the words of a synthetic page rendered as an image.
+  OCR on Linux (built 2026-10-10, M4.2): `each_reader_runs_in_its_sandbox`
+  reads `tests/fixtures/ocr.png` through `convert ocr`, and
+  `the_reader_holds_the_sandbox` checks that Tesseract holds the seccomp
+  filters and limits and an environment of `OMP_THREAD_LIMIT=1` alone;
+  `images_and_scans_are_read_by_ocr_in_aliases_mode` in `src/extract.rs`
+  reads an image and an 11-page scan in aliases mode, and checks that
+  the first 10 pages are read and the note says so.
   Built on Linux, ahead of Phase 4: `the_sandbox_confines_a_reader`, which
   runs `sandbox_probe` as a child, in `src/platform/linux.rs`, and
   `each_reader_runs_in_its_sandbox` and

@@ -225,7 +225,7 @@ Server name `protonctl`; registered as `proton`, so a tool's full name is
 | `content` | Text |
 | `proton.*` | as the fields above |
 | `protonError` | Error |
-| `image` | `{mimeType, bytes, text: null, reason}` until Phase 4, then `text` is Vision's OCR as Text (R22) |
+| `image` | `{mimeType, bytes, text: null, reason}` until Phase 4 (R22). As built on Linux (M4.2, 2026-10-10), an image is not an `image` in aliases mode: Tesseract's text comes back as a document's, in `content` (Text) with `textFrom` `"tesseract (OCR)"`, paged by offset, and so does a scan's, from its first 10 pages; macOS keeps `text: null` until Vision is built |
 | `pdfPages`, `pageStarts`, `pagesShown`, `nextPage`, `textLayer` | absent in aliases mode |
 | `nextPageToken` (search, folder) | Token(offset) |
 | `nextPageToken` (tree) | Token(tree) |

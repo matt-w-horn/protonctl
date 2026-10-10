@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # The document readers' tests, and the Secret Service tests.
-      - run: sudo apt-get update && sudo apt-get install -y poppler-utils pandoc dbus gnome-keyring
+      - run: sudo apt-get update && sudo apt-get install -y poppler-utils pandoc tesseract-ocr dbus gnome-keyring
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy, llvm-tools-preview

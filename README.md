@@ -580,7 +580,10 @@ The steps above apply, with these differences:
   encrypted or zram, so the file never reaches a disk in clear; `doctor`
   checks this.
 - **Documents** are read by poppler (`pdftotext`, `pdftoppm`)
-  and pandoc: install `poppler-utils` and `pandoc`. Each runs in a sandbox
+  and pandoc, and in aliases mode the text in images and scans by
+  Tesseract: install `poppler-utils`, `pandoc` and `tesseract-ocr`, with a
+  `tesseract-ocr-LANG` package for each language besides English that
+  Tesseract should read (it reads English only as built). Each runs in a sandbox
   (Landlock and seccomp) that lets it read only the system's programs and
   libraries, write nothing, and reach no network; the kernel must enforce
   Landlock, and `doctor` checks that it does. pandoc cannot read the old
@@ -655,7 +658,8 @@ event, a writing style), and the name model that finds names in free
 text misses about one in fourteen
 ([The privacy setting](#the-privacy-setting)).
 
-**Does it run on Linux?** Yes, with poppler and pandoc for documents and
+**Does it run on Linux?** Yes, with poppler, pandoc and Tesseract for
+documents and
 the Secret Service for secrets ([On Linux](#on-linux)). Windows is not
 planned.
 
@@ -689,7 +693,8 @@ macOS build, so changes to macOS-only code are checked there too. With
 `dbus-run-session` and `gnome-keyring-daemon` installed (Debian and Ubuntu:
 `dbus` and `gnome-keyring`), it also tests the Secret Service store against
 a throwaway keyring in a private D-Bus session. The tests of the Linux
-document readers need `poppler-utils` and `pandoc`, and fail without them.
+document readers need `poppler-utils`, `pandoc` and `tesseract-ocr`, and
+fail without them.
 The tests of the name model run only where it is installed
 ([Install the name model](#install-the-name-model)); elsewhere, in CI
 among others, they print a notice and check nothing.

@@ -41,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # What scripts/check.sh needs on Linux, as in ci.yml, so Claude can run it.
-      - run: sudo apt-get update && sudo apt-get install -y poppler-utils pandoc dbus gnome-keyring
+      - run: sudo apt-get update && sudo apt-get install -y poppler-utils pandoc tesseract-ocr dbus gnome-keyring
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         with:
           # Named here, since a pinned commit cannot name it as the branch did.
