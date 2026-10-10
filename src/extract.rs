@@ -8,7 +8,9 @@
 //! stdin and runs as its own process, so a hostile document can crash only
 //! it. Images are named for the host to show, and a PDF's pages are
 //! rendered to images by the same readers: a scan has no text layer, and
-//! Claude reads a page image as it reads any other.
+//! Claude reads a page image as it reads any other. Aliases mode returns no
+//! images (R22): on Linux an image, and a scan's pages, go through OCR
+//! (Tesseract) instead, and their text is read as any other (M4.2).
 
 use std::fmt::Write as _;
 use std::process::Stdio;
@@ -42,6 +44,17 @@ const PAGE_IMAGES: usize = 4;
 /// have once a request holds over 20, and between the 1568 that older
 /// models scale down to and the 2576 that current ones read.
 const PAGE_EDGE: u32 = 2000;
+/// A scan's pages that OCR reads in one call, in aliases mode: each is
+/// rendered and then read, two sandboxed runs, so a long scan stays within
+/// the call's 150 s (R8). A dense page (55 lines of 10 pt text) took 1.8 s
+/// to read and 0.05 s to render on one thread (2026-10-10), so 10 pages
+/// take about 18 s one after another; `scan_text` reads `OCR_AT_ONCE` at
+/// a time.
+#[cfg(target_os = "linux")]
+const OCR_PAGES: usize = 10;
+/// A scan's pages rendered and read at once, each by one-thread runs.
+#[cfg(target_os = "linux")]
+const OCR_AT_ONCE: usize = 4;
 
 /// What a file's bytes hold, as far as the tools can return it inline.
 pub enum Content {
@@ -71,6 +84,10 @@ pub enum TextFrom {
     /// A mail body, already decoded by the mail parser.
     #[serde(rename = "message")]
     Message,
+    /// The text OCR found in an image or a scan's pages (M4.2).
+    #[cfg(target_os = "linux")]
+    #[serde(rename = "tesseract (OCR)")]
+    Tesseract,
 }
 
 /// A document's text, ready to page: hidden characters removed (R6), and
@@ -84,6 +101,9 @@ pub struct Document {
     hidden: usize,
     /// A PDF, kept to render its pages as images.
     pdf: Option<Pdf>,
+    /// Where the text came from, when the reader cannot say it in
+    /// `textFrom` alone: a scan read by OCR, and how much of it.
+    notice: Option<String>,
 }
 
 /// A PDF's bytes, and how many pages its text came from: the count the
@@ -118,6 +138,7 @@ impl Document {
             page_starts,
             hidden,
             pdf: None,
+            notice: None,
         }
     }
 
@@ -134,8 +155,7 @@ impl Document {
         match &self.pdf {
             // Aliases mode returns no images (R22), so none is made.
             Some(_) if blank && !crate::content::images_allowed() => Ok((
-                json!({ "content": null, "textLayer": false,
-                    "reason": "the PDF has no text layer (a scan); aliases mode returns no page images until Phase 4 reads their text" }),
+                json!({ "content": null, "textLayer": false, "reason": SCAN_UNREAD }),
                 Vec::new(),
             )),
             Some(pdf) if page.is_some() || blank => {
@@ -210,6 +230,12 @@ impl Document {
         if self.text.trim().is_empty() {
             v["note"] = json!("the file holds no text");
         }
+        if let Some(notice) = &self.notice {
+            v["note"] = json!(match v["note"].as_str() {
+                Some(note) => format!("{notice}; {note}"),
+                None => notice.clone(),
+            });
+        }
         Ok(v)
     }
 }
@@ -219,6 +245,17 @@ impl Document {
 /// extension, and text by its encoding.
 pub async fn content(bytes: &[u8], name: &str) -> Result<Content> {
     if let Some(mime) = image_type(bytes) {
+        #[cfg(target_os = "linux")]
+        if !crate::content::images_allowed() {
+            return Ok(match ocr(bytes).await? {
+                Ok(text) => {
+                    let mut doc = Document::new(&[text], TextFrom::Tesseract);
+                    doc.notice = Some("an image: its text is what OCR found in it".into());
+                    Content::Text(doc)
+                }
+                Err(why) => Content::Other(why),
+            });
+        }
         return Ok(Content::Image { mime });
     }
     if bytes.starts_with(b"%PDF-") {
@@ -258,9 +295,19 @@ fn image_type(b: &[u8]) -> Option<&'static str> {
 const NO_SANDBOX: &str =
     "the document readers cannot run in their sandbox on this computer; protonctl doctor says why";
 
+/// Why a scan returns no text in aliases mode.
+const SCAN_UNREAD: &str = if cfg!(target_os = "linux") {
+    "the PDF has no text layer (a scan), and OCR found no text in it; aliases mode returns no page images"
+} else {
+    "the PDF has no text layer (a scan); aliases mode returns no page images until Phase 4 reads their text"
+};
+
 /// Why a reader that is not installed reads nothing.
 fn missing(package: &str) -> &'static str {
     match package {
+        "tesseract-ocr" => {
+            "reading the text in images and scans here needs tesseract-ocr; install it (RFC-0001 M4.2)"
+        }
         "pandoc" => {
             "reading Word, RTF and OpenDocument files here needs pandoc; install it (RFC-0001 Q34)"
         }
@@ -284,11 +331,63 @@ async fn pdf_text(bytes: &[u8]) -> Result<Content> {
     };
     let text = String::from_utf8(out).context("the PDF reader did not return UTF-8")?;
     let pages = pages_of(&text);
-    let mut doc = Document::new(&pages, TextFrom::Pdf);
-    doc.pdf = Some(Pdf {
+    let pdf = Pdf {
         bytes: bytes.to_vec(),
         pages: pages.len(),
+    };
+    #[cfg(target_os = "linux")]
+    if text.trim().is_empty() && !crate::content::images_allowed() {
+        return scan_text(pdf).await;
+    }
+    let mut doc = Document::new(&pages, TextFrom::Pdf);
+    doc.pdf = Some(pdf);
+    Ok(Content::Text(doc))
+}
+
+/// The text in `image`, read by OCR in the sandbox, or why there is none.
+/// Tesseract 5.3 ends its text with a newline; trailing newlines and form
+/// feeds are dropped.
+#[cfg(target_os = "linux")]
+async fn ocr(image: &[u8]) -> Result<Result<String, &'static str>> {
+    Ok(match crate::convert::read(Job::Ocr, image).await? {
+        Outcome::Read(out) => {
+            let text = String::from_utf8(out).context("OCR did not return UTF-8")?;
+            Ok(text.trim_end_matches(['\u{C}', '\n']).to_string())
+        }
+        Outcome::Unreadable => Err("OCR could not read the image; it may be damaged or too large"),
+        Outcome::Missing(package) => Err(missing(package)),
+        Outcome::NoSandbox => Err(NO_SANDBOX),
+    })
+}
+
+/// A scan's text in aliases mode, where its pages cannot come as images
+/// (R22): its first `OCR_PAGES` pages, each rendered and read by OCR.
+#[cfg(target_os = "linux")]
+async fn scan_text(pdf: Pdf) -> Result<Content> {
+    use futures::{StreamExt as _, TryStreamExt as _};
+    let read = pdf.pages.min(OCR_PAGES);
+    let texts: Vec<Result<String, &'static str>> = futures::stream::iter(1..=read)
+        .map(|page| {
+            let pdf = &pdf;
+            async move { ocr(&page_jpeg(pdf, page).await?).await }
+        })
+        .buffered(OCR_AT_ONCE)
+        .try_collect()
+        .await?;
+    let pages = match texts.into_iter().collect::<Result<Vec<String>, _>>() {
+        Ok(pages) => pages,
+        Err(why) => return Ok(Content::Other(why)),
+    };
+    let mut doc = Document::new(&pages, TextFrom::Tesseract);
+    doc.notice = Some(if read < pdf.pages {
+        format!(
+            "the PDF has no text layer (a scan): its text is what OCR found in its first {read} of {} pages",
+            pdf.pages
+        )
+    } else {
+        "the PDF has no text layer (a scan): its text is what OCR found in it".into()
     });
+    doc.pdf = Some(pdf);
     Ok(Content::Text(doc))
 }
 
@@ -343,22 +442,28 @@ async fn pdf_pages(pdf: &Pdf, first: usize) -> Result<Vec<Vec<u8>>> {
     }
     let mut jpegs = Vec::new();
     for page in first..=pdf.pages.min(first.saturating_add(PAGE_IMAGES - 1)) {
-        let job = Job::PdfPage {
-            page,
-            edge: PAGE_EDGE,
-        };
-        let jpeg = match crate::convert::read(job, &pdf.bytes).await? {
-            Outcome::Read(out) => out,
-            Outcome::Unreadable => bail!("the PDF reader could not read the PDF"),
-            Outcome::Missing(package) => bail!("{}", missing(package)),
-            Outcome::NoSandbox => bail!("{NO_SANDBOX}"),
-        };
-        if !jpeg.starts_with(b"\xFF\xD8\xFF") {
-            bail!("the PDF reader did not return a JPEG for page {page}");
-        }
-        jpegs.push(jpeg);
+        jpegs.push(page_jpeg(pdf, page).await?);
     }
     Ok(jpegs)
+}
+
+/// Page `page` of `pdf` as a JPEG `PAGE_EDGE` pixels on its long edge,
+/// from the PDF reader.
+async fn page_jpeg(pdf: &Pdf, page: usize) -> Result<Vec<u8>> {
+    let job = Job::PdfPage {
+        page,
+        edge: PAGE_EDGE,
+    };
+    let jpeg = match crate::convert::read(job, &pdf.bytes).await? {
+        Outcome::Read(out) => out,
+        Outcome::Unreadable => bail!("the PDF reader could not read the PDF"),
+        Outcome::Missing(package) => bail!("{}", missing(package)),
+        Outcome::NoSandbox => bail!("{NO_SANDBOX}"),
+    };
+    if !jpeg.starts_with(b"\xFF\xD8\xFF") {
+        bail!("the PDF reader did not return a JPEG for page {page}");
+    }
+    Ok(jpeg)
 }
 
 /// Pages of the PDF `bytes` from `first` (counted from 1) as JPEG images,
@@ -400,17 +505,19 @@ async fn page_images(pdf: &Pdf, first: usize) -> Result<(Value, Vec<Attached>)> 
     Ok((v, images))
 }
 
-/// Run `program` on `input` with an empty environment, and return how it
+/// Run `program` on `input` with only `env` set, and return how it
 /// exited and what it printed, at most `MAX_TEXT` bytes, within
 /// `HELPER_LIMIT`. `kill_on_drop` ends it when the call is cut off.
 pub async fn pipe<S: AsRef<std::ffi::OsStr>>(
     program: &std::path::Path,
     args: &[S],
+    env: &[(&str, &str)],
     input: &[u8],
 ) -> Result<(std::process::ExitStatus, Vec<u8>)> {
     let mut child = tokio::process::Command::new(program)
         .args(args)
         .env_clear()
+        .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -856,6 +963,149 @@ pub(crate) mod tests {
         )
         .unwrap();
         out.into_bytes()
+    }
+
+    /// A scan as a scanner makes one: each JPEG a page of its own, drawn
+    /// over the whole page, with no text layer.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn scan_of(jpegs: &[Vec<u8>]) -> Vec<u8> {
+        // The width and height from the JPEG's start-of-frame marker.
+        let size = |j: &[u8]| {
+            let mut i = 2;
+            while !matches!(j[i + 1], 0xC0 | 0xC2) {
+                i += 2 + usize::from(u16::from_be_bytes([j[i + 2], j[i + 3]]));
+            }
+            let at = |n: usize| u16::from_be_bytes([j[i + n], j[i + n + 1]]);
+            (at(7), at(5))
+        };
+        let draw = "q 612 0 0 792 0 0 cm /Im Do Q";
+        let kids: Vec<String> = (0..jpegs.len())
+            .map(|i| format!("{} 0 R", 3 + 3 * i))
+            .collect();
+        let mut objects = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            format!(
+                "<< /Type /Pages /Kids [{}] /Count {} >>",
+                kids.join(" "),
+                jpegs.len()
+            )
+            .into_bytes(),
+        ];
+        for (i, jpeg) in jpegs.iter().enumerate() {
+            let (width, height) = size(jpeg);
+            objects.push(
+                format!(
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+                     /Resources << /XObject << /Im {} 0 R >> >> /Contents {} 0 R >>",
+                    4 + 3 * i,
+                    5 + 3 * i
+                )
+                .into_bytes(),
+            );
+            let mut image = format!(
+                "<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
+                 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream\n",
+                jpeg.len()
+            )
+            .into_bytes();
+            image.extend(jpeg);
+            image.extend(b"\nendstream");
+            objects.push(image);
+            objects.push(
+                format!("<< /Length {} >>\nstream\n{draw}\nendstream", draw.len()).into_bytes(),
+            );
+        }
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend(o);
+            out.extend(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        out
+    }
+
+    /// M4.2 and R22: in aliases mode an image, and a scan's first
+    /// `OCR_PAGES` pages, come back as the text OCR finds, with a note that
+    /// says so; off mode keeps the image, and the scan's pages as images.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn images_and_scans_are_read_by_ocr_in_aliases_mode() {
+        use crate::content::{no_mentions, restricted};
+        let png = fixture("ocr.png");
+        assert!(matches!(
+            content(&png, "a.png").await.unwrap(),
+            Content::Image { mime: "image/png" }
+        ));
+        let image = text(
+            restricted(no_mentions(), content(&png, "a.png"))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            (image.from, image.text.as_str()),
+            (
+                TextFrom::Tesseract,
+                "Scanned invoice 4471\nPaid in full, thank you."
+            )
+        );
+        let note = image.page(None, None).unwrap()["note"].clone();
+        assert_eq!(note, "an image: its text is what OCR found in it");
+
+        let words: Vec<String> = (1..=OCR_PAGES + 1)
+            .map(|n| format!("Scanned page number {n}"))
+            .collect();
+        let words: Vec<&str> = words.iter().map(String::as_str).collect();
+        let printed = Pdf {
+            bytes: pdf_titled("", &words),
+            pages: words.len(),
+        };
+        let mut jpegs = Vec::new();
+        for page in 1..=words.len() {
+            jpegs.push(page_jpeg(&printed, page).await.unwrap());
+        }
+        let scan = scan_of(&jpegs);
+        let unread = text(content(&scan, "s.pdf").await.unwrap());
+        assert_eq!((unread.from, unread.text.trim()), (TextFrom::Pdf, ""));
+        let read = text(
+            restricted(no_mentions(), content(&scan, "s.pdf"))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(read.from, TextFrom::Tesseract);
+        assert_eq!(read.page_starts.len(), OCR_PAGES);
+        assert!(
+            read.text.starts_with("Scanned page number 1\u{C}")
+                && read
+                    .text
+                    .ends_with(&format!("Scanned page number {OCR_PAGES}")),
+            "{:?}",
+            read.text
+        );
+        let (v, images) = restricted(no_mentions(), read.read(None, None, None))
+            .await
+            .unwrap();
+        assert!(images.is_empty());
+        assert_eq!(
+            v["note"],
+            format!(
+                "the PDF has no text layer (a scan): its text is what OCR found in its first {OCR_PAGES} of {} pages",
+                OCR_PAGES + 1
+            )
+        );
     }
 
     /// The page count comes from the text, one form feed per page, not from

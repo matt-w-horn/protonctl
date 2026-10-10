@@ -97,17 +97,20 @@ pub enum LoadError {
     SelfTest(String),
 }
 
+/// How `doctor` says to install the files, as `scripts/install.sh` does.
+const INSTALL: &str = "run scripts/install-model.sh --from DIR, or --url BASE, from protonctl's source folder (see README, Install the name model)";
+
 impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotInstalled(dir) => write!(
                 f,
-                "the name model is not installed: {} must hold otter.onnx and tokenizer.json",
+                "the name model is not installed: {} must hold otter.onnx and tokenizer.json; {INSTALL}",
                 dir.display()
             ),
             Self::Hash(path) => write!(
                 f,
-                "the name model is not installed: {} does not match its pinned SHA-256",
+                "the name model is not installed: {} does not match its pinned SHA-256; {INSTALL}",
                 path.display()
             ),
             Self::Broken(e) => write!(f, "the name model does not load: {e:#}"),
@@ -698,7 +701,8 @@ pub mod tests {
     }
 
     /// The pinned hashes are checked: a folder with the wrong bytes or a
-    /// missing file refuses to load, naming the folder.
+    /// missing file refuses to load, naming the folder and the install
+    /// script.
     #[test]
     fn a_missing_or_altered_file_refuses_to_load() {
         let dir = tempfile::tempdir().unwrap();
@@ -708,6 +712,7 @@ pub mod tests {
             "{e:?}"
         );
         assert!(e.to_string().contains("not installed"), "{e}");
+        assert!(e.to_string().contains("install-model.sh"), "{e}");
         std::fs::write(dir.path().join("otter.onnx"), b"not the model").unwrap();
         std::fs::write(dir.path().join("tokenizer.json"), b"{}").unwrap();
         let e = Model::load_from(dir.path()).unwrap_err();
@@ -716,6 +721,7 @@ pub mod tests {
             "{e:?}"
         );
         assert!(e.to_string().contains("SHA-256"), "{e}");
+        assert!(e.to_string().contains("install-model.sh"), "{e}");
     }
 
     /// Q23: the runtime gives `PyTorch`'s logits for the exported case, and

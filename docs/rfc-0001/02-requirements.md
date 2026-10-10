@@ -31,8 +31,8 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   Keychain or, on Linux, the Secret Service (Q31), and never logged or
   returned. In memory each is a `secrecy`
   secret type (`SecretString` for the password and the links): its `Debug`
-  output is redacted (a test holds this), and its README says it is wiped
-  on drop (not tested; [#12](https://github.com/matt-w-horn/protonctl/issues/12)). Copies
+  output is redacted (a test holds this), and it is wiped on drop (on
+  Linux a test reads the freed memory; [#12](https://github.com/matt-w-horn/protonctl/issues/12)). Copies
   made inside the Security framework, the `secret-service` crate and its
   D-Bus session, async-imap, rustls and curl's stdin pipe are beyond its
   reach.
@@ -234,16 +234,17 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   `/usr/bin/osascript`, and `/usr/bin/textutil`: each runs behind
   `protonctl convert`, under `sandbox-exec` with a deny-default profile,
   with an empty environment, a 60 s limit and a 32 MiB cap on output.
-  Vision comes with M4.2. On Linux, poppler and pandoc run behind the same
-  command, under Landlock and seccomp (Q34).
+  Vision comes with M4.2. On Linux, poppler, pandoc and Tesseract run
+  behind the same command, under Landlock and seccomp (Q34).
   Bytes go in on stdin and UTF-8 text comes out on stdout. The parent
   process tokenizes the text (R13).
 - R22. In aliases mode, from Phase 2, results MUST NOT contain image
   content, page images or file bytes in any encoding, `reveal_*` results
   included (Q42). Until Phase 4, an
   image or a scan returns its metadata and `"text": null` with the reason;
-  from Phase 4 it returns the text Vision finds in it. Off mode keeps page
-  images, image content and `inline` bytes as built.
+  from Phase 4 it returns the text OCR finds in it: Vision on macOS, not
+  yet built, and Tesseract on Linux (built 2026-10-10, M4.2). Off mode
+  keeps page images, image content and `inline` bytes as built.
 - R23. In aliases mode, from Phase 2, a result MUST carry a short
   `guidance` line when its query named a person or an organization in
   plaintext, and when the result was cut short or paged; otherwise it

@@ -6,9 +6,9 @@
 //! other process. The document goes in on stdin; the text or image comes
 //! back on stdout. On macOS the readers are PDFKit, through a fixed script
 //! in `osascript`, and `textutil`, under a `sandbox-exec` profile; on
-//! Linux, poppler's `pdftotext` and `pdftoppm`, and pandoc, under Landlock
-//! and seccomp. Both print a PDF's text with a form feed after each page,
-//! and one page as a JPEG.
+//! Linux, poppler's `pdftotext` and `pdftoppm`, pandoc, and Tesseract for
+//! the text in an image, under Landlock and seccomp. Both print a PDF's
+//! text with a form feed after each page, and one page as a JPEG.
 
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
@@ -62,6 +62,10 @@ pub enum Job {
         #[arg(long, value_enum)]
         format: Format,
     },
+    /// The text in a PNG, JPEG, GIF or WebP image, by OCR (M4.2). Linux
+    /// only: Vision on macOS is not built.
+    #[cfg(target_os = "linux")]
+    Ocr,
 }
 
 /// A document format the readers take. `textutil` reads the old binary
@@ -97,6 +101,11 @@ const PDFTOPPM: Reader = Reader {
 const PANDOC: Reader = Reader {
     path: "/usr/bin/pandoc",
     package: "pandoc",
+};
+#[cfg(target_os = "linux")]
+const TESSERACT: Reader = Reader {
+    path: "/usr/bin/tesseract",
+    package: "tesseract-ocr",
 };
 #[cfg(target_os = "macos")]
 const OSASCRIPT: Reader = Reader {
@@ -201,6 +210,9 @@ impl Job {
                 ];
                 (PANDOC, strings(&a))
             }
+            // Its own language data, English only, since no other is
+            // named with `-l`; `stdin` and `stdout` are its words for them.
+            Self::Ocr => (TESSERACT, strings(&["stdin", "stdout"])),
         })
     }
 
@@ -238,6 +250,19 @@ impl Job {
         })
     }
 
+    /// The reader's environment, which is otherwise empty. Tesseract runs
+    /// one thread: with OpenMP's default of one per core, eight runs at once
+    /// took 147 s here, where one took 0.3 s; with one thread each, eight
+    /// took 0.7 s (4 cores, 2026-10-10). Calls run at once, and beside the
+    /// name model's threads.
+    fn env(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            #[cfg(target_os = "linux")]
+            Self::Ocr => &[("OMP_THREAD_LIMIT", "1")],
+            _ => &[],
+        }
+    }
+
     /// This job as `protonctl` arguments.
     fn argv(self) -> Vec<String> {
         let mut argv = vec!["convert".to_string()];
@@ -255,6 +280,8 @@ impl Job {
                 let format: &str = format.into();
                 argv.extend(["document".into(), "--format".into(), format.into()]);
             }
+            #[cfg(target_os = "linux")]
+            Self::Ocr => argv.push("ocr".into()),
         }
         argv
     }
@@ -270,6 +297,7 @@ pub fn run(job: Job) -> Result<()> {
     let err = crate::platform::confine(program)?
         .args(args)
         .env_clear()
+        .envs(job.env().iter().copied())
         .exec();
     bail!("cannot run {program}: {err}")
 }
@@ -313,9 +341,9 @@ pub async fn read(job: Job, input: &[u8]) -> Result<Outcome> {
         return Ok(Outcome::Missing(reader.package));
     }
     let (status, out) = if cfg!(test) {
-        pipe(Path::new(reader.path), &args, input).await?
+        pipe(Path::new(reader.path), &args, job.env(), input).await?
     } else {
-        pipe(&own_program()?, &job.argv(), input).await?
+        pipe(&own_program()?, &job.argv(), &[], input).await?
     };
     if status.success() {
         Ok(Outcome::Read(out))
@@ -327,9 +355,11 @@ pub async fn read(job: Job, input: &[u8]) -> Result<Outcome> {
 }
 
 /// Small documents for `doctor` to read: the two-page PDF the tests use,
-/// and a one-word RTF.
+/// a one-word RTF, and on Linux the tests' image of two lines of text.
 const SAMPLE_PDF: &[u8] = include_bytes!("../tests/fixtures/two-pages.pdf");
 const SAMPLE_RTF: &[u8] = b"{\\rtf1 protonctl}";
+#[cfg(target_os = "linux")]
+const SAMPLE_IMAGE: &[u8] = include_bytes!("../tests/fixtures/ocr.png");
 
 /// For `protonctl doctor`: the sandbox can be entered, and each installed
 /// reader reads a sample inside it, as a call would; a failure quotes the
@@ -345,6 +375,8 @@ pub async fn check() -> Result<String> {
             },
             SAMPLE_RTF,
         ),
+        #[cfg(target_os = "linux")]
+        (Job::Ocr, SAMPLE_IMAGE),
     ];
     let program = own_program()?;
     let (mut read, mut missing, mut failed) = (Vec::new(), Vec::new(), Vec::new());
@@ -428,6 +460,8 @@ mod tests {
             Job::Document {
                 format: Format::Rtf,
             },
+            #[cfg(target_os = "linux")]
+            Job::Ocr,
         ] {
             let argv = job.argv();
             // The test's own name in place of `protonctl convert`.

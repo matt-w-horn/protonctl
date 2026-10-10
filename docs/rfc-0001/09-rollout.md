@@ -50,11 +50,11 @@ flowchart TB
 | 1b | The maintainer writes the policy table: a class for each write tool, and what the server does with each class; Mail and Drive write tools; sandbox write tests | withdrawn 2026-10-04: protonctl is read-only (Q5) |
 | 2 | The privacy setting (R26) and `setup drive`; then aliases mode: the privacy pipeline for all three services at once, at `reply()`, over results, errors and page tokens, failing closed: privacy key, aliases, references, handles, sealed page tokens, keyed digests, the `entities` table, `detectors` and `guidance`; regex with validators and the name dictionary; `download_file`, `export_drive_manifest`, the CLI's `drive manifest`, the `export` and `inline` options, the export and download folders, page images, image content and inline bytes absent in aliases mode and kept in off mode; a panic hook in both modes (R25); the leak test and the `live-check.py` checks. The CLI may be tokenized here too, ahead of Phase 3, since in Phase 2 it is the easy way around the pipeline in Claude Code | built and tested on Linux 2026-10-04; on a Mac the same day, M2.8 (cloud-only reads), the setup commands, signing (Q12) and the aliases-mode live run passed, and the off-mode live run passed (M1.2); the role-play on real results and the other Mac checks have not run ([#16](https://github.com/matt-w-horn/protonctl/issues/16), [#17](https://github.com/matt-w-horn/protonctl/issues/17), [#18](https://github.com/matt-w-horn/protonctl/issues/18), [#19](https://github.com/matt-w-horn/protonctl/issues/19) and [#20](https://github.com/matt-w-horn/protonctl/issues/20)); the defects below are open; the CLI is not tokenized |
 | 3 | In aliases mode, the `reveal_*` tools, and the CLI tokenized with `--raw` and `--out` behind user presence; Claude Code sandbox settings documented (Q17) | to do; answer Q15 first. The sandbox settings are documented (M3.4, 2026-10-07) |
-| 4 | PDFKit and `textutil` under a sandbox profile, directly or behind `protonctl convert`, in both modes; Vision OCR for images and scans in aliases mode; on Linux, poppler and pandoc in `protonctl convert` (MP4) and Tesseract for OCR | M4.1 built 2026-10-07 (Q13): PDFKit and `textutil` behind `protonctl convert` under `sandbox-exec`, in both modes. On Linux the readers were built 2026-10-05, ahead of this phase (MP4). OCR (M4.2) is to do on both systems |
+| 4 | PDFKit and `textutil` under a sandbox profile, directly or behind `protonctl convert`, in both modes; Vision OCR for images and scans in aliases mode; on Linux, poppler and pandoc in `protonctl convert` (MP4) and Tesseract for OCR | M4.1 built 2026-10-07 (Q13): PDFKit and `textutil` behind `protonctl convert` under `sandbox-exec`, in both modes. On Linux the readers were built 2026-10-05, ahead of this phase (MP4). OCR (M4.2) built on Linux 2026-10-10 with Tesseract; Vision on macOS is to do |
 | 5 | One model finds names in free text: Otter (multilingual, Q23) through `tract`, as configuration (files pinned by SHA-256, labels, threshold); recall measured per entity type and language on a labeled synthetic corpus; the dictionary's name rules stay until that evaluation shows one redundant | built 2026-10-08 (M5.2; [#60](https://github.com/matt-w-horn/protonctl/issues/60)), before Phases 3 and 4 (Q40): recall 0.930 and precision 0.950 on 315 mentions in 28 languages, at a threshold of 0.15; the weights are installed by `scripts/install-model.sh` from a folder or a URL, hash-checked (#55); hosting the URL is open |
 | 6 | Summary and question views from a local model, written with aliases; finer domain types and titles from signatures as hints | to do; Q38, open, names the runtime |
 | 7 | A Linux VM helper for the riskiest formats; an optional allowlist of names kept in plaintext. Privacy Filter as a second check was dropped on 2026-10-05 (Q39) | to do |
-| P0 to P5 | Linux ([section 11](11-platforms.md)): P1 builds and tests on Linux before Phase 2; P2 Mail and Calendar; P3 Drive; P4 converters with Phase 4; P5 presence with Phase 3 | P0 and P1 done 2026-10-04, with Q30 to Q35 decided; P2 to P4 built 2026-10-05, without OCR, and the live checks of P2 and P3 have not run ([#27](https://github.com/matt-w-horn/protonctl/issues/27) and [#28](https://github.com/matt-w-horn/protonctl/issues/28)); P5 to do |
+| P0 to P5 | Linux ([section 11](11-platforms.md)): P1 builds and tests on Linux before Phase 2; P2 Mail and Calendar; P3 Drive; P4 converters with Phase 4; P5 presence with Phase 3 | P0 and P1 done 2026-10-04, with Q30 to Q35 decided; P2 to P4 built 2026-10-05, and OCR 2026-10-10, and the live checks of P2 and P3 have not run ([#27](https://github.com/matt-w-horn/protonctl/issues/27) and [#28](https://github.com/matt-w-horn/protonctl/issues/28)); P5 to do |
 
 ## Milestones
 
@@ -357,7 +357,20 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
   and `tests/convert.rs` pass, and fail with writes, the network, Mach
   services or new processes allowed. No memory limit on macOS yet.
 - M4.2 Vision OCR for images and scans, replacing `"text": null` (R22).
-  Exit: a synthetic page's words come back.
+  Exit: a synthetic page's words come back. Built on Linux 2026-10-10
+  with Tesseract ([#34](https://github.com/matt-w-horn/protonctl/issues/34)):
+  in aliases mode `protonctl convert ocr` reads an image, and each of a
+  scan's first 10 pages once `pdftoppm` renders it, under the readers'
+  Landlock and seccomp sandbox; the text comes back as a document's, in
+  `content`, with `textFrom` `"tesseract (OCR)"` and a note, and the
+  pipeline tokenizes it as any text. Off mode keeps images and page
+  images. Tesseract runs one thread (`OMP_THREAD_LIMIT=1`): with
+  OpenMP's default, eight runs at once took 147 s on 4 cores, and with
+  one thread 0.7 s. The exit, `images_and_scans_are_read_by_ocr_in_aliases_mode`
+  in `src/extract.rs`, and `no_tool_returns_images_or_file_bytes_in_aliases_mode`,
+  whose image and scan now hold planted names and numbers that
+  `no_planted_value_leaves_any_tool` finds as aliases, each failed with
+  OCR turned off. Vision on macOS is to do.
 
 ### Phase 5: names in free text
 
@@ -376,8 +389,8 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
   fetches nothing; it reports whether the files are in place. Open, for the
   maintainer: where the weights are hosted, which fills in the README's
   `MODEL_URL`; and whether int8 or float16 weights keep the evaluation's
-  recall, not measured. Also open: `doctor` names the model folder but not
-  the install command, because that message is `LoadError` in `model.rs`.
+  recall, not measured. Since 2026-10-10 `doctor` names the install
+  command beside the model folder, through `LoadError` in `model.rs`.
 - M5.2 The model detector, for names in no header: people,
   organizations, projects, products and locations, the labels Q23
   measured, and street addresses only if Phase 5 adds a label for them
@@ -485,7 +498,7 @@ D8 are [#1](https://github.com/matt-w-horn/protonctl/issues/1) to [#7](https://g
   ([section 11](11-platforms.md#the-document-readers-as-built-p4)):
   poppler and pandoc in `protonctl convert` under Landlock and seccomp. The
   sandbox test passes, and fails without the seccomp filter or with all of
-  `/etc` readable. OCR (Tesseract) waits for Phase 4's M4.2.
+  `/etc` readable. OCR (Tesseract) built 2026-10-10 with M4.2.
 - MP5 User presence on Linux (Q35), with Phase 3, or no `reveal_*` there.
   Exit: the user-presence tests, or the surface snapshot without
   `reveal_*` on Linux.

@@ -30,7 +30,7 @@ flowchart LR
         CLI["proton-drive CLI:<br/>signature-checked,<br/>one call at a time"]
         DF["Drive app folder:<br/>read-only, optional"]
         CURL["/usr/bin/curl:<br/>link on stdin"]
-        CONV["document readers, bytes in, text out,<br/>each sandboxed:<br/>macOS: PDFKit, textutil;<br/>Linux: poppler, pandoc"]
+        CONV["document readers, bytes in, text out,<br/>each sandboxed:<br/>macOS: PDFKit, textutil;<br/>Linux: poppler, pandoc, Tesseract"]
     end
     CC -->|"stdio MCP"| S
     CD -->|"stdio MCP"| S
@@ -212,7 +212,7 @@ and result fields.
 |---|---|---|---|
 | `get_status` | read | all | built |
 | `list_calendars`, `list_events`, `search_events`, `get_event` | read | ICS link | built; tokenized in aliases mode (Phase 2) |
-| `search_files`, `list_folder`, `get_file_metadata`, `read_file_content` | read | folder, else CLI | built; files not on this Mac come through the CLI; without the app's folder, list and stat do too and search is off; `read_file_content` returns text a page at a time, PDF and document text through `protonctl convert`'s sandbox: PDFKit and `textutil` on macOS (Q13), poppler and pandoc on Linux ([section 11](11-platforms.md#the-document-readers-as-built-p4)), a PDF's pages (a scan's unasked) as images, and images as image content. In aliases mode, Phase 2 tokenizes them, takes `fileId` handles in place of paths, and drops page images and image content (R22), and Phase 4 turns images and scans into OCR text; off mode keeps them as built |
+| `search_files`, `list_folder`, `get_file_metadata`, `read_file_content` | read | folder, else CLI | built; files not on this Mac come through the CLI; without the app's folder, list and stat do too and search is off; `read_file_content` returns text a page at a time, PDF and document text through `protonctl convert`'s sandbox: PDFKit and `textutil` on macOS (Q13), poppler and pandoc on Linux ([section 11](11-platforms.md#the-document-readers-as-built-p4)), a PDF's pages (a scan's unasked) as images, and images as image content. In aliases mode, Phase 2 tokenizes them, takes `fileId` handles in place of paths, and drops page images and image content (R22), and Phase 4 turns images and scans into OCR text (on Linux, Tesseract's, built 2026-10-10); off mode keeps them as built |
 | `list_drive_tree` | read | folder, CLI for SHA-1 | built; a page of rows at a time, by a cursor that names the folder in progress; keyed digests in aliases mode (Phase 2) |
 | `download_file` | read | CLI | built; `export: true` saves into the export folder, `inline: true` returns the bytes as an embedded resource; off mode only from Phase 2 (R10, R22) |
 | `export_drive_manifest` | local write | folder, CLI for SHA-1 | built; writes into the export folder only; off mode only from Phase 2 (R10) |

@@ -252,7 +252,8 @@
   - Q34: external tools (`pdftotext` and `pdftoppm` from poppler-utils,
     pandoc, and Tesseract for OCR) inside `protonctl convert`, under
     Landlock and a seccomp filter. When a tool is missing, the result
-    names the package to install. Built 2026-10-05 without OCR
+    names the package to install. Built 2026-10-05 without OCR, and OCR
+    with Tesseract on 2026-10-10 (M4.2)
     ([section 11](11-platforms.md#the-document-readers-as-built-p4)).
   - Q35: polkit (`pkcheck --allow-user-interaction`) where an
     authentication agent runs, as in a desktop session; elsewhere Linux
