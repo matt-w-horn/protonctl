@@ -1,0 +1,14 @@
+#!/bin/sh
+# Start the protonctl that scripts/install.sh put in ~/.cargo/bin, as the
+# plugin's MCP server (RFC-0001 Q36). The path is fixed, with
+# no PATH search, as protonctl runs /usr/bin/curl by its full path: a desktop
+# app's PATH may lack ~/.cargo/bin, and a search could find another program.
+# stdout carries MCP frames, so this script writes only to stderr.
+set -eu
+
+bin="$HOME/.cargo/bin/protonctl"
+if [ ! -f "$bin" ] || [ ! -x "$bin" ]; then
+    echo "serve: protonctl is not installed at $bin; clone https://github.com/matt-w-horn/protonctl at a release tag and run scripts/install.sh" >&2
+    exit 1
+fi
+exec "$bin" serve
