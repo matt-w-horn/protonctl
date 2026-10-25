@@ -1,0 +1,23 @@
+# Dependabot version updates: the Cargo dependencies and the actions used in
+# .github/workflows. Each ecosystem's updates arrive as one grouped pull
+# request, so the owner merges at most one Cargo pull request a week and one
+# actions pull request a month (.github/workflows/dependabot.yml reviews a
+# Dependabot pull request but never merges it). cargo-deny in scripts/check.sh
+# still fails the gate on an advisory in between.
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      cargo:
+        patterns: ["*"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      actions:
+        patterns: ["*"]
