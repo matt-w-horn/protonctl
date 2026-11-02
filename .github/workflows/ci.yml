@@ -19,6 +19,9 @@ jobs:
   check:
     name: check
     runs-on: ubuntu-latest
+    # A run takes about two minutes; a hung test fails here with a log
+    # instead of holding the required check for GitHub's six-hour default.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       # The document readers' tests, and the Secret Service tests.
