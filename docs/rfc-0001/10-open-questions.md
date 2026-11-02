@@ -251,8 +251,11 @@ still point somewhere. Their full text, as decided, is no longer kept.
     prompt. Neither this nor a Developer ID package covers the
     data-protection keychain.
   - Releases: the directory tracks a `release` branch, fast-forwarded to a
-    tagged commit on `main` for each release. No release is tagged yet
-    ([section 9](09-rollout.md#what-remains)).
+    tagged commit on `main` for each release. The first release is
+    `v0.1.0`. A repository ruleset, like `main`'s, refuses the branch's
+    deletion, force pushes, and any commit without passing `check` and
+    `gitleaks`, so only a commit that passed on `main` reaches the
+    directory.
 - Q37, decided by the maintainer: the Drive CLI's lock file stays at
   `cli.lock` in the cache folder (`~/Library/Caches/protonctl`, or
   `~/.cache/protonctl` on Linux). It must be one path that every

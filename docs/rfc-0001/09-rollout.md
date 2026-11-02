@@ -13,12 +13,11 @@ is tracked apart. Writes and new services are [RFC-0002](../rfc-0002.md)'s.
 | 2 | D8's live check: a folder made online-only in the Drive app, listed through the CLI. When it was tried, the only online-only folder was the File Provider's own `.Trash`, so the check did not count | the maintainer makes a folder online-only |
 | 3 | The Mac checks that still apply: a backslash inside a Drive name (L6), then `logout` last | the maintainer, at the Mac |
 | 4 | A memory limit for the macOS readers, which have none (Q13); Linux has one | code |
-| 5 | The first release: a tag and the `release` branch Q36 names. The README tells users to install from a tag, and none exists | the maintainer, since a tag publishes |
-| 6 | Drive CLI 0.9.0: widen `SUPPORTED` after the Drive tests and the live check pass on it | the maintainer's CLI update, then code |
-| 7 | The prompt-injection drill (T12). Optional while protonctl only reads; required before any write (RFC-0002, R33) | a few Claude runs |
-| 8 | The [security assessment](../security-assessment.md)'s open items: build and test its fixes on Linux, which were made and checked on macOS only; move calendar expansion off the async thread | code |
-| 9 | RFC-0002's decisions, Q44 to Q51 | the maintainer |
-| 10 | Decode Bridge's modified UTF-7 mailbox names, so a non-ASCII label shows as written ([Appendix A](appendix-a-phase-0.md)) | code |
+| 5 | Drive CLI 0.9.0: widen `SUPPORTED` after the Drive tests and the live check pass on it | the maintainer's CLI update, then code |
+| 6 | The prompt-injection drill (T12). Optional while protonctl only reads; required before any write (RFC-0002, R33) | a few Claude runs |
+| 7 | The [security assessment](../security-assessment.md)'s open items: build and test its fixes on Linux, which were made and checked on macOS only; move calendar expansion off the async thread | code |
+| 8 | RFC-0002's decisions, Q44 to Q51 | the maintainer |
+| 9 | Decode Bridge's modified UTF-7 mailbox names, so a non-ASCII label shows as written ([Appendix A](appendix-a-phase-0.md)) | code |
 
 ## Phases
 
