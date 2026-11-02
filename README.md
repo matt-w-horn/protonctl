@@ -162,8 +162,7 @@ launcher's error message names `scripts/install.sh`.
    or from the marketplace `matt-w-horn/protonctl`.
 3. Install protonctl from a clone at a release tag. Replace `TAG` with the
    newest tag on the repository's
-   [tags page](https://github.com/matt-w-horn/protonctl/tags). No release
-   is tagged yet; until one is, leave out `--branch TAG` to build `main`:
+   [tags page](https://github.com/matt-w-horn/protonctl/tags):
 
    ```sh
    git clone --branch TAG https://github.com/matt-w-horn/protonctl.git
