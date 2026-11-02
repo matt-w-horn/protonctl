@@ -1,7 +1,7 @@
 {
   "name": "protonctl",
   "displayName": "protonctl",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A local, read-only MCP server for Proton Mail, Proton Calendar and Proton Drive, reading through Proton's own apps on your Mac. Unofficial: not affiliated with, endorsed or sponsored by Proton AG.",
   "author": {
     "name": "Matt Horn",
