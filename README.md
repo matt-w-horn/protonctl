@@ -502,7 +502,7 @@ would upload to Proton) and outside `~/Library/Caches/protonctl`. Pick one no
 sync service mirrors, unless you want that, and connect it to Cowork to give
 agents there the files.
 
-## Privacy
+## Privacy Policy
 
 protonctl sends nothing to its developer, and the developer runs no server
 for it. [PRIVACY.md](PRIVACY.md) says what protonctl reads, where its
