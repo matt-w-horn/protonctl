@@ -18,6 +18,7 @@ is tracked apart. Writes and new services are [RFC-0002](../rfc-0002.md)'s.
 | 7 | The [security assessment](../security-assessment.md)'s open items: build and test its fixes on Linux, which were made and checked on macOS only; move calendar expansion off the async thread | code |
 | 8 | RFC-0002's decisions, Q44 to Q51 | the maintainer |
 | 9 | Decode Bridge's modified UTF-7 mailbox names, so a non-ASCII label shows as written ([Appendix A](appendix-a-phase-0.md)) | code |
+| 10 | mail-parser 1.0, deferred by the maintainer until its 1.0.x patch releases: a rewrite that adds `unsafe` code on the untrusted-mail path and changes what protonctl returns. Inline images leave the attachment list, so `get_attachment` indexes shift; `text_bodies()` yields text, not parts, and still compiles; encoded-word spacing changes; `parse()` refuses input with no header. The port needs a fixture for each, first seen to change a snapshot, then a `live-check.py` run | code, then the maintainer's live check |
 
 ## Phases
 
