@@ -2,7 +2,7 @@
 
 # 7. Testing
 
-Built (on macOS, `cargo test` lists 191 tests: 176 unit tests and 15
+Built (on macOS, `cargo test` lists 192 tests: 177 unit tests and 15
 against the built binary, of which 4 are ignored by default: one lists
 Drive through the real CLI, one checks the real CLI's Developer ID
 signature, one reaches Dovecot, and one runs as the child of another
@@ -241,6 +241,15 @@ The tests:
   Trash and Spam pass returning no IDs. A `label:` search leaves out a
   labelled message that is also in Trash, as the tool description says
   (shown to fail when only All Mail searches left Trash and Spam out).
+  - `estimatedTotal` follows the filters each tool can see: `count_messages`
+    gives the exact count after the Trash, Spam and attachment tests;
+    `search_threads` gives null with `has:attachment`, which only a fetched
+    summary can test, and takes Trash and Spam matches off All Mail's total
+    only, since Starred or a label need not hold them. Shown to fail three
+    ways with the one expression both tools used, the mailbox search's hits
+    less every Trash and Spam match: 4 for the one message with an
+    attachment (298 beside one row, live), and 0 for the one starred message
+    (4 for 19, live).
 - Mail search and reading: the Gmail-style subset translated to IMAP SEARCH
   (operators, dates, negation, OR, IMAP quoting, UTF-8 terms); an OR beside
   `in:`, `label:` or `has:` refused rather than joined to an earlier term;

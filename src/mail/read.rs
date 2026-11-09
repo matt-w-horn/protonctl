@@ -682,6 +682,22 @@ impl Scope {
     }
 }
 
+/// A guide to a search result's size, from the mailbox search alone: its
+/// `hits`, less the Trash and Spam matches for All Mail, which holds a copy
+/// of every one (Starred or a label holds only some, so they stay in); and
+/// nothing with has:attachment, which only a fetched summary can test.
+/// `count_messages` reads every summary and counts exactly.
+fn estimated_total(hits: usize, scope: &Scope, query: &Query) -> Option<usize> {
+    if query.attachment.is_some() {
+        return None;
+    }
+    Some(if query.mailbox == Mailbox::All {
+        hits.saturating_sub(scope.excluded.len())
+    } else {
+        hits
+    })
+}
+
 /// One header's value from a fetched header block.
 fn header(block: &[u8], name: &str) -> Option<String> {
     let parsed = MessageParser::default().parse_headers(block)?;
@@ -887,10 +903,7 @@ impl Mail {
         Ok(json!({
             "messages": page.rows(),
             "nextPageToken": next,
-            // Trash and Spam copies are matched by ID, and the searched
-            // mailbox can hold them too; has:attachment is tested later, row
-            // by row.
-            "estimatedTotal": dated.len().saturating_sub(scope.excluded.len()),
+            "estimatedTotal": estimated_total(dated.len(), &scope, query),
             "searched": scope.mailbox,
             "trashAndSpam": scope.trash_and_spam(),
             "provenance": PROVENANCE,
@@ -945,7 +958,10 @@ impl Mail {
             };
             let mut out = json!({
                 "messages": messages,
-                "estimatedTotal": dated.len().saturating_sub(scope.excluded.len()),
+                // Every summary was read, so this is exact: the matching
+                // messages after the Trash, Spam and attachment tests, before
+                // copies merge into `messages`.
+                "estimatedTotal": rows.len(),
                 "searched": scope.mailbox,
                 "trashAndSpam": scope.trash_and_spam(),
                 "provenance": COUNT_PROVENANCE,
@@ -2742,6 +2758,49 @@ pub(crate) mod tests {
         };
         let found = mail.search_threads(&req).await.unwrap();
         assert_eq!(found["messages"], json!([]), "{found}");
+    }
+
+    /// `estimatedTotal` follows the filters each tool can see. `count_messages`
+    /// reads every summary, so its total is exact after the Trash, Spam and
+    /// attachment tests. `search_threads` has the mailbox search alone: null
+    /// with has:attachment, which only a fetched summary can test (298 was
+    /// shown for one matching row, live); and Trash and Spam matches come
+    /// off All Mail's total only, since Starred or a label need not hold
+    /// them (Starred showed 4 for 19 starred messages, live).
+    #[tokio::test]
+    async fn estimated_total_follows_the_filters_each_tool_can_see() {
+        let (mail, _) = scripted(bridge_boxes(), bridge_messages()).await;
+        let count = CountMessagesReq {
+            query: "has:attachment".into(),
+            ..Default::default()
+        };
+        let counted = mail.count_messages(&count).await.unwrap();
+        assert_eq!(
+            (
+                counted["estimatedTotal"].clone(),
+                counted["messages"].clone()
+            ),
+            (json!(1), json!(1)),
+            "{counted}"
+        );
+        let search = |query: &str| SearchThreadsReq {
+            query: query.into(),
+            ..Default::default()
+        };
+        let attached = mail
+            .search_threads(&search("has:attachment"))
+            .await
+            .unwrap();
+        assert!(attached["estimatedTotal"].is_null(), "{attached}");
+        // Starred holds D alone; T matches the same criteria from Trash but
+        // is not starred, so it must not come off the total.
+        let starred = mail.search_threads(&search("in:starred")).await.unwrap();
+        assert_eq!(starred["estimatedTotal"], json!(1), "{starred}");
+        assert_eq!(
+            starred["messages"].as_array().unwrap().len(),
+            1,
+            "{starred}"
+        );
     }
 
     /// Every IMAP operation, on one `Mail`, against the scripted Bridge. The
