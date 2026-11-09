@@ -63,6 +63,13 @@ proptest = { version = "1.11", default-features = false, features = ["std"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
 tokio = { version = "1", features = ["test-util"] }
 
+[patch.crates-io]
+# Upstream main at the commit that replaced pin-utils, archived 2026-10-01,
+# with pin-project (RUSTSEC-2026-0441; chatmail/async-imap#155, merged
+# 2026-11-05), which no release past 0.12.0 carries yet. Drop this entry and
+# deny.toml's allow-git together when one does.
+async-imap = { git = "https://github.com/chatmail/async-imap", rev = "d1f2606421c9211f992c1c565a32d8f770476aeb" }
+
 [profile.release]
 # The installed binary is a release build; overflow panics there instead of
 # wrapping silently, as it already does in debug builds and tests.
