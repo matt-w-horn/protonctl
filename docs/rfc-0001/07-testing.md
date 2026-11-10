@@ -264,6 +264,18 @@ The tests:
     less every Trash and Spam match: 4 for the one message with an
     attachment (298 beside one row, live), and 0 for the one starred message
     (4 for 19, live).
+  - A stalled exchange fails its test. The scripted Bridge (`fake_imap`,
+    which every test on it goes through) gives its client 120 s at each
+    step, waiting for a command or writing an answer, then panics naming
+    the step and the last command it was sent; that closes the connection,
+    so the call waiting on it fails too. Shown by planting the stall that
+    once held `an_attachment_over_64_mib_is_saved_not_read` for a day: the
+    flush after each answer taken out, and rustls's buffer limit lifted so
+    that the end of the 64 MiB answer stays unsent every time (it did in 2
+    of 35 runs without that). The test failed after 121 s with "the
+    scripted Bridge stalled: 120s waiting for a command; the last command
+    it was sent was `UID FETCH 14 (UID FLAGS INTERNALDATE BODY.PEEK[])`",
+    where it had waited until it was killed.
 - Mail search and reading: the Gmail-style subset translated to IMAP SEARCH
   (operators, dates, negation, OR, IMAP quoting, UTF-8 terms); an OR beside
   `in:`, `label:` or `has:` refused rather than joined to an earlier term;

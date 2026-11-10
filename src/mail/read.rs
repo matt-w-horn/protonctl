@@ -2620,6 +2620,29 @@ pub(crate) mod tests {
         }
     }
 
+    /// How long the scripted Bridge lets one step wait on its client; the
+    /// slowest of its tests takes a few seconds in all.
+    const STALL: std::time::Duration = std::time::Duration::from_secs(120);
+
+    /// `step`, which waits for the scripted Bridge's client to send or to
+    /// read, or a panic once it has taken `STALL`. The panic closes the
+    /// connection, so the call waiting on the Bridge fails and its test
+    /// with it, where the two would otherwise wait on each other for good.
+    async fn unstalled<T>(
+        step: impl Future<Output = T>,
+        doing: &str,
+        sent: &std::sync::Mutex<Vec<String>>,
+    ) -> T {
+        tokio::time::timeout(STALL, step).await.unwrap_or_else(|_| {
+            let last = sent.lock().unwrap().last().cloned();
+            let last = last.as_deref().unwrap_or("none");
+            panic!(
+                "the scripted Bridge stalled: {STALL:?} {doing}; the last command it was \
+                 sent was `{last}`"
+            )
+        })
+    }
+
     /// A scripted Bridge serving `boxes` over one TLS session, and the
     /// commands it was sent, without their tags.
     pub(crate) async fn fake_imap(
@@ -2640,16 +2663,23 @@ pub(crate) mod tests {
             let greeting = b"* OK [CAPABILITY IMAP4rev1] Proton Mail Bridge ready\r\n";
             io.get_mut().write_all(greeting).await.unwrap();
             let (mut examined, mut line) = (None, String::new());
-            while io.read_line(&mut line).await.unwrap_or(0) > 0 {
+            while unstalled(io.read_line(&mut line), "waiting for a command", &log)
+                .await
+                .unwrap_or(0)
+                > 0
+            {
                 let (tag, command) = line.trim_end().split_once(' ').unwrap();
                 log.lock().unwrap().push(sorted_sets(command));
                 let (untagged, done) = respond(command, &boxes, &messages, &mut examined);
                 let reply = format!("{untagged}{tag} {done}\r\n");
-                io.get_mut().write_all(reply.as_bytes()).await.unwrap();
-                // `write_all` returns once rustls holds the reply. Records
-                // the socket had no room for go out only at a flush, and a
-                // client still waiting for them sends no next command.
-                io.get_mut().flush().await.unwrap();
+                let answer = async {
+                    io.get_mut().write_all(reply.as_bytes()).await?;
+                    // `write_all` returns once rustls holds the reply. Records
+                    // the socket had no room for go out only at a flush, and a
+                    // client still waiting for them sends no next command.
+                    io.get_mut().flush().await
+                };
+                unstalled(answer, "writing its answer", &log).await.unwrap();
                 line.clear();
             }
         });
