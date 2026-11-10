@@ -2646,6 +2646,10 @@ pub(crate) mod tests {
                 let (untagged, done) = respond(command, &boxes, &messages, &mut examined);
                 let reply = format!("{untagged}{tag} {done}\r\n");
                 io.get_mut().write_all(reply.as_bytes()).await.unwrap();
+                // `write_all` returns once rustls holds the reply. Records
+                // the socket had no room for go out only at a flush, and a
+                // client still waiting for them sends no next command.
+                io.get_mut().flush().await.unwrap();
                 line.clear();
             }
         });
