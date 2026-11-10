@@ -76,8 +76,9 @@ protonctl cannot recall a result once it has left.
 | Files that you save with the commands `protonctl drive get` and `protonctl mail attachment` | the folder that `--out` names, or else the current folder | until you delete them |
 | The signing identity that `scripts/install.sh` makes: a certificate named `protonctl`, and its key | the login keychain | until you delete it |
 
-If a server is killed or crashes, its download folder stays until you
-delete it.
+If a server is killed or crashes, its download folder stays until protonctl
+next runs. Any running server removes it within a minute, and so does any
+command except `logout` when it starts.
 
 protonctl keeps no record of the calls it answers. It writes warnings and
 errors to its log (stderr), which the Claude apps keep. That log carries no
