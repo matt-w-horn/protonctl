@@ -138,7 +138,7 @@ impl Server {
         self.call(|| async { Ok(self.app.status()) }).await
     }
 
-    /// List the Proton calendars protonctl can read. Use a calendarId from here with `list_events`, `search_events` or `get_event`.
+    /// List the Proton calendars protonctl can read. `fetchedAt` and `events` (parsed VEVENT components) describe the feed a calendar call fetched in the last 15 minutes, else both are null: this tool fetches nothing. Use a calendarId from here with `list_events`, `search_events` or `get_event`.
     #[tool(annotations(
         title = "List calendars",
         read_only_hint = true,
@@ -147,7 +147,8 @@ impl Server {
         open_world_hint = false
     ))]
     async fn list_calendars(&self) -> Result<CallToolResult, ErrorData> {
-        self.call(|| self.app.calendars.list_calendars()).await
+        self.call(|| async { Ok(self.app.calendars.list_calendars().await) })
+            .await
     }
 
     /// List calendar events in a time window (default: the next 7 days), with recurring events expanded into occurrences. Read-only. Times are RFC 3339 in the requested time zone; all-day events use {"date": ...}.

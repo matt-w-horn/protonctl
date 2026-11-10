@@ -2,7 +2,7 @@
 
 # 7. Testing
 
-Built (on macOS, `cargo test` lists 193 tests: 178 unit tests and 15
+Built (on macOS, `cargo test` lists 194 tests: 179 unit tests and 15
 against the built binary, of which 4 are ignored by default: one lists
 Drive through the real CLI, one checks the real CLI's Developer ID
 signature, one reaches Dovecot, and one runs as the child of another
@@ -46,6 +46,13 @@ The tests:
     minute, as after the Mac slept, is fetched again (shown to fail with
     freshness taken from the `Instant`, as before). A fetch time in the
     future is not fresh (shown to fail with the age's sign dropped).
+  - `list_calendars` fetches nothing: `fetchedAt` and `events` describe the
+    feed a calendar call may still serve, and both are null without one, as
+    for an entry fetched 16 minutes ago whose timer has not fired. A secret
+    store that cannot be read leaves `linkStored` null rather than failing
+    the call. Shown to fail with the cache read without the freshness test,
+    as before (the stale entry's time and count came back), and with
+    `linkStored` false for a store that was not read.
   - HTML in a DESCRIPTION becomes text at parse time, so a search for `href`
     or `br` finds nothing while the link text still matches; plain text with
     a lone `<` comes through unchanged. Shown to fail with the HTML kept, and

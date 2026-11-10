@@ -412,7 +412,7 @@ expression: "surface(&Server::tool_router())"
       "readOnlyHint": true,
       "title": "List calendars"
     },
-    "description": "List the Proton calendars protonctl can read. Use a calendarId from here with `list_events`, `search_events` or `get_event`.",
+    "description": "List the Proton calendars protonctl can read. `fetchedAt` and `events` (parsed VEVENT components) describe the feed a calendar call fetched in the last 15 minutes, else both are null: this tool fetches nothing. Use a calendarId from here with `list_events`, `search_events` or `get_event`.",
     "inputSchema": {
       "properties": {},
       "type": "object"

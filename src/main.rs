@@ -754,7 +754,7 @@ fn main() -> Result<()> {
                 unreachable!("handled before the config is loaded")
             }
             Cmd::Calendar(cmd) => match cmd {
-                CalendarCmd::List => app.calendars.list_calendars().await?,
+                CalendarCmd::List => app.calendars.list_calendars().await,
                 CalendarCmd::Events(r) => app.calendars.list_events(&r).await?,
                 CalendarCmd::Search(r) => app.calendars.search_events(&r).await?,
                 CalendarCmd::Event(r) => app.calendars.get_event(&r).await?,
