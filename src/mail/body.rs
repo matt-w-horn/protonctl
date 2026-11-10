@@ -249,9 +249,14 @@ fn strip_html_quotes(html: &str) -> String {
 /// A message's body as text (HTML converted) and, when `quotes_removed`,
 /// without quoted replies, with the number of non-blank lines that went.
 /// Quotes in HTML-only mail leave no `>` once converted, so they go from
-/// the HTML first.
+/// the HTML first. Either way the text ends at its last visible character,
+/// as `strip_quotes` leaves it, so both paths show one body.
 pub(super) fn readable_body(message: &Message, quotes_removed: bool) -> (String, usize) {
-    let body = message.body_text(0).unwrap_or_default().into_owned();
+    let body = message
+        .body_text(0)
+        .unwrap_or_default()
+        .trim_end()
+        .to_owned();
     if !quotes_removed {
         return (body, 0);
     }

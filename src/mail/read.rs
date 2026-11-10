@@ -1629,6 +1629,14 @@ fn render(f: &Fetch, view: View) -> Result<Rendered> {
     row.insert("bodyTruncated".into(), body["truncated"].clone());
     row.insert("bodyNextOffset".into(), body["nextOffset"].clone());
     row.insert("bodyTotalChars".into(), body["totalChars"].clone());
+    if body["totalChars"] == 0 {
+        // mail-parser's HTML conversion drops `alt` text and leaves a line
+        // break per `<br>` and `</p>`, so an image-only message ends here.
+        row.insert(
+            "bodyNote".into(),
+            json!("the message holds no text; its HTML part may hold only images"),
+        );
+    }
     row.insert("attachments".into(), json!(attachments));
     Ok(Rendered {
         json: Value::Object(row),
@@ -2800,6 +2808,44 @@ pub(crate) mod tests {
             starred["messages"].as_array().unwrap().len(),
             1,
             "{starred}"
+        );
+    }
+
+    /// An HTML-only message holding one image converts to line breaks alone.
+    /// `get_message` showed those as its body (21 newlines, live) where
+    /// `get_thread` showed ""; both now show no body, and a note says why.
+    #[tokio::test]
+    async fn an_image_only_message_reads_as_no_text_in_both_tools() {
+        let head = "Message-Id: <img@x.test>\r\nFrom: Carl <carl@y.test>\r\nTo: me@x.test\r\n\
+                    Subject: Pictures\r\nContent-Type: text/html\r\n";
+        let html = "<p><img src=\"cid:x\"></p><br><br>\r\n";
+        let mut messages = bridge_messages();
+        messages[3] = stored('D', "", "02-Oct-2026 12:00:00 +0000", head, html);
+        let (mail, _) = scripted(bridge_boxes(), messages).await;
+        let req = MessageReq {
+            message_id: "D".repeat(16),
+            ..Default::default()
+        };
+        let got = mail.get_message(&req).await.unwrap();
+        let message = &got["message"];
+        assert_eq!(
+            (message["body"].clone(), message["bodyTotalChars"].clone()),
+            (json!(""), json!(0)),
+            "{got}"
+        );
+        let note = message["bodyNote"].as_str().unwrap_or_default();
+        assert!(note.contains("holds no text"), "{got}");
+        let req = ThreadReq {
+            thread_id: "img@x.test".into(),
+            ..Default::default()
+        };
+        let thread = mail.get_thread(&req).await.unwrap();
+        let shown = thread["messages"].as_array().unwrap();
+        assert_eq!(shown.len(), 1, "{thread}");
+        assert_eq!(
+            (shown[0]["body"].clone(), shown[0]["bodyTotalChars"].clone()),
+            (json!(""), json!(0)),
+            "{thread}"
         );
     }
 

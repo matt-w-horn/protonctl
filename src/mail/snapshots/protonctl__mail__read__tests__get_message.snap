@@ -7,9 +7,9 @@ expression: message
   "message": {
     "attachments": [],
     "authentication": "dkim=pass (header.d=x.test); spf=pass (smtp.mailfrom=bob@x.test); by mx.proton.test",
-    "body": "Monday works.\r\n\r\nOn Thu, Ann wrote:\r\n> Shall we meet on Monday?\r\n",
+    "body": "Monday works.\r\n\r\nOn Thu, Ann wrote:\r\n> Shall we meet on Monday?",
     "bodyNextOffset": null,
-    "bodyTotalChars": 65,
+    "bodyTotalChars": 63,
     "bodyTruncated": false,
     "cc": [],
     "date": "2026-10-02T08:00:00+00:00",

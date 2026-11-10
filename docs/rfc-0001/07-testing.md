@@ -2,7 +2,7 @@
 
 # 7. Testing
 
-Built (on macOS, `cargo test` lists 192 tests: 177 unit tests and 15
+Built (on macOS, `cargo test` lists 193 tests: 178 unit tests and 15
 against the built binary, of which 4 are ignored by default: one lists
 Drive through the real CLI, one checks the real CLI's Developer ID
 signature, one reaches Dovecot, and one runs as the child of another
@@ -318,6 +318,13 @@ The tests:
   - HTML-only bodies lose every `blockquote`, the `gmail_quote` and
     `protonmail_quote` containers (nested ones included), and Outlook's
     reply header onward (shown to fail with nesting ignored).
+  - A body ends at its last visible character in `get_message` as it does
+    in `get_thread`, and a message with no text says so in `bodyNote`. On
+    the scripted Bridge, an HTML-only message holding one image reads as
+    `""` with `bodyTotalChars: 0` through both tools. Shown to fail with
+    the converted text left untrimmed, as before (`get_message` gave three
+    line breaks where `get_thread` gave none; 21 for one message, live),
+    and with the note left out.
   - `authentication` summarizes the topmost Authentication-Results header,
     the receiving server's, so a header the sender added below it no
     longer shows. Shown to fail with the last copy, which mail-parser's
