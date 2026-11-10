@@ -87,7 +87,10 @@ a feature that no Linux mechanism meets is absent on Linux, not weaker.
   is made. Downloads are staged in the private download directory and
   copied out. Inside the download directory and the export folder alike,
   every folder protonctl makes is 0700 and every file it saves is 0600.
-  R10 binds protonctl and the
+  A download directory whose process was killed or crashed, and so never
+  deleted it, is removed by the next sweep of any protonctl process: before
+  each tool call, each minute while a server runs, and as any command but
+  `logout` starts. R10 binds protonctl and the
   helpers it starts; the hosts' own transcripts and logs are outside it
   ([section 5](05-security.md)). The stricter rule of aliases mode (no
   content on disk, and a memory disk for the CLI's downloads, Q14) was

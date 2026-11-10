@@ -2,7 +2,7 @@
 
 # 7. Testing
 
-Built (on macOS, `cargo test` lists 195 tests: 180 unit tests and 15
+Built (on macOS, `cargo test` lists 196 tests: 181 unit tests and 15
 against the built binary, of which 4 are ignored by default: one lists
 Drive through the real CLI, one checks the real CLI's Developer ID
 signature, one reaches Dovecot, and one runs as the child of another
@@ -434,6 +434,17 @@ The tests:
   `get_status` counts this process's
   downloaded files and bytes, subfolders included (shown to fail with the
   field absent, as before, and with subfolders skipped).
+  - The download folder of a process that is gone goes at the next sweep.
+    Over a temporary folder holding one named for an ID no process can
+    have, one for process 1, one for the test's own process, one named
+    `notes`, and a link named for another ID no process can have, the walk
+    removes the first alone. Shown to fail with no walk, as before; with
+    every numbered folder taken (process 1's went); with only a refused
+    signal counted as running (the test's own went); with any name taken;
+    and with a link taken for a folder. Built:
+    `the_sweep_removes_the_folders_of_processes_that_are_gone` in
+    `src/content.rs`. That each sweep and a command's start run the walk is
+    not under test.
 - Content: tag and bidi characters removed, ZWJ emoji kept; zero-width
   characters, soft hyphen, LRM, ESC and BEL removed, while tab, line
   breaks, a no-break space, ZWNJ and an emoji's variation selector stay; in

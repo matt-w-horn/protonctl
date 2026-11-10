@@ -111,9 +111,6 @@ mode (R26), an alias collision (Q19), and a lost or rotated key (R20).
 - Hidden HTML text can still carry injected instructions after conversion;
   labelling content mitigates this but does not prevent it.
 - The Drive app folder lags the CLI by the app's sync delay after a change.
-- A server killed with SIGKILL, or one that crashes, leaves its download
-  folder under `~/Library/Caches/protonctl/downloads/` until someone deletes
-  it.
 - On Linux before 6.12, Landlock cannot scope signals, so a document
   reader taken over by a document can signal the user's other processes:
   denial of service only.

@@ -723,6 +723,9 @@ fn main() -> Result<()> {
         Err(e) => return Err(e),
     };
     let rt = tokio::runtime::Runtime::new()?;
+    // For `serve` and every other command that gets this far: the download
+    // folder of a server that was killed or crashed goes now (RFC R10).
+    content::sweep_downloads();
     if serving {
         let served = rt.block_on(serve_until_stopped(app));
         // Drop every task still running, so a Drive download in flight ends its

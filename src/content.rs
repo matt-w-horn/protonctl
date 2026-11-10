@@ -325,10 +325,16 @@ pub fn expired(created: SystemTime, now: SystemTime) -> bool {
         .is_ok_and(|age| age > DOWNLOAD_LIFE)
 }
 
-/// Delete this process's expired download folders. `serve` runs this at the
-/// start of every tool call and once a minute.
+/// Delete this process's expired download folders, and every download
+/// folder a process that is gone left behind. `serve` runs this at the start
+/// of every tool call and once a minute, and `main` once as any command but
+/// `logout` starts.
 pub fn sweep_downloads() {
-    sweep(&downloads_path(), SystemTime::now());
+    let mine = downloads_path();
+    sweep(&mine, SystemTime::now());
+    if let Some(all) = mine.parent() {
+        sweep_dead(all);
+    }
 }
 
 /// Delete the folders `download_folder` made directly in `dir` that are
@@ -343,6 +349,41 @@ fn sweep(dir: &Path, now: SystemTime) {
         // symlink_metadata: a link is not a folder of ours, whatever it points to.
         let folder = std::fs::symlink_metadata(entry.path()).is_ok_and(|m| m.is_dir());
         if folder && made.is_some_and(|m| expired(m, now)) {
+            remove(&entry.path());
+        }
+    }
+}
+
+/// Delete the folders directly in `dir`, which holds every process's
+/// download folder, whose process is gone: a server that was killed or
+/// crashed never deleted its own (RFC R10). A folder is named for its
+/// process's ID, and only the system's "no such process" counts as gone, so
+/// this process's folder and every other live one's stay. An ID that
+/// another program holds by now only delays this. Nothing else is touched:
+/// not other names, and not symlinks.
+fn sweep_dead(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return; // no download yet
+    };
+    for entry in entries.flatten() {
+        // A process ID as `downloads_path` writes one: unsigned and not 0,
+        // since `kill` reads 0 and a negative number as a process group.
+        let pid = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+            .and_then(|id| i32::try_from(id).ok())
+            .and_then(rustix::process::Pid::from_raw);
+        let Some(pid) = pid else {
+            continue;
+        };
+        let gone = matches!(
+            rustix::process::test_kill_process(pid),
+            Err(rustix::io::Errno::SRCH)
+        );
+        // symlink_metadata: a link is not a folder of ours, whatever it points to.
+        let folder = std::fs::symlink_metadata(entry.path()).is_ok_and(|m| m.is_dir());
+        if gone && folder {
             remove(&entry.path());
         }
     }
@@ -548,6 +589,35 @@ mod tests {
         assert!(new.join("file").exists());
         assert!(other.join("file").exists());
         assert!(unnamed.exists());
+        assert!(link.symlink_metadata().is_ok() && target.join("file").exists());
+    }
+
+    /// RFC R10: the folder of a process that is gone goes at the next sweep,
+    /// and no live process's folder does, this one's included.
+    #[test]
+    fn the_sweep_removes_the_folders_of_processes_that_are_gone() {
+        let (all, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let made = |parent: &Path, name: &str| {
+            let p = parent.join(name);
+            std::fs::create_dir(&p).unwrap();
+            std::fs::write(p.join("file"), "content").unwrap();
+            p
+        };
+        // No system gives a process an ID this large, so it names one that
+        // is gone; 1 is launchd, or init, which is always running.
+        let gone = made(all.path(), &i32::MAX.to_string());
+        let first = made(all.path(), "1");
+        let mine = made(all.path(), &std::process::id().to_string());
+        let other = made(all.path(), "notes");
+        // A link named for a process that is gone, to a folder elsewhere.
+        let target = made(outside.path(), "kept");
+        let link = all.path().join((i32::MAX - 1).to_string());
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        sweep_dead(all.path());
+        assert!(!gone.exists());
+        assert!(first.join("file").exists());
+        assert!(mine.join("file").exists());
+        assert!(other.join("file").exists());
         assert!(link.symlink_metadata().is_ok() && target.join("file").exists());
     }
 
