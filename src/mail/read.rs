@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -393,6 +394,7 @@ fn save(dest: Option<&Path>, file: &str, contents: &[u8]) -> Result<PathBuf> {
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
+        .mode(0o600)
         .open(&path)
         .with_context(|| format!("cannot create {}", path.display()))?
         .write_all(contents)?;
@@ -2139,6 +2141,7 @@ pub(crate) mod tests {
 
     #[test]
     fn saved_attachments_never_overwrite_each_other() {
+        use std::os::unix::fs::PermissionsExt as _;
         let a = save(None, "0-invoice.pdf", b"first").unwrap();
         let b = save(None, "0-invoice.pdf", b"second").unwrap();
         assert_ne!(a, b);
@@ -2150,6 +2153,12 @@ pub(crate) mod tests {
             std::fs::read(out.path().join("0-invoice.pdf")).unwrap(),
             b"first"
         );
+        // RFC R10: a saved attachment is the owner's alone, in the download
+        // folder and in `--out`, where the umask would leave 0644.
+        for saved in [a, out.path().join("0-invoice.pdf")] {
+            let mode = std::fs::metadata(&saved).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{}", saved.display());
+        }
     }
 
     #[test]

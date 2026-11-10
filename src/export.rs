@@ -124,7 +124,7 @@ impl ExportDir {
         let path = self.path.join(one_name(name)?);
         let flags =
             OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::RDWR | OFlags::CLOEXEC;
-        match rustix::fs::openat(&self.fd, name, flags, Mode::from_raw_mode(0o666)) {
+        match rustix::fs::openat(&self.fd, name, flags, Mode::from_raw_mode(0o600)) {
             Ok(fd) => Ok((File::from(fd), path)),
             Err(Errno::EXIST) => bail!("{} already exists", path.display()),
             Err(e) => Err(std::io::Error::from(e))
@@ -303,6 +303,10 @@ mod tests {
         let dir = ok.dir(&["mail", "abc"]).unwrap();
         let mode = std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
+        // RFC R10: a file made there is the owner's alone too, where the
+        // umask would leave 0644.
+        let (file, _) = dir.create("0-a.txt").unwrap();
+        assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
         for bad in ["", ".", "..", "a/b"] {
             assert!(ok.dir(&["drive", bad]).is_err(), "{bad:?}");
         }

@@ -282,6 +282,7 @@ pub fn download_folder(kind: &str) -> Result<PathBuf> {
         .map_or(0, |d| d.as_secs());
     Ok(tempfile::Builder::new()
         .prefix(&format!("{kind}-{made}-"))
+        .permissions(std::fs::Permissions::from_mode(0o700))
         .tempdir_in(downloads()?)?
         .keep())
 }
@@ -562,6 +563,16 @@ mod tests {
         assert_eq!(made_at("notes-1790000000-x"), None);
         assert_eq!(made_at("drive-soon-x"), None);
         assert_eq!(made_at(&format!("drive-{}-x", u64::MAX)), None);
+    }
+
+    /// RFC R10: the folder made for one download is the owner's alone, where
+    /// the umask would leave 0755.
+    #[test]
+    fn a_download_folder_is_the_owner_s_alone() {
+        let dir = download_folder("drive").unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        std::fs::remove_dir(&dir).unwrap();
+        assert_eq!(mode, 0o700);
     }
 
     /// R25: a panic on the blocking pool does not carry its message out.

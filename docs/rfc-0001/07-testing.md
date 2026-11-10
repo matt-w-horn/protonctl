@@ -2,7 +2,7 @@
 
 # 7. Testing
 
-Built (on macOS, `cargo test` lists 194 tests: 179 unit tests and 15
+Built (on macOS, `cargo test` lists 195 tests: 180 unit tests and 15
 against the built binary, of which 4 are ignored by default: one lists
 Drive through the real CLI, one checks the real CLI's Developer ID
 signature, one reaches Dovecot, and one runs as the child of another
@@ -125,7 +125,14 @@ The tests:
   folder, and a second copy refused rather than replacing the first (both
   shown to fail before the fix); parts shaped like a node UID, and folder
   names ending in a backslash, refused before the CLI runs (shown to fail
-  before the fix).
+  before the fix). The copy in `--out` and the file left in the download
+  folder are each 0600 (shown to fail with the copy's mode left to the
+  umask, as before, and with the mode the CLI chose kept: 0644 each way). A
+  link the stand-in leaves in place of the file is not followed for that:
+  the file it names keeps its mode (shown to fail with the mode set through
+  the link). Built: `downloads_are_found_under_the_name_the_cli_chose` and
+  `an_export_is_staged_where_only_protonctl_can_write` in
+  `src/drive/mod.rs`.
 - Drive without the app's folder, against the same stand-in answering
   `list` and `info`: a listing with excluded children left out and names
   that cannot be paths (undecryptable, or holding a `/`) named in `unlisted`; an
@@ -272,7 +279,9 @@ The tests:
   is cut off mid-command leaves no session for the next one; two attachments
   with the same index and name never overwrite each other, and a file
   already in `--out` is never replaced; the thread search names every header
-  a thread's root is read from, `In-Reply-To` included.
+  a thread's root is read from, `In-Reply-To` included. A saved attachment
+  is 0600 in the download folder and in `--out` (shown to fail with the mode
+  left to the umask, as before: 0644).
 - Mail paging, against pure functions:
   - A property test pages through any mailbox, in either order, while a
     newer message arrives or an unseen one goes between pages; every hit
@@ -399,6 +408,8 @@ The tests:
     removed. A folder not made yet is checked where it will be, so one
     reached through a symlink to the Drive folder, or spelled in another
     case, is refused (shown to fail when such a path was checked as text).
+  - A file made in a folder there is 0600, as the folder is 0700 (shown to
+    fail with the file's mode left to the umask, as before: 0644).
 - Shutdown, against the built binary with a throwaway home: closing stdin,
   SIGTERM, SIGHUP and Ctrl-C each delete the download folder (R10), and the
   server exits within 10 s each way (SIGHUP shown to fail without its
@@ -417,7 +428,10 @@ The tests:
   removes an old `drive-` folder and keeps a new `mail-` folder, an old
   folder with another name, and a `drive-` symlink to an old folder outside
   the download folder (shown to fail with the age ignored, with any name
-  swept, and with links followed). `get_status` counts this process's
+  swept, and with links followed). The folder made for one download is 0700
+  (shown to fail with its mode left to the umask, as before: 0755; built:
+  `a_download_folder_is_the_owner_s_alone` in `src/content.rs`).
+  `get_status` counts this process's
   downloaded files and bytes, subfolders included (shown to fail with the
   field absent, as before, and with subfolders skipped).
 - Content: tag and bidi characters removed, ZWJ emoji kept; zero-width
