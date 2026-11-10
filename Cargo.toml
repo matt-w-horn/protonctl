@@ -1,6 +1,6 @@
 [package]
 name = "protonctl"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 rust-version = "1.99"
 description = "Local, read-only MCP server and CLI for Proton Mail, Proton Drive and Proton Calendar, through Proton's own clients. Unofficial; not affiliated with Proton AG."
