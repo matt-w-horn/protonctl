@@ -2,7 +2,7 @@
 
 # 7. Testing
 
-Built (on macOS, `cargo test` lists 191 tests: 176 unit tests and 15
+Built (on macOS, `cargo test` lists 196 tests: 181 unit tests and 15
 against the built binary, of which 4 are ignored by default: one lists
 Drive through the real CLI, one checks the real CLI's Developer ID
 signature, one reaches Dovecot, and one runs as the child of another
@@ -46,6 +46,13 @@ The tests:
     minute, as after the Mac slept, is fetched again (shown to fail with
     freshness taken from the `Instant`, as before). A fetch time in the
     future is not fresh (shown to fail with the age's sign dropped).
+  - `list_calendars` fetches nothing: `fetchedAt` and `events` describe the
+    feed a calendar call may still serve, and both are null without one, as
+    for an entry fetched 16 minutes ago whose timer has not fired. A secret
+    store that cannot be read leaves `linkStored` null rather than failing
+    the call. Shown to fail with the cache read without the freshness test,
+    as before (the stale entry's time and count came back), and with
+    `linkStored` false for a store that was not read.
   - HTML in a DESCRIPTION becomes text at parse time, so a search for `href`
     or `br` finds nothing while the link text still matches; plain text with
     a lone `<` comes through unchanged. Shown to fail with the HTML kept, and
@@ -118,7 +125,14 @@ The tests:
   folder, and a second copy refused rather than replacing the first (both
   shown to fail before the fix); parts shaped like a node UID, and folder
   names ending in a backslash, refused before the CLI runs (shown to fail
-  before the fix).
+  before the fix). The copy in `--out` and the file left in the download
+  folder are each 0600 (shown to fail with the copy's mode left to the
+  umask, as before, and with the mode the CLI chose kept: 0644 each way). A
+  link the stand-in leaves in place of the file is not followed for that:
+  the file it names keeps its mode (shown to fail with the mode set through
+  the link). Built: `downloads_are_found_under_the_name_the_cli_chose` and
+  `an_export_is_staged_where_only_protonctl_can_write` in
+  `src/drive/mod.rs`.
 - Drive without the app's folder, against the same stand-in answering
   `list` and `info`: a listing with excluded children left out and names
   that cannot be paths (undecryptable, or holding a `/`) named in `unlisted`; an
@@ -241,6 +255,27 @@ The tests:
   Trash and Spam pass returning no IDs. A `label:` search leaves out a
   labelled message that is also in Trash, as the tool description says
   (shown to fail when only All Mail searches left Trash and Spam out).
+  - `estimatedTotal` follows the filters each tool can see: `count_messages`
+    gives the exact count after the Trash, Spam and attachment tests;
+    `search_threads` gives null with `has:attachment`, which only a fetched
+    summary can test, and takes Trash and Spam matches off All Mail's total
+    only, since Starred or a label need not hold them. Shown to fail three
+    ways with the one expression both tools used, the mailbox search's hits
+    less every Trash and Spam match: 4 for the one message with an
+    attachment (298 beside one row, live), and 0 for the one starred message
+    (4 for 19, live).
+  - A stalled exchange fails its test. The scripted Bridge (`fake_imap`,
+    which every test on it goes through) gives its client 120 s at each
+    step, waiting for a command or writing an answer, then panics naming
+    the step and the last command it was sent; that closes the connection,
+    so the call waiting on it fails too. Shown by planting the stall that
+    once held `an_attachment_over_64_mib_is_saved_not_read` for a day: the
+    flush after each answer taken out, and rustls's buffer limit lifted so
+    that the end of the 64 MiB answer stays unsent every time (it did in 2
+    of 35 runs without that). The test failed after 121 s with "the
+    scripted Bridge stalled: 120s waiting for a command; the last command
+    it was sent was `UID FETCH 14 (UID FLAGS INTERNALDATE BODY.PEEK[])`",
+    where it had waited until it was killed.
 - Mail search and reading: the Gmail-style subset translated to IMAP SEARCH
   (operators, dates, negation, OR, IMAP quoting, UTF-8 terms); an OR beside
   `in:`, `label:` or `has:` refused rather than joined to an earlier term;
@@ -256,7 +291,9 @@ The tests:
   is cut off mid-command leaves no session for the next one; two attachments
   with the same index and name never overwrite each other, and a file
   already in `--out` is never replaced; the thread search names every header
-  a thread's root is read from, `In-Reply-To` included.
+  a thread's root is read from, `In-Reply-To` included. A saved attachment
+  is 0600 in the download folder and in `--out` (shown to fail with the mode
+  left to the umask, as before: 0644).
 - Mail paging, against pure functions:
   - A property test pages through any mailbox, in either order, while a
     newer message arrives or an unseen one goes between pages; every hit
@@ -309,6 +346,13 @@ The tests:
   - HTML-only bodies lose every `blockquote`, the `gmail_quote` and
     `protonmail_quote` containers (nested ones included), and Outlook's
     reply header onward (shown to fail with nesting ignored).
+  - A body ends at its last visible character in `get_message` as it does
+    in `get_thread`, and a message with no text says so in `bodyNote`. On
+    the scripted Bridge, an HTML-only message holding one image reads as
+    `""` with `bodyTotalChars: 0` through both tools. Shown to fail with
+    the converted text left untrimmed, as before (`get_message` gave three
+    line breaks where `get_thread` gave none; 21 for one message, live),
+    and with the note left out.
   - `authentication` summarizes the topmost Authentication-Results header,
     the receiving server's, so a header the sender added below it no
     longer shows. Shown to fail with the last copy, which mail-parser's
@@ -376,6 +420,8 @@ The tests:
     removed. A folder not made yet is checked where it will be, so one
     reached through a symlink to the Drive folder, or spelled in another
     case, is refused (shown to fail when such a path was checked as text).
+  - A file made in a folder there is 0600, as the folder is 0700 (shown to
+    fail with the file's mode left to the umask, as before: 0644).
 - Shutdown, against the built binary with a throwaway home: closing stdin,
   SIGTERM, SIGHUP and Ctrl-C each delete the download folder (R10), and the
   server exits within 10 s each way (SIGHUP shown to fail without its
@@ -394,9 +440,23 @@ The tests:
   removes an old `drive-` folder and keeps a new `mail-` folder, an old
   folder with another name, and a `drive-` symlink to an old folder outside
   the download folder (shown to fail with the age ignored, with any name
-  swept, and with links followed). `get_status` counts this process's
+  swept, and with links followed). The folder made for one download is 0700
+  (shown to fail with its mode left to the umask, as before: 0755; built:
+  `a_download_folder_is_the_owner_s_alone` in `src/content.rs`).
+  `get_status` counts this process's
   downloaded files and bytes, subfolders included (shown to fail with the
   field absent, as before, and with subfolders skipped).
+  - The download folder of a process that is gone goes at the next sweep.
+    Over a temporary folder holding one named for an ID no process can
+    have, one for process 1, one for the test's own process, one named
+    `notes`, and a link named for another ID no process can have, the walk
+    removes the first alone. Shown to fail with no walk, as before; with
+    every numbered folder taken (process 1's went); with only a refused
+    signal counted as running (the test's own went); with any name taken;
+    and with a link taken for a folder. Built:
+    `the_sweep_removes_the_folders_of_processes_that_are_gone` in
+    `src/content.rs`. That each sweep and a command's start run the walk is
+    not under test.
 - Content: tag and bidi characters removed, ZWJ emoji kept; zero-width
   characters, soft hyphen, LRM, ESC and BEL removed, while tab, line
   breaks, a no-break space, ZWNJ and an emoji's variation selector stay; in

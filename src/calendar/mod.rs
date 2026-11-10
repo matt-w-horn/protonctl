@@ -332,24 +332,47 @@ impl Calendars {
         ))
     }
 
-    pub async fn list_calendars(&self) -> Result<Value> {
-        let held = secret::accounts()?;
+    /// The configured calendars. It fetches nothing: `fetchedAt` and `events`
+    /// describe the feed a calendar call fetched and may still serve, and
+    /// are null without one. A secret store that cannot be read leaves
+    /// `linkStored` null rather than failing the call, as in `App::status`.
+    pub async fn list_calendars(&self) -> Value {
+        let held = secret::accounts().map_err(|e| format!("{e:#}"));
+        self.list_calendars_with(held.as_deref().map_err(String::as_str), Utc::now())
+            .await
+    }
+
+    /// `list_calendars` at `now`, given the secret store's accounts or why
+    /// they could not be read, so tests need no secret store.
+    async fn list_calendars_with(
+        &self,
+        held: Result<&[secret::Account], &str>,
+        now: DateTime<Utc>,
+    ) -> Value {
         let cache = self.cache.lock().await;
         let calendars: Vec<Value> = self
             .configs
             .iter()
             .map(|c| {
-                let cached = cache.get(&c.id);
+                // null when the store could not be read: not known, not "no".
+                let stored = held
+                    .ok()
+                    .map(|h| h.contains(&secret::Account::Calendar(c.id.clone())));
+                // An entry the Mac slept through is still in the cache, its
+                // timer not yet fired; no calendar call would serve it (R12).
+                let (fetched_at, events) = cached(&cache, &c.id, now)
+                    .map(|(feed, at)| (at.to_rfc3339(), feed.events.len()))
+                    .unzip();
                 json!({
                     "calendarId": c.id,
                     "name": c.name,
-                    "linkStored": held.contains(&secret::Account::Calendar(c.id.clone())),
-                    "fetchedAt": cached.map(|x| x.fetched_at.to_rfc3339()),
-                    "events": cached.map(|x| x.feed.events.len()),
+                    "linkStored": stored,
+                    "fetchedAt": fetched_at,
+                    "events": events,
                 })
             })
             .collect();
-        Ok(json!({ "calendars": calendars, "access": "read-only", "freshness": FRESHNESS }))
+        json!({ "calendars": calendars, "access": "read-only", "freshness": FRESHNESS })
     }
 
     pub async fn list_events(&self, req: &ListEventsReq) -> Result<Value> {
@@ -761,6 +784,49 @@ pub(crate) mod tests {
         let cache = HashMap::from([("c".to_string(), entry)]);
         assert!(cached(&cache, "c", t + Duration::minutes(14)).is_some());
         assert!(cached(&cache, "c", t + Duration::minutes(16)).is_none());
+    }
+
+    /// `list_calendars` fetches nothing, so `fetchedAt` and `events` describe
+    /// the feed a calendar call may still serve and are null without one:
+    /// an entry fetched 16 minutes ago, its timer not yet fired because the
+    /// Mac slept, reads as none (R12). A secret store that cannot be read
+    /// leaves `linkStored` null rather than failing the call.
+    #[tokio::test]
+    async fn list_calendars_shows_a_feed_only_while_it_is_fresh() {
+        let two = feed(&[
+            event("a", "20260105T170000Z", ""),
+            event("b", "20260106T170000Z", ""),
+        ]);
+        let count = two.events.len();
+        assert_eq!(count, 2);
+        let cals = one_calendar(two).await;
+        let now = Utc::now();
+        let held = [secret::Account::Calendar("c".into())];
+        let listed = cals.list_calendars_with(Ok(&held), now).await;
+        let c = &listed["calendars"][0];
+        assert!(c["fetchedAt"].is_string(), "{listed}");
+        assert_eq!(
+            (c["events"].clone(), c["linkStored"].clone()),
+            (json!(count), json!(true)),
+            "{listed}"
+        );
+        let kept = Arc::clone(&cals.cache.lock().await["c"].feed);
+        cals.keep(
+            &mut *cals.cache.lock().await,
+            "c",
+            kept,
+            now - Duration::minutes(16),
+        );
+        let slept = cals
+            .list_calendars_with(Err("the store is locked"), now)
+            .await;
+        let c = &slept["calendars"][0];
+        assert_eq!(
+            (c["fetchedAt"].clone(), c["events"].clone()),
+            (Value::Null, Value::Null),
+            "{slept}"
+        );
+        assert_eq!(c["linkStored"], Value::Null, "{slept}");
     }
 
     /// One calendar, "c", whose feed is already cached, so no test reaches

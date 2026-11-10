@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -393,6 +394,7 @@ fn save(dest: Option<&Path>, file: &str, contents: &[u8]) -> Result<PathBuf> {
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
+        .mode(0o600)
         .open(&path)
         .with_context(|| format!("cannot create {}", path.display()))?
         .write_all(contents)?;
@@ -682,6 +684,22 @@ impl Scope {
     }
 }
 
+/// A guide to a search result's size, from the mailbox search alone: its
+/// `hits`, less the Trash and Spam matches for All Mail, which holds a copy
+/// of every one (Starred or a label holds only some, so they stay in); and
+/// nothing with has:attachment, which only a fetched summary can test.
+/// `count_messages` reads every summary and counts exactly.
+fn estimated_total(hits: usize, scope: &Scope, query: &Query) -> Option<usize> {
+    if query.attachment.is_some() {
+        return None;
+    }
+    Some(if query.mailbox == Mailbox::All {
+        hits.saturating_sub(scope.excluded.len())
+    } else {
+        hits
+    })
+}
+
 /// One header's value from a fetched header block.
 fn header(block: &[u8], name: &str) -> Option<String> {
     let parsed = MessageParser::default().parse_headers(block)?;
@@ -887,10 +905,7 @@ impl Mail {
         Ok(json!({
             "messages": page.rows(),
             "nextPageToken": next,
-            // Trash and Spam copies are matched by ID, and the searched
-            // mailbox can hold them too; has:attachment is tested later, row
-            // by row.
-            "estimatedTotal": dated.len().saturating_sub(scope.excluded.len()),
+            "estimatedTotal": estimated_total(dated.len(), &scope, query),
             "searched": scope.mailbox,
             "trashAndSpam": scope.trash_and_spam(),
             "provenance": PROVENANCE,
@@ -945,7 +960,10 @@ impl Mail {
             };
             let mut out = json!({
                 "messages": messages,
-                "estimatedTotal": dated.len().saturating_sub(scope.excluded.len()),
+                // Every summary was read, so this is exact: the matching
+                // messages after the Trash, Spam and attachment tests, before
+                // copies merge into `messages`.
+                "estimatedTotal": rows.len(),
                 "searched": scope.mailbox,
                 "trashAndSpam": scope.trash_and_spam(),
                 "provenance": COUNT_PROVENANCE,
@@ -1613,6 +1631,14 @@ fn render(f: &Fetch, view: View) -> Result<Rendered> {
     row.insert("bodyTruncated".into(), body["truncated"].clone());
     row.insert("bodyNextOffset".into(), body["nextOffset"].clone());
     row.insert("bodyTotalChars".into(), body["totalChars"].clone());
+    if body["totalChars"] == 0 {
+        // mail-parser's HTML conversion drops `alt` text and leaves a line
+        // break per `<br>` and `</p>`, so an image-only message ends here.
+        row.insert(
+            "bodyNote".into(),
+            json!("the message holds no text; its HTML part may hold only images"),
+        );
+    }
     row.insert("attachments".into(), json!(attachments));
     Ok(Rendered {
         json: Value::Object(row),
@@ -2115,6 +2141,7 @@ pub(crate) mod tests {
 
     #[test]
     fn saved_attachments_never_overwrite_each_other() {
+        use std::os::unix::fs::PermissionsExt as _;
         let a = save(None, "0-invoice.pdf", b"first").unwrap();
         let b = save(None, "0-invoice.pdf", b"second").unwrap();
         assert_ne!(a, b);
@@ -2126,6 +2153,12 @@ pub(crate) mod tests {
             std::fs::read(out.path().join("0-invoice.pdf")).unwrap(),
             b"first"
         );
+        // RFC R10: a saved attachment is the owner's alone, in the download
+        // folder and in `--out`, where the umask would leave 0644.
+        for saved in [a, out.path().join("0-invoice.pdf")] {
+            let mode = std::fs::metadata(&saved).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{}", saved.display());
+        }
     }
 
     #[test]
@@ -2587,6 +2620,29 @@ pub(crate) mod tests {
         }
     }
 
+    /// How long the scripted Bridge lets one step wait on its client; the
+    /// slowest of its tests takes a few seconds in all.
+    const STALL: std::time::Duration = std::time::Duration::from_secs(120);
+
+    /// `step`, which waits for the scripted Bridge's client to send or to
+    /// read, or a panic once it has taken `STALL`. The panic closes the
+    /// connection, so the call waiting on the Bridge fails and its test
+    /// with it, where the two would otherwise wait on each other for good.
+    async fn unstalled<T>(
+        step: impl Future<Output = T>,
+        doing: &str,
+        sent: &std::sync::Mutex<Vec<String>>,
+    ) -> T {
+        tokio::time::timeout(STALL, step).await.unwrap_or_else(|_| {
+            let last = sent.lock().unwrap().last().cloned();
+            let last = last.as_deref().unwrap_or("none");
+            panic!(
+                "the scripted Bridge stalled: {STALL:?} {doing}; the last command it was \
+                 sent was `{last}`"
+            )
+        })
+    }
+
     /// A scripted Bridge serving `boxes` over one TLS session, and the
     /// commands it was sent, without their tags.
     pub(crate) async fn fake_imap(
@@ -2607,12 +2663,23 @@ pub(crate) mod tests {
             let greeting = b"* OK [CAPABILITY IMAP4rev1] Proton Mail Bridge ready\r\n";
             io.get_mut().write_all(greeting).await.unwrap();
             let (mut examined, mut line) = (None, String::new());
-            while io.read_line(&mut line).await.unwrap_or(0) > 0 {
+            while unstalled(io.read_line(&mut line), "waiting for a command", &log)
+                .await
+                .unwrap_or(0)
+                > 0
+            {
                 let (tag, command) = line.trim_end().split_once(' ').unwrap();
                 log.lock().unwrap().push(sorted_sets(command));
                 let (untagged, done) = respond(command, &boxes, &messages, &mut examined);
                 let reply = format!("{untagged}{tag} {done}\r\n");
-                io.get_mut().write_all(reply.as_bytes()).await.unwrap();
+                let answer = async {
+                    io.get_mut().write_all(reply.as_bytes()).await?;
+                    // `write_all` returns once rustls holds the reply. Records
+                    // the socket had no room for go out only at a flush, and a
+                    // client still waiting for them sends no next command.
+                    io.get_mut().flush().await
+                };
+                unstalled(answer, "writing its answer", &log).await.unwrap();
                 line.clear();
             }
         });
@@ -2742,6 +2809,87 @@ pub(crate) mod tests {
         };
         let found = mail.search_threads(&req).await.unwrap();
         assert_eq!(found["messages"], json!([]), "{found}");
+    }
+
+    /// `estimatedTotal` follows the filters each tool can see. `count_messages`
+    /// reads every summary, so its total is exact after the Trash, Spam and
+    /// attachment tests. `search_threads` has the mailbox search alone: null
+    /// with has:attachment, which only a fetched summary can test (298 was
+    /// shown for one matching row, live); and Trash and Spam matches come
+    /// off All Mail's total only, since Starred or a label need not hold
+    /// them (Starred showed 4 for 19 starred messages, live).
+    #[tokio::test]
+    async fn estimated_total_follows_the_filters_each_tool_can_see() {
+        let (mail, _) = scripted(bridge_boxes(), bridge_messages()).await;
+        let count = CountMessagesReq {
+            query: "has:attachment".into(),
+            ..Default::default()
+        };
+        let counted = mail.count_messages(&count).await.unwrap();
+        assert_eq!(
+            (
+                counted["estimatedTotal"].clone(),
+                counted["messages"].clone()
+            ),
+            (json!(1), json!(1)),
+            "{counted}"
+        );
+        let search = |query: &str| SearchThreadsReq {
+            query: query.into(),
+            ..Default::default()
+        };
+        let attached = mail
+            .search_threads(&search("has:attachment"))
+            .await
+            .unwrap();
+        assert!(attached["estimatedTotal"].is_null(), "{attached}");
+        // Starred holds D alone; T matches the same criteria from Trash but
+        // is not starred, so it must not come off the total.
+        let starred = mail.search_threads(&search("in:starred")).await.unwrap();
+        assert_eq!(starred["estimatedTotal"], json!(1), "{starred}");
+        assert_eq!(
+            starred["messages"].as_array().unwrap().len(),
+            1,
+            "{starred}"
+        );
+    }
+
+    /// An HTML-only message holding one image converts to line breaks alone.
+    /// `get_message` showed those as its body (21 newlines, live) where
+    /// `get_thread` showed ""; both now show no body, and a note says why.
+    #[tokio::test]
+    async fn an_image_only_message_reads_as_no_text_in_both_tools() {
+        let head = "Message-Id: <img@x.test>\r\nFrom: Carl <carl@y.test>\r\nTo: me@x.test\r\n\
+                    Subject: Pictures\r\nContent-Type: text/html\r\n";
+        let html = "<p><img src=\"cid:x\"></p><br><br>\r\n";
+        let mut messages = bridge_messages();
+        messages[3] = stored('D', "", "02-Oct-2026 12:00:00 +0000", head, html);
+        let (mail, _) = scripted(bridge_boxes(), messages).await;
+        let req = MessageReq {
+            message_id: "D".repeat(16),
+            ..Default::default()
+        };
+        let got = mail.get_message(&req).await.unwrap();
+        let message = &got["message"];
+        assert_eq!(
+            (message["body"].clone(), message["bodyTotalChars"].clone()),
+            (json!(""), json!(0)),
+            "{got}"
+        );
+        let note = message["bodyNote"].as_str().unwrap_or_default();
+        assert!(note.contains("holds no text"), "{got}");
+        let req = ThreadReq {
+            thread_id: "img@x.test".into(),
+            ..Default::default()
+        };
+        let thread = mail.get_thread(&req).await.unwrap();
+        let shown = thread["messages"].as_array().unwrap();
+        assert_eq!(shown.len(), 1, "{thread}");
+        assert_eq!(
+            (shown[0]["body"].clone(), shown[0]["bodyTotalChars"].clone()),
+            (json!(""), json!(0)),
+            "{thread}"
+        );
     }
 
     /// Every IMAP operation, on one `Mail`, against the scripted Bridge. The

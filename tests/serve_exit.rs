@@ -125,6 +125,7 @@ fn closing_stdin_before_initialize_is_a_clean_stop() {
         .arg("serve")
         .env("HOME", home.path())
         .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
+        .env_remove("XDG_CACHE_HOME")
         .env("PROTONCTL_CONFIG", &config)
         .stdin(Stdio::null())
         .output()

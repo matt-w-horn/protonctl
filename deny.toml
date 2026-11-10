@@ -45,3 +45,7 @@ deny = [
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# async-imap comes from its upstream repository, at the commit that dropped
+# pin-utils (RUSTSEC-2026-0441), until a release past 0.12.0 carries it; the
+# `[patch.crates-io]` entry in Cargo.toml names the commit. Drop both together.
+allow-git = ["https://github.com/chatmail/async-imap"]

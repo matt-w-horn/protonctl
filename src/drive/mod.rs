@@ -12,6 +12,7 @@ pub mod cli;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io::{Read, Seek as _, Write as _};
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -1467,6 +1468,7 @@ fn copy_out(staged: &Path, to: &SaveTo) -> Result<(PathBuf, digest::Sums)> {
             let file = match std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
+                .mode(0o600)
                 .open(&path)
             {
                 Ok(file) => file,
@@ -1537,6 +1539,11 @@ async fn download(cli: &Cli, real: &str, dir: &Path) -> Result<PathBuf> {
     let shown = dir.join(escape_hidden(&name));
     if *got != shown {
         std::fs::rename(got, &shown)?;
+    }
+    // The CLI chose the file's mode (0644 under the usual umask). A link it
+    // left instead is not followed: what it names keeps its mode.
+    if std::fs::symlink_metadata(&shown)?.is_file() {
+        std::fs::set_permissions(&shown, std::fs::Permissions::from_mode(0o600))?;
     }
     Ok(shown)
 }
@@ -2290,6 +2297,17 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         let saved = got["savedTo"].as_str().unwrap();
         assert!(saved.ends_with("/Notes_ Q3.txt"), "{saved}");
         assert_eq!(std::fs::read_to_string(saved).unwrap(), "hello");
+        // RFC R10: the copy in `--out` is the owner's alone, and so is the
+        // file left in the download folder, whose mode the CLI chose.
+        let mode = |p: &str| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(saved), 0o600, "{saved}");
+        let kept = d
+            .download_file(&saving(&get), &cli, None, no_export())
+            .await
+            .unwrap()
+            .json;
+        let kept = kept["savedTo"].as_str().unwrap();
+        assert_eq!(mode(kept), 0o600, "{kept}");
         // A second copy never replaces the first, and no work folder stays behind.
         let err = d
             .download_file(&saving(&get), &cli, Some(out.path()), no_export())
@@ -2795,11 +2813,15 @@ echo '{"transferredItems":1,"transferredBytes":5,"skippedItems":0,"failedItems":
         let elsewhere = tempfile::tempdir().unwrap();
         let secret = elsewhere.path().join("secret");
         std::fs::write(&secret, "secret").unwrap();
+        let mode = || std::fs::metadata(&secret).unwrap().permissions().mode() & 0o777;
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o644)).unwrap();
         std::fs::write(bin.path().join("link"), secret.to_str().unwrap()).unwrap();
         let got = d
             .download_file(&req("/Projects/plan.md"), &cli, None, Ok(&export))
             .await;
         assert!(got.is_err(), "{got:?}");
+        // Nor did the file the link names change its mode.
+        assert_eq!(mode(), 0o644);
         assert!(
             !export.folder().join("drive/Projects/plan.md").exists()
                 && std::fs::symlink_metadata(export.folder().join("drive/Projects/plan.md"))

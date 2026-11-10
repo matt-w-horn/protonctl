@@ -3,7 +3,7 @@ source: src/mail/read.rs
 expression: attached
 ---
 {
-  "estimatedTotal": 4,
+  "estimatedTotal": null,
   "hiddenCharactersRemoved": 1,
   "messages": [
     {

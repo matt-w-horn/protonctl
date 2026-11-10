@@ -45,6 +45,11 @@ mailbox by a script that printed only counts, booleans and timings.
   `has:attachment` never reaches SEARCH: each fetched summary's `X-Attached` count decides,
   and after that change the same searches returned 20 of 20 with attachments
   and 20 of 20 without. Non-empty HEADER strings match as substrings.
+- `STATUS (MESSAGES)` and `UID SEARCH ALL` on one label both answered exactly
+  9,999, for a label in which `count_messages` found 8,116 distinct messages
+  after copies merged (*live check*, 2026-11-07). The number reaches
+  `list_labels` and `estimatedTotal` as Bridge sends it: protonctl neither
+  caps nor corrects it, and whether Bridge stops at 9,999 is not established.
 - Text bodies arrive quoted-printable (HTML in nearly all sampled messages);
   calendar parts arrive base64.
 - Timings on a test mailbox of about 20,000 messages in All Mail:

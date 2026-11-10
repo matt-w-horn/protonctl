@@ -85,6 +85,13 @@ access, `cli`, and `cliSha256`: the Drive CLI's pin on Linux, or
 | `search_events` | `query`, and `list_events`' parameters |
 | `get_event` | `eventId`, `calendarId?`, `timeZone?` |
 
+`list_calendars` fetches nothing. Each of its `calendars` holds
+`calendarId`, `name`, `linkStored` (null when the secret store cannot be
+read), and `fetchedAt` and `events`: when a calendar call fetched the feed
+and how many VEVENT components were parsed from it, while that feed is
+under 15 minutes old by wall clock (R12), else both null
+(`Calendars::list_calendars` in `src/calendar/mod.rs`).
+
 `list_events` and `search_events` results carry `complete`: false when the
 query stopped at R8's cap (50,000 occurrences or 10 s of work), with a
 `note` saying so; a result with every occurrence says true.

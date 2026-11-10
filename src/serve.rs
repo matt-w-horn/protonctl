@@ -138,7 +138,7 @@ impl Server {
         self.call(|| async { Ok(self.app.status()) }).await
     }
 
-    /// List the Proton calendars protonctl can read. Use a calendarId from here with `list_events`, `search_events` or `get_event`.
+    /// List the Proton calendars protonctl can read. `fetchedAt` and `events` (parsed VEVENT components) describe the feed a calendar call fetched in the last 15 minutes, else both are null: this tool fetches nothing. Use a calendarId from here with `list_events`, `search_events` or `get_event`.
     #[tool(annotations(
         title = "List calendars",
         read_only_hint = true,
@@ -147,7 +147,8 @@ impl Server {
         open_world_hint = false
     ))]
     async fn list_calendars(&self) -> Result<CallToolResult, ErrorData> {
-        self.call(|| self.app.calendars.list_calendars()).await
+        self.call(|| async { Ok(self.app.calendars.list_calendars().await) })
+            .await
     }
 
     /// List calendar events in a time window (default: the next 7 days), with recurring events expanded into occurrences. Read-only. Times are RFC 3339 in the requested time zone; all-day events use {"date": ...}.
@@ -198,7 +199,7 @@ impl Server {
             .await
     }
 
-    /// Search Proton Mail with a Gmail-style query (see the query parameter). Returns one row per thread on each page, newest first or oldest first with `order`, plus `estimatedTotal` (matching messages). A row shows its thread's first matching message on the page: messageId, threadId, date, from, subject, up to 3 To and Cc addresses (`toMore` and `ccMore` count the rest), and `origin`: internal (sent within Proton), external (received from outside Proton) or import (brought in by an import); other for a value Proton had not used when protonctl was written, and null when the message carries none. `matching` counts the thread's matching messages merged into the row and `copies` the duplicate copies merged (imports can store a message twice); `unread`, `starred` and `attachments` appear only when set. A long thread can show again on a later page. Trash and Spam are left out unless includeTrash. Use `get_thread` or `get_message` for the content.
+    /// Search Proton Mail with a Gmail-style query (see the query parameter). Returns one row per thread on each page, newest first or oldest first with `order`, plus `estimatedTotal` (matching messages, as a guide: null with has:attachment, which `count_messages` counts exactly). A row shows its thread's first matching message on the page: messageId, threadId, date, from, subject, up to 3 To and Cc addresses (`toMore` and `ccMore` count the rest), and `origin`: internal (sent within Proton), external (received from outside Proton) or import (brought in by an import); other for a value Proton had not used when protonctl was written, and null when the message carries none. `matching` counts the thread's matching messages merged into the row and `copies` the duplicate copies merged (imports can store a message twice); `unread`, `starred` and `attachments` appear only when set. A long thread can show again on a later page. Trash and Spam are left out unless includeTrash. Use `get_thread` or `get_message` for the content.
     #[tool(annotations(
         title = "Search mail",
         read_only_hint = true,
