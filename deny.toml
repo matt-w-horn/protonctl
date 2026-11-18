@@ -1,0 +1,62 @@
+# cargo-deny: run by scripts/check.sh before every commit.
+
+[graph]
+# protonctl builds for Apple-silicon macOS and for Linux;
+# other platforms' crates never build.
+targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+
+[advisories]
+# RustSec advisories (the database is fetched each run); yanked crates fail too.
+yanked = "deny"
+# Unsound advisories anywhere in the tree, not only in direct dependencies.
+unsound = "all"
+ignore = [
+    # RustSec listed chrono and chrono-tz as unmaintained on 2026-11-17
+    # (the advisories are dated 2026-09-14), with no patched version. That
+    # is a notice, not a vulnerability: one filed against chrono has its own
+    # id and still fails this check. protonctl cannot leave chrono alone:
+    # rmcp (3.11.0, the newest), async-imap (upstream HEAD) and rrule (0.14,
+    # and the rrule2, recurrence and rrules alternatives) each require it,
+    # and rrule's interface takes its values. Drop both entries, and move
+    # protonctl's own dates to another library, when those three no longer
+    # need chrono.
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained; waits on rmcp, async-imap and rrule" },
+    { id = "RUSTSEC-2026-0555", reason = "chrono-tz is unmaintained; waits on rrule" },
+    # Linux only, through secret-service 5.2, the newest, which still uses
+    # zbus 5. These crates were merged into zbus 6, not abandoned; drop each
+    # entry when secret-service moves to zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6; waits on secret-service" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6; waits on secret-service" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; waits on secret-service" },
+]
+
+[licenses]
+allow = ["Apache-2.0", "BSD-3-Clause", "ISC", "MIT", "Unicode-3.0", "Zlib"]
+confidence-threshold = 0.9
+
+[licenses.private]
+# protonctl's own licence is Apache-2.0. It is publish = false, so it is
+# not checked here.
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+# protonctl's own sockets go only to 127.0.0.1, and the calendar feed is
+# fetched by /usr/bin/curl. An HTTP client crate in the tree breaks that promise.
+deny = [
+    { crate = "reqwest", reason = "no HTTP client inside protonctl" },
+    { crate = "hyper", reason = "no HTTP client inside protonctl" },
+    { crate = "ureq", reason = "no HTTP client inside protonctl" },
+    { crate = "isahc", reason = "no HTTP client inside protonctl" },
+    { crate = "curl", reason = "the feed goes through /usr/bin/curl, not libcurl bindings" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# async-imap comes from its upstream repository, at the commit that dropped
+# pin-utils (RUSTSEC-2026-0441), until a release past 0.12.0 carries it; the
+# `[patch.crates-io]` entry in Cargo.toml names the commit. Drop both together.
+allow-git = ["https://github.com/chatmail/async-imap"]

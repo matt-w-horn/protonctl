@@ -1,0 +1,15 @@
+#!/bin/sh
+# Start the installed protonctl as the plugin's MCP server: the one
+# scripts/install.sh put in ~/.cargo/bin, or else the one Homebrew linked.
+# Each path is fixed, with no PATH search: a desktop app's PATH may lack
+# these folders, and a search could find another program.
+# stdout carries MCP frames, so this script writes only to stderr.
+set -eu
+
+for bin in "$HOME/.cargo/bin/protonctl" /opt/homebrew/bin/protonctl /home/linuxbrew/.linuxbrew/bin/protonctl; do
+    if [ -f "$bin" ] && [ -x "$bin" ]; then
+        exec "$bin" serve
+    fi
+done
+echo "serve: protonctl is not installed; run \`brew install matt-w-horn/tap/protonctl\`, or clone https://github.com/matt-w-horn/protonctl at a release tag and run scripts/install.sh" >&2
+exit 1
