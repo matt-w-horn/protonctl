@@ -40,7 +40,7 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
       - id: review
-        uses: anthropics/claude-code-action@d70510b174a1244958df0b03166a54912811f3e6 # v1
+        uses: anthropics/claude-code-action@f3b070c88125d33dbae5653df5f143101d4ea9dc # v1
         with:
           # Workload identity federation: the action trades the job's GitHub OIDC
           # token for a short-lived Claude API token, so no key is stored here.
